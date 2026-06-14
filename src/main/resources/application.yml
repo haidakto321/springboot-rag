@@ -1,0 +1,28 @@
+spring:
+  application:
+    name: springboot-rag
+  datasource:
+    url: jdbc:postgresql://localhost:5432/ragdb
+    username: rag
+    password: rag
+  sql:
+    init:
+      mode: always   # run schema.sql on startup
+
+app:
+  embedding:
+    provider: ollama
+    model: nomic-embed-text
+    dimension: 768
+  ollama:
+    base-url: http://localhost:11434
+  qdrant:
+    host: localhost
+    port: 6334
+    collection: chunks
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health

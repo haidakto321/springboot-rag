@@ -1,0 +1,144 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project xmlns="http://maven.apache.org/POM/4.0.0" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+	xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 https://maven.apache.org/xsd/maven-4.0.0.xsd">
+	<modelVersion>4.0.0</modelVersion>
+	<parent>
+		<groupId>org.springframework.boot</groupId>
+		<artifactId>spring-boot-starter-parent</artifactId>
+		<version>3.5.6</version>
+		<relativePath/>
+	</parent>
+	<groupId>com.example</groupId>
+	<artifactId>springboot-rag</artifactId>
+	<version>0.0.1-SNAPSHOT</version>
+	<name>springboot-rag</name>
+	<description>Self-study sandbox: Postgres FTS vs pgvector vs Qdrant vs hybrid search</description>
+
+	<properties>
+		<java.version>21</java.version>
+		<qdrant.client.version>1.15.0</qdrant.client.version>
+		<springdoc.version>2.8.4</springdoc.version>
+		<mockwebserver.version>4.12.0</mockwebserver.version>
+		<!-- Override docker-java (Testcontainers 1.21.3 ships 3.4.2, which 400s against
+		     Docker Engine 29.x / API 1.54). 3.7.1 speaks the newer engine API. -->
+		<docker-java.version>3.7.1</docker-java.version>
+	</properties>
+
+	<dependencyManagement>
+		<dependencies>
+			<dependency>
+				<groupId>com.github.docker-java</groupId>
+				<artifactId>docker-java-api</artifactId>
+				<version>${docker-java.version}</version>
+			</dependency>
+			<dependency>
+				<groupId>com.github.docker-java</groupId>
+				<artifactId>docker-java-transport</artifactId>
+				<version>${docker-java.version}</version>
+			</dependency>
+			<dependency>
+				<groupId>com.github.docker-java</groupId>
+				<artifactId>docker-java-transport-zerodep</artifactId>
+				<version>${docker-java.version}</version>
+			</dependency>
+		</dependencies>
+	</dependencyManagement>
+
+	<dependencies>
+		<dependency>
+			<groupId>org.springframework.boot</groupId>
+			<artifactId>spring-boot-starter-web</artifactId>
+		</dependency>
+		<dependency>
+			<groupId>org.springframework.boot</groupId>
+			<artifactId>spring-boot-starter-jdbc</artifactId>
+		</dependency>
+		<dependency>
+			<groupId>org.springframework.boot</groupId>
+			<artifactId>spring-boot-starter-actuator</artifactId>
+		</dependency>
+		<dependency>
+			<groupId>org.postgresql</groupId>
+			<artifactId>postgresql</artifactId>
+			<scope>runtime</scope>
+		</dependency>
+		<dependency>
+			<groupId>io.qdrant</groupId>
+			<artifactId>client</artifactId>
+			<version>${qdrant.client.version}</version>
+		</dependency>
+		<!-- Qdrant client transitive deps are declared runtime in its pom;
+		     expose them as compile so our repository/config code can see them. -->
+		<dependency>
+			<groupId>io.grpc</groupId>
+			<artifactId>grpc-api</artifactId>
+			<version>1.65.1</version>
+		</dependency>
+		<dependency>
+			<groupId>com.google.guava</groupId>
+			<artifactId>guava</artifactId>
+			<version>32.1.3-android</version>
+		</dependency>
+		<dependency>
+			<groupId>com.google.protobuf</groupId>
+			<artifactId>protobuf-java</artifactId>
+			<version>3.25.1</version>
+		</dependency>
+		<dependency>
+			<groupId>org.springdoc</groupId>
+			<artifactId>springdoc-openapi-starter-webmvc-ui</artifactId>
+			<version>${springdoc.version}</version>
+		</dependency>
+
+		<!-- test -->
+		<dependency>
+			<groupId>org.springframework.boot</groupId>
+			<artifactId>spring-boot-starter-test</artifactId>
+			<scope>test</scope>
+		</dependency>
+		<dependency>
+			<groupId>org.testcontainers</groupId>
+			<artifactId>junit-jupiter</artifactId>
+			<scope>test</scope>
+		</dependency>
+		<dependency>
+			<groupId>org.testcontainers</groupId>
+			<artifactId>postgresql</artifactId>
+			<scope>test</scope>
+		</dependency>
+		<dependency>
+			<groupId>org.testcontainers</groupId>
+			<artifactId>qdrant</artifactId>
+			<scope>test</scope>
+		</dependency>
+		<dependency>
+			<groupId>com.squareup.okhttp3</groupId>
+			<artifactId>mockwebserver</artifactId>
+			<version>${mockwebserver.version}</version>
+			<scope>test</scope>
+		</dependency>
+	</dependencies>
+
+	<build>
+		<plugins>
+			<plugin>
+				<groupId>org.springframework.boot</groupId>
+				<artifactId>spring-boot-maven-plugin</artifactId>
+			</plugin>
+			<plugin>
+				<groupId>org.apache.maven.plugins</groupId>
+				<artifactId>maven-surefire-plugin</artifactId>
+				<configuration>
+					<systemPropertyVariables>
+						<!-- docker-java (used by Testcontainers) defaults to an API version that
+						     Docker Engine 29.x / API 1.54 rejects with HTTP 400. docker-java reads
+						     the `api.version` system property (not DOCKER_API_VERSION env), so pin it
+						     here to let Testcontainers connect. -->
+						<api.version>1.44</api.version>
+					</systemPropertyVariables>
+				</configuration>
+			</plugin>
+		</plugins>
+	</build>
+
+</project>
