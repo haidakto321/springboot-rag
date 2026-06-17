@@ -207,7 +207,7 @@ Switched `PgFtsRepository.search` from `plainto_tsquery` to `websearch_to_tsquer
 - Postgres built-in configs (`\dF`): ~29, all European/simple (french, german, spanish, russian, ...). NO built-in for Chinese/Japanese/Korean/Thai/Arabic - those need word-segmentation extensions (zhparser, pg_jieba, pgroonga). Vietnamese has spaces so `'simple'` works okay-ish.
 - Escape hatch: `to_tsvector('simple', content)` = lowercase + tokenize, no stemming/stopwords. Language-neutral safe default for mixed/unknown languages.
 - Multilingual options: (1) per-language config -> need a `lang` column + dynamic config (can't keep the GENERATED tsv column; compute in app or trigger); (2) `'simple'` everywhere (lose stemming, gain language-independence); (3) lean on VECTORS - embeddings are language-agnostic by nature (multilingual models map dog/chien/perro near each other). This is a genuine vector advantage over FTS: FTS is per-language-configured, vectors are not.
-- This sandbox: English corpus -> `'english'` is correct, kept as-is. Flag for the docmaster port: FTS language config is a real design decision; vectors dodge it.
+- This sandbox: English corpus -> `'english'` is correct, kept as-is. Flag for the real project port: FTS language config is a real design decision; vectors dodge it.
 
 ## Second full code review (2026-06-13) - findings
 

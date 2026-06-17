@@ -2,8 +2,8 @@
 
 **Date:** 2026-06-13
 **Status:** Draft for review
-**Type:** Standalone self-study / research sandbox (NOT part of docmaster)
-**Location:** `D:\project-fpt\springboot-rag` (sibling to `docmaster`, `rag-python`)
+**Type:** Standalone self-study / research sandbox (NOT part of real project)
+**Location:** `D:\project-fpt\springboot-rag` (sibling to `real project`, `rag-python`)
 
 ---
 
@@ -22,7 +22,7 @@ the differences in ranking, score, and latency are visible.
 
 This complements the existing `rag-python` project (which already shows the Python
 + pgvector + BM25 + reranking path). This sandbox builds the same ideas in Java -
-the daily language - so the learning transfers to docmaster's future search feature.
+the daily language - so the learning transfers to real project's future search feature.
 
 ### Non-goals (YAGNI)
 
@@ -229,15 +229,15 @@ Config keys (e.g. `application.yml`):
 - HyDE (hypothetical document embeddings) query expansion.
 - Query rewriting.
 - A tiny HTML page for the `/compare` view.
-- Multi-tenant scoping (a `tenant` column + `WHERE tenant = ?`) - mirrors docmaster,
-  added only if used as a closer docmaster prototype.
+- Multi-tenant scoping (a `tenant` column + `WHERE tenant = ?`) - mirrors real project,
+  added only if used as a closer real project prototype.
 
 ---
 
-## 10. Relation to docmaster
+## 10. Relation to real project
 
 The transferable parts - table design, FTS SQL, pgvector SQL, RRF fusion, the
-per-source repository split - port directly to docmaster's parked search feature
+per-source repository split - port directly to real project's parked search feature
 (Approach B: custom `ade_chunk_embeddings` table with explicit `tid` + tenant-scoped
 finder, hybrid SQL, indexing hook in `AdeParseJobProcessor` SUCCESS). The only piece
 that does not transfer is local reranking (low impact for a ranked-list UI; use a
