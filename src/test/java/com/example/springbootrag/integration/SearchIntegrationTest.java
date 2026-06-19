@@ -96,9 +96,20 @@ class SearchIntegrationTest {
         // hybrid returns results
         assertThat(searchService.search("hybrid", "pressure", 10)).isNotEmpty();
 
-        // compare returns all four backends with timing
+        // compare returns all backends with timing (rerank added via the default IdentityReranker)
         var cmp = searchService.compare("pressure", 5);
-        assertThat(cmp.keySet()).containsExactly("fts", "pgvector", "qdrant", "hybrid");
+        assertThat(cmp.keySet()).containsExactly("fts", "pgvector", "qdrant", "hybrid", "rerank");
         assertThat(cmp.get("fts").elapsedMs()).isGreaterThanOrEqualTo(0);
+    }
+
+    @Test
+    void rerankReturnsResultsViaIdentityByDefault() {
+        ingestService.ingest("doc1", "hydraulic seepage caused a pressure drop on line 3");
+        ingestService.ingest("doc2", "the invoice payment was overdue by thirty days");
+
+        // No app.rerank.provider configured -> IdentityReranker -> equals hybrid trimmed to topK.
+        List<SearchHit> out = searchService.search("rerank", "pressure", 5);
+        assertThat(out).isNotEmpty();
+        assertThat(out.size()).isLessThanOrEqualTo(5);
     }
 }

@@ -1,8 +1,10 @@
 package com.example.springbootrag.service;
 
+import com.example.springbootrag.config.RerankProperties;
 import com.example.springbootrag.embedding.EmbeddingProvider;
 import com.example.springbootrag.fusion.RrfFusion;
 import com.example.springbootrag.model.SearchHit;
+import com.example.springbootrag.rerank.Reranker;
 import com.example.springbootrag.repository.PgFtsRepository;
 import com.example.springbootrag.repository.PgVectorRepository;
 import com.example.springbootrag.repository.QdrantRepository;
@@ -20,16 +22,22 @@ public class SearchService {
     private final PgFtsRepository fts;
     private final PgVectorRepository pgVector;
     private final QdrantRepository qdrant;
+    private final Reranker reranker;
+    private final RerankProperties rerankProps;
     private final RrfFusion rrf = new RrfFusion(60);
 
     public SearchService(EmbeddingProvider embeddings,
                          PgFtsRepository fts,
                          PgVectorRepository pgVector,
-                         QdrantRepository qdrant) {
+                         QdrantRepository qdrant,
+                         Reranker reranker,
+                         RerankProperties rerankProps) {
         this.embeddings = embeddings;
         this.fts = fts;
         this.pgVector = pgVector;
         this.qdrant = qdrant;
+        this.reranker = reranker;
+        this.rerankProps = rerankProps;
     }
 
     private static final int MAX_TOP_K = 100;
@@ -42,6 +50,7 @@ public class SearchService {
             case "pgvector" -> pgVector.search(embeddings.embed(query), topK);
             case "qdrant" -> qdrantSearch(embeddings.embed(query), topK);
             case "hybrid" -> hybrid(query, embeddings.embed(query), topK);
+            case "rerank" -> rerank(query, embeddings.embed(query), topK);
             default -> throw new IllegalArgumentException("unknown type: " + type);
         };
     }
@@ -60,6 +69,7 @@ public class SearchService {
         out.put("pgvector", timed(() -> pgVector.search(qvec, topK)));
         out.put("qdrant", timed(() -> qdrantSearch(qvec, topK)));
         out.put("hybrid", timed(() -> hybrid(query, qvec, topK)));
+        out.put("rerank", timed(() -> rerank(query, qvec, topK)));
         return out;
     }
 
@@ -74,6 +84,11 @@ public class SearchService {
         List<SearchHit> keyword = fts.search(query, topK);
         List<SearchHit> vector = pgVector.search(queryEmbedding, topK);
         return rrf.fuse(List.of(keyword, vector), topK);
+    }
+
+    private List<SearchHit> rerank(String query, float[] queryEmbedding, int topK) {
+        List<SearchHit> candidates = hybrid(query, queryEmbedding, rerankProps.getCandidates());
+        return reranker.rerank(query, candidates, topK);
     }
 
     private List<SearchHit> qdrantSearch(float[] queryEmbedding, int topK) {

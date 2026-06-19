@@ -249,3 +249,31 @@ After the `websearch_to_tsquery` switch, re-ran the mixed query WITH `OR`:
 - **fts**: no longer empty - returns BOTH the dispute/late-payment policy chunks (id=9, id=10) AND the INV-5518 chunks (id=17, id=7, id=6). The OR bridges code-half and concept-half.
 - **hybrid**: genuinely blends now. id=9/id=10 appear in BOTH fts and pgvector lists -> RRF `1/61 + 1/61 = 0.0328` -> top. The mixed code+concept query is finally served by one fused ranked list. This is the hybrid payoff the sandbox set out to demonstrate; it only worked once FTS used OR semantics (plainto's AND had made fts empty, collapsing hybrid to vector-only).
 Takeaway refined: hybrid's value depends on BOTH arms returning useful lists; the FTS query-builder choice (plainto vs websearch) directly controls whether the keyword arm fires on multi-topic queries.
+
+## Reranker Step 1 (2026-06-19) - DJL deviations from plan
+
+Plan `docs/superpowers/plans/2026-06-17-reranker.md` had three wrong DJL coordinates/APIs. Resolved during Task 1 spike against the real jars (DJL 0.30.0):
+
+1. **BOM artifactId**: plan said `ai.djl:djl-bom`; real artifact is `ai.djl:bom` (djl-bom 404s on Maven Central). Pinned 0.30.0 (latest is 0.36.0; kept the plan's intended version).
+2. **PyTorch engine artifactId**: plan said `ai.djl.pytorch:djl-pytorch-engine`; real artifact is `ai.djl.pytorch:pytorch-engine` (managed by the BOM, runtime scope).
+3. **CrossEncoderTranslatorFactory does not exist** in any DJL release (checked 0.30/0.33/0.36). Plan's load snippet was fictional. Real API for a cross-encoder reranker in 0.30.0:
+   - `StringPair` is `ai.djl.util.StringPair` (NOT `ai.djl.modality.nlp.translator.StringPair`).
+   - Build the translator manually: `HuggingFaceTokenizer.newInstance("BAAI/bge-reranker-base")` -> `CrossEncoderTranslator.builder(tokenizer).optSigmoid(true).build()`, then `Criteria...optTranslator(translator)` (NOT `optTranslatorFactory`).
+   - Confirmed imports recorded at the top of `DjlSpikeTest.java`; Task 4 (DjlReranker) reuses this exact load path.
+
+Verification done: `./mvnw test-compile` green (imports resolve, production compiles). The actual model run (`RUN_DJL_SPIKE=true ./mvnw -Dtest=DjlSpikeTest test`) is gated and downloads hundreds of MB + native PyTorch libs + the bge-reranker weights; left for manual/owner run, not in CI.
+
+### Reranker design decisions
+- **DJL over raw ONNX Runtime**: less boilerplate for the sandbox (DJL bundles tokenizer + engine + model-zoo download; raw ONNX needs manual tokenization). Tradeoff: DJL pulls a large PyTorch native lib on first `djl` run.
+- **No Ollama reranking**: Ollama exposes embeddings + generate, but no cross-encoder/rerank endpoint, so a separate engine (DJL) is required for this stage.
+- **IdentityReranker is the default** (`app.rerank.provider` unset). The whole feature is wired and tested without any model download; the 13-test unit suite stays green and offline. Only `provider=djl` triggers the download.
+- **Over-fetch then trim**: `rerank` runs hybrid for `candidates` (50) results, reranks, then trims to `topK`. The cross-encoder only adds value if it sees more candidates than the final `topK`.
+- **CI does not exercise the real model**: `DjlSpikeTest` + `DjlRerankerManualTest` are gated behind `RUN_DJL_SPIKE=true`. Without it they skip, keeping CI fast and network-free.
+- **`compare` now has a 5th column** (`rerank`); the existing integration assertion was updated from 4 to 5 keys.
+
+### Real bge-reranker verification - BLOCKED by network (2026-06-19)
+Attempted `RUN_DJL_SPIKE=true` run of `DjlSpikeTest` + `DjlRerankerManualTest`:
+- `huggingface.co` is unreachable from this environment (SSL connection cannot be established; `os error 10054` connection forcibly closed). Regional block.
+- `hf-mirror.com` IS reachable (200) and `HF_ENDPOINT=https://hf-mirror.com` fixes the **tokenizer.json** download (HuggingFaceTokenizer.newInstance then succeeds).
+- But model loading still fails: `IllegalArgumentException: Invalid djl URL: djl://ai.djl.huggingface.pytorch/BAAI/bge-reranker-base` at `Criteria.optModelUrls`. The DJL HF-pytorch zoo resolves/converts the model via huggingface.co (HF_ENDPOINT mirror is NOT honored for the zoo model index), which is blocked. `mlrepo.djl.ai` host itself is reachable.
+- Conclusion: the real cross-encoder path is correct in code (compiles, imports confirmed, identity/wiring paths all green) but cannot be exercised on a network that blocks huggingface.co. To verify: run on an unrestricted network, OR pre-download the model into the DJL cache (`~/.djl.ai`) and point `optModelUrls` at the local path. Default `IdentityReranker` path is fully verified and unaffected.

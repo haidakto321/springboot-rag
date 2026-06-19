@@ -20,6 +20,11 @@ app:
     host: localhost
     port: 6334
     collection: chunks
+  rerank:
+    provider: ""          # set to "djl" to enable the real bge-reranker cross-encoder
+    model: BAAI/bge-reranker-base
+    candidates: 50        # hybrid candidates fed to the reranker before trimming to topK
+    maxLength: 512
 
 management:
   endpoints:
