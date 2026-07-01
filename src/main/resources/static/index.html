@@ -1,0 +1,54 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>RAG Knowledge Base</title>
+    <link rel="stylesheet" href="style.css">
+</head>
+<body>
+<h1>RAG Knowledge Base</h1>
+
+<section id="import-zone">
+    <h2>Import</h2>
+    <div id="drop-area">
+        <p>Drop a .md file here or</p>
+        <input type="file" id="file-input" accept=".md">
+    </div>
+    <p id="import-status" class="status"></p>
+    <table id="doc-table">
+        <thead><tr><th>Doc ID</th><th>Source file</th><th>Chunks</th><th></th></tr></thead>
+        <tbody></tbody>
+    </table>
+</section>
+
+<section id="search-zone">
+    <h2>Search</h2>
+    <form id="search-form">
+        <input type="text" id="search-q" placeholder="query..." required>
+        <select id="search-type">
+            <option value="hybrid" selected>hybrid</option>
+            <option value="rerank">rerank</option>
+            <option value="fts">fts</option>
+            <option value="pgvector">pgvector</option>
+            <option value="qdrant">qdrant</option>
+        </select>
+        <button type="submit">Search</button>
+    </form>
+    <div id="search-results"></div>
+</section>
+
+<section id="ask-zone">
+    <h2>Ask</h2>
+    <form id="ask-form">
+        <input type="text" id="ask-q" placeholder="ask the knowledge base..." required>
+        <button type="submit">Ask</button>
+    </form>
+    <p id="ask-status" class="status"></p>
+    <div id="ask-answer"></div>
+    <div id="ask-sources"></div>
+</section>
+
+<script src="app.js"></script>
+</body>
+</html>

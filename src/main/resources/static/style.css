@@ -1,0 +1,18 @@
+body { font-family: system-ui, sans-serif; max-width: 900px; margin: 2rem auto; padding: 0 1rem; color: #222; }
+h1 { font-size: 1.5rem; }
+section { margin-bottom: 2.5rem; border-top: 1px solid #ddd; padding-top: 1rem; }
+#drop-area { border: 2px dashed #aaa; border-radius: 8px; padding: 1.5rem; text-align: center; }
+#drop-area.drag { border-color: #06c; background: #eef6ff; }
+.status { color: #06c; min-height: 1.2em; }
+table { border-collapse: collapse; width: 100%; margin-top: 1rem; }
+th, td { text-align: left; padding: 0.4rem 0.6rem; border-bottom: 1px solid #eee; }
+form { display: flex; gap: 0.5rem; margin-bottom: 1rem; }
+input[type="text"] { flex: 1; padding: 0.5rem; }
+button { padding: 0.4rem 0.9rem; cursor: pointer; }
+.hit { border: 1px solid #eee; border-radius: 6px; padding: 0.6rem; margin-bottom: 0.6rem; }
+.hit-meta { font-size: 0.85rem; color: #555; margin-bottom: 0.3rem; }
+.score { float: right; color: #999; }
+pre { white-space: pre-wrap; word-break: break-word; background: #fafafa; padding: 0.5rem; border-radius: 4px; }
+#ask-answer { border-left: 3px solid #06c; padding: 0.6rem 1rem; margin-bottom: 1rem; white-space: pre-wrap; }
+details { margin-bottom: 0.4rem; }
+summary { cursor: pointer; font-size: 0.9rem; color: #444; }
