@@ -69,4 +69,12 @@ class OllamaChatProviderTest {
         assertThatThrownBy(() -> provider.chat("s", "u"))
                 .isInstanceOf(ChatUnavailableException.class);
     }
+
+    @Test
+    void httpErrorBecomesChatUnavailable() {
+        server.enqueue(new MockResponse().setResponseCode(500).setBody("model crashed"));
+
+        assertThatThrownBy(() -> provider.chat("s", "u"))
+                .isInstanceOf(ChatUnavailableException.class);
+    }
 }

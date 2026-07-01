@@ -3,6 +3,7 @@ package com.example.springbootrag.chat;
 import com.example.springbootrag.config.ChatProperties;
 import org.springframework.web.client.ResourceAccessException;
 import org.springframework.web.client.RestClient;
+import org.springframework.web.client.RestClientResponseException;
 
 import java.util.List;
 import java.util.Map;
@@ -31,6 +32,8 @@ public class OllamaChatProvider implements ChatProvider {
                                     Map.of("role", "user", "content", userPrompt))))
                     .retrieve()
                     .body(ChatResponse.class);
+        } catch (RestClientResponseException e) {
+            throw new ChatUnavailableException("Ollama returned HTTP " + e.getStatusCode() + ": " + e.getMessage(), e);
         } catch (ResourceAccessException e) {
             throw new ChatUnavailableException("chat model unavailable: " + e.getMessage(), e);
         }
