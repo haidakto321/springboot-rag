@@ -18,6 +18,9 @@ app:
     provider: ollama
     model: nomic-embed-text
     dimension: 768
+  chat:
+    model: qwen2.5:7b
+    context-chunks: 5
   ollama:
     base-url: http://localhost:11434
   qdrant:

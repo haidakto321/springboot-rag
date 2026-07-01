@@ -22,4 +22,9 @@ public class GlobalExceptionHandler {
     public ProblemDetail handleTooLarge(org.springframework.web.multipart.MaxUploadSizeExceededException ex) {
         return ProblemDetail.forStatusAndDetail(HttpStatus.BAD_REQUEST, "file too large (max 2 MB)");
     }
+
+    @ExceptionHandler(com.example.springbootrag.chat.ChatUnavailableException.class)
+    public ProblemDetail handleChatUnavailable(com.example.springbootrag.chat.ChatUnavailableException ex) {
+        return ProblemDetail.forStatusAndDetail(HttpStatus.SERVICE_UNAVAILABLE, ex.getMessage());
+    }
 }
