@@ -1,0 +1,81 @@
+# Golden retrieval set - 18 hand-verified entries.
+# expectedDocId = markdown filename minus .md, chars outside [a-zA-Z0-9._-] replaced by -.
+# expectedHeadingPath is optional; null means any chunk of the doc counts as a hit.
+
+# --- roadmap / pipeline spec entries (5) ---
+- question: "Which library loads the cross-encoder reranker model in the sandbox?"
+  expectedDocId: "2026-06-17-rag-roadmap-and-real-project-pipeline-design"
+  expectedHeadingPath: null
+
+- question: "Why is Neo4j not added up front for graph RAG?"
+  expectedDocId: "2026-06-17-rag-roadmap-and-real-project-pipeline-design"
+  expectedHeadingPath: null
+
+- question: "What is the enriched-chunk pattern for indexing markdown and JSON fields?"
+  expectedDocId: "2026-06-17-rag-roadmap-and-real-project-pipeline-design"
+  expectedHeadingPath: null
+
+- question: "What stages make up the real project pipeline from upload to retrieval?"
+  expectedDocId: "2026-06-17-rag-roadmap-and-real-project-pipeline-design"
+  expectedHeadingPath: null
+
+- question: "Which RAG methods are parked for later and not built in the roadmap?"
+  expectedDocId: "2026-06-17-rag-roadmap-and-real-project-pipeline-design"
+  expectedHeadingPath: null
+
+# --- design spec entries (4) ---
+- question: "What embedding model and vector dimension does the sandbox use?"
+  expectedDocId: "2026-06-13-springboot-rag-design"
+  expectedHeadingPath: null
+
+- question: "How does reciprocal rank fusion combine the keyword and vector result lists?"
+  expectedDocId: "2026-06-13-springboot-rag-design"
+  expectedHeadingPath: null
+
+- question: "What does the compare endpoint return for each backend?"
+  expectedDocId: "2026-06-13-springboot-rag-design"
+  expectedHeadingPath: null
+
+- question: "Which Postgres extension enables vector similarity search in this project?"
+  expectedDocId: "2026-06-13-springboot-rag-design"
+  expectedHeadingPath: null
+
+# --- implementation notes entries (5) ---
+- question: "What went wrong with the DJL BOM artifact id in the Maven pom?"
+  expectedDocId: "implementation-notes"
+  expectedHeadingPath: null
+
+- question: "What fix was applied to stop re-ingest from creating silent duplicate chunks?"
+  expectedDocId: "implementation-notes"
+  expectedHeadingPath: null
+
+- question: "What is the difference between plainto_tsquery and websearch_to_tsquery for FTS?"
+  expectedDocId: "implementation-notes"
+  expectedHeadingPath: null
+
+- question: "Why did Docker Engine 29 cause Testcontainers to fail with HTTP 400?"
+  expectedDocId: "implementation-notes"
+  expectedHeadingPath: null
+
+- question: "What happened when the compare endpoint called Ollama three times per query?"
+  expectedDocId: "implementation-notes"
+  expectedHeadingPath: null
+
+# --- README entry (1) ---
+- question: "How do I run the integration tests for this project?"
+  expectedDocId: "README"
+  expectedHeadingPath: null
+
+# --- knowledge base design spec entries (2) ---
+- question: "What chunking strategy does the knowledge base use for markdown files?"
+  expectedDocId: "2026-07-02-knowledge-base-design"
+  expectedHeadingPath: null
+
+- question: "What does AskService return when the knowledge base is empty?"
+  expectedDocId: "2026-07-02-knowledge-base-design"
+  expectedHeadingPath: null
+
+# --- HANDOFF entry (1) ---
+- question: "What three documents should a future developer read first to understand this project?"
+  expectedDocId: "HANDOFF"
+  expectedHeadingPath: null
