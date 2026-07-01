@@ -1,6 +1,8 @@
 package com.example.springbootrag.integration;
 
 import com.example.springbootrag.embedding.EmbeddingProvider;
+import com.example.springbootrag.service.IngestService;
+import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.autoconfigure.web.servlet.AutoConfigureMockMvc;
@@ -65,6 +67,13 @@ class DocumentIntegrationTest {
     }
 
     @Autowired MockMvc mvc;
+    @Autowired IngestService ingestService;
+
+    @BeforeEach
+    void cleanup() {
+        ingestService.delete("My-Notes");
+        ingestService.delete("doc");
+    }
 
     @Test
     void uploadListDeleteRoundTrip() throws Exception {
@@ -79,6 +88,7 @@ class DocumentIntegrationTest {
 
         mvc.perform(get("/documents"))
                 .andExpect(status().isOk())
+                .andExpect(jsonPath("$.length()").value(1))
                 .andExpect(jsonPath("$[0].docId").value("My-Notes"))
                 .andExpect(jsonPath("$[0].sourceFile").value("My Notes.md"))
                 .andExpect(jsonPath("$[0].chunkCount").value(1));
