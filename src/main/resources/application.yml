@@ -8,6 +8,10 @@ spring:
   sql:
     init:
       mode: always   # run schema.sql on startup
+  servlet:
+    multipart:
+      max-file-size: 2MB
+      max-request-size: 3MB
 
 app:
   embedding:
