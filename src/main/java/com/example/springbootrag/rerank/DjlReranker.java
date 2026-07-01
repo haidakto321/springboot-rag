@@ -76,7 +76,8 @@ public class DjlReranker implements Reranker {
                     .sorted(Comparator.comparingDouble(Scored::score).reversed())
                     .limit(topK)
                     .map(s -> new SearchHit(s.hit().id(), s.hit().docId(),
-                            s.hit().chunkIndex(), s.hit().content(), s.score()))
+                            s.hit().chunkIndex(), s.hit().content(),
+                            s.hit().sourceFile(), s.hit().headingPath(), s.score()))
                     .toList();
         }
     }

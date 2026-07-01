@@ -41,7 +41,8 @@ public class RrfFusion {
                 .limit(topK)
                 .map(e -> {
                     SearchHit h = byId.get(e.getKey());
-                    return new SearchHit(h.id(), h.docId(), h.chunkIndex(), h.content(), e.getValue());
+                    return new SearchHit(h.id(), h.docId(), h.chunkIndex(), h.content(),
+                            h.sourceFile(), h.headingPath(), e.getValue());
                 })
                 .toList();
     }

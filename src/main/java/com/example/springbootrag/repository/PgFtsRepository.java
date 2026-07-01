@@ -22,7 +22,7 @@ public class PgFtsRepository {
      */
     public List<SearchHit> search(String query, int topK) {
         return jdbc.query(
-                "SELECT id, doc_id, chunk_index, content, " +
+                "SELECT id, doc_id, chunk_index, content, source_file, heading_path, " +
                         "       ts_rank(tsv, websearch_to_tsquery('english', ?)) AS rank " +
                         "FROM chunks " +
                         "WHERE tsv @@ websearch_to_tsquery('english', ?) " +
@@ -32,6 +32,8 @@ public class PgFtsRepository {
                         rs.getString("doc_id"),
                         rs.getInt("chunk_index"),
                         rs.getString("content"),
+                        rs.getString("source_file"),
+                        rs.getString("heading_path"),
                         rs.getDouble("rank")),
                 query, query, topK);
     }

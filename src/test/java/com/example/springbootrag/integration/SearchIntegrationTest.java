@@ -4,6 +4,7 @@ import com.example.springbootrag.embedding.EmbeddingProvider;
 import com.example.springbootrag.model.SearchHit;
 import com.example.springbootrag.service.SearchService;
 import com.example.springbootrag.service.IngestService;
+import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
@@ -75,6 +76,14 @@ class SearchIntegrationTest {
     @Autowired IngestService ingestService;
     @Autowired SearchService searchService;
 
+    /** Wipe all known doc IDs before each test so the shared container does not bleed state. */
+    @BeforeEach
+    void cleanup() {
+        ingestService.delete("doc1");
+        ingestService.delete("doc2");
+        ingestService.delete("kb-doc");
+    }
+
     @Test
     void ingestsAndSearchesAcrossBackends() {
         ingestService.ingest("doc1", "hydraulic seepage caused a pressure drop on line 3");
@@ -100,6 +109,28 @@ class SearchIntegrationTest {
         var cmp = searchService.compare("pressure", 5);
         assertThat(cmp.keySet()).containsExactly("fts", "pgvector", "qdrant", "hybrid", "rerank");
         assertThat(cmp.get("fts").elapsedMs()).isGreaterThanOrEqualTo(0);
+    }
+
+    @Test
+    void markdownIngestCarriesMetadataThroughAllBackends() {
+        ingestService.ingestMarkdown("kb-doc", "kb doc.md", """
+                # Pressure Guide
+
+                ## Diagnosis
+
+                hydraulic seepage caused a pressure drop on line 3
+                """);
+
+        List<SearchHit> vec = searchService.search("pgvector", "machine lost pressure", 10);
+        assertThat(vec.get(0).docId()).isEqualTo("kb-doc");
+        assertThat(vec.get(0).sourceFile()).isEqualTo("kb doc.md");
+        assertThat(vec.get(0).headingPath()).isEqualTo("# Pressure Guide > ## Diagnosis");
+
+        List<SearchHit> qd = searchService.search("qdrant", "machine lost pressure", 10);
+        assertThat(qd.get(0).headingPath()).isEqualTo("# Pressure Guide > ## Diagnosis");
+
+        List<SearchHit> fts = searchService.search("fts", "seepage", 10);
+        assertThat(fts.get(0).sourceFile()).isEqualTo("kb doc.md");
     }
 
     @Test

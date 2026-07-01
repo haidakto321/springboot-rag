@@ -13,7 +13,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 class DjlRerankerManualTest {
 
     private SearchHit hit(long id, String content) {
-        return new SearchHit(id, "doc", (int) id, content, 0.0);
+        return new SearchHit(id, "doc", (int) id, content, null, null, 0.0);
     }
 
     @Test

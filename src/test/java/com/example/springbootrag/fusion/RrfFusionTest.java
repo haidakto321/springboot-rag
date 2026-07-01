@@ -8,7 +8,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 class RrfFusionTest {
 
     private SearchHit hit(long id) {
-        return new SearchHit(id, "doc", (int) id, "c" + id, 0.0);
+        return new SearchHit(id, "doc", (int) id, "c" + id, null, null, 0.0);
     }
 
     @Test

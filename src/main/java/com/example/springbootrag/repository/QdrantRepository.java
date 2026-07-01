@@ -17,6 +17,7 @@ import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Repository;
 
 import java.util.ArrayList;
+import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.ExecutionException;
@@ -74,15 +75,23 @@ public class QdrantRepository {
         }
     }
 
-    public void upsert(long id, String docId, int chunkIndex, String content, float[] embedding)
+    public void upsert(long id, String docId, int chunkIndex, String content,
+                       String sourceFile, String headingPath, float[] embedding)
             throws ExecutionException, InterruptedException {
+        Map<String, Value> payload = new HashMap<>();
+        payload.put("doc_id", value(docId));
+        payload.put("chunk_index", value((long) chunkIndex));
+        payload.put("content", value(content));
+        if (sourceFile != null) {
+            payload.put("source_file", value(sourceFile));
+        }
+        if (headingPath != null) {
+            payload.put("heading_path", value(headingPath));
+        }
         PointStruct point = PointStruct.newBuilder()
                 .setId(id(id))
                 .setVectors(vectors(embedding))
-                .putAllPayload(Map.of(
-                        "doc_id", value(docId),
-                        "chunk_index", value((long) chunkIndex),
-                        "content", value(content)))
+                .putAllPayload(payload)
                 .build();
         client.upsertAsync(collection, List.of(point)).get();
     }
@@ -107,6 +116,8 @@ public class QdrantRepository {
                     payload.get("doc_id").getStringValue(),
                     (int) payload.get("chunk_index").getIntegerValue(),
                     payload.get("content").getStringValue(),
+                    payload.containsKey("source_file") ? payload.get("source_file").getStringValue() : null,
+                    payload.containsKey("heading_path") ? payload.get("heading_path").getStringValue() : null,
                     p.getScore()));
         }
         return hits;
