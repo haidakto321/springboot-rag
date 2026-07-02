@@ -33,3 +33,6 @@ build/
 .vscode/
 
 app-8090.log
+
+### Local scratch (not tracked) ###
+/implementation-notes.md
