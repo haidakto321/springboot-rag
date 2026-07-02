@@ -10,14 +10,16 @@ Third sidebar screen "Compare backends": one query run through all 5 backends
 (fts, pgvector, qdrant, hybrid, rerank) shown side-by-side with per-backend latency and
 ranked hits. Frontend-only; reuses the existing `GET /compare` endpoint.
 
-### Unit B - Streaming chat  (next)
-Merges "streaming answers" + "conversational follow-up".
-- Stream LLM tokens live to the client (SSE endpoint) instead of one blocking JSON
-  response - answer types out word-by-word.
-- Session memory: keep conversation turns and re-feed prior context to the model so
-  follow-up questions ("what about X?") work.
-- The Ask screen becomes a chat thread.
-- Backend: new streaming endpoint, chat/session handling. Ollama already streams.
+### Unit B - Streaming chat  ✅ done (2026-07-03)
+Merged "streaming answers" + "conversational follow-up".
+- `POST /chat/stream` streams LLM tokens live as NDJSON frames (token* -> sources ->
+  done/error) via StreamingResponseBody; `ChatProvider.chatStream` reads Ollama's
+  `stream:true` NDJSON. Answer types out word-by-word.
+- Stateless session memory: client sends the conversation each turn, capped to the last
+  10 messages; retrieval runs on the latest user message.
+- The Ask screen is now a chat thread with live token rendering and citation chips.
+- Note: needs `spring.mvc.async.request-timeout` raised or long generations get cut with
+  an InterruptedException.
 
 **Deferred from Unit B:**
 - **Condense-question retrieval** - for vague follow-ups ("tell me more", "why?"),
