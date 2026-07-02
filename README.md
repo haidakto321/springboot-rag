@@ -19,7 +19,7 @@ docker compose up -d            # postgres + qdrant
 ollama serve                    # if not already running
 ./mvnw spring-boot:run
 ```
-Swagger UI: http://localhost:8080/swagger-ui.html
+Swagger UI: http://localhost:8090/swagger-ui.html
 
 ## Endpoints
 - `POST /ingest` - ingest a document `{ "docId": "...", "text": "..." }`
@@ -46,7 +46,7 @@ native PyTorch libraries (hundreds of MB) via DJL, then runs locally/offline aft
 
 ## Knowledge base
 
-UI at http://localhost:8080/ lets you import .md files, search with the backend dropdown, and ask questions. The backend runs RAG retrieval (hybrid, FTS, pgvector, or qdrant) and answers via a local chat model.
+UI at http://localhost:8090/ lets you import .md files, search with the backend dropdown, and ask questions. The backend runs RAG retrieval (hybrid, FTS, pgvector, or qdrant) and answers via a local chat model.
 
 **Endpoints:**
 - `POST /documents` - multipart form upload (*.md file, max 2 MB, UTF-8). Chunks the file by heading, stores chunks in Postgres + embeddings.
@@ -108,12 +108,12 @@ git clone <repo-url> ~/springboot-rag && cd ~/springboot-rag
 **Run and test (same commands as everywhere):**
 ```bash
 docker compose up -d      # postgres + qdrant inside WSL
-./mvnw spring-boot:run    # app on :8080
+./mvnw spring-boot:run    # app on :8090
 ./mvnw test               # Testcontainers finds /var/run/docker.sock natively
 ```
 
 Notes:
-- Ports bound in WSL auto-forward: open http://localhost:8080/ in the WINDOWS browser as usual.
+- Ports bound in WSL auto-forward: open http://localhost:8090/ in the WINDOWS browser as usual.
 - The surefire `api.version=1.44` pin in `pom.xml` already handles new Docker Engine versions
   (WSL docker-ce is typically Engine 29.x) - keep it.
 - NVIDIA GPU: WSL2 CUDA passthrough works with the standard Windows NVIDIA driver; Ollama
