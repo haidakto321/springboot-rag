@@ -19,6 +19,12 @@ Merges "streaming answers" + "conversational follow-up".
 - The Ask screen becomes a chat thread.
 - Backend: new streaming endpoint, chat/session handling. Ollama already streams.
 
+**Deferred from Unit B:**
+- **Condense-question retrieval** - for vague follow-ups ("tell me more", "why?"),
+  rewrite the conversation history + new question into a standalone search query before
+  retrieving, instead of retrieving on the latest message alone. Known RAG pattern
+  (question condensation). Improves multi-turn retrieval quality. (Med)
+
 ### Unit C - Document filter  (after B)
 - Scope search / ask / compare to a chosen subset of documents.
 - Backend: `doc_id IN (...)` filter across pg (fts + pgvector) and qdrant repos.
