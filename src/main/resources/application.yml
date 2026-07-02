@@ -15,6 +15,11 @@ spring:
     multipart:
       max-file-size: 2MB
       max-request-size: 3MB
+  mvc:
+    async:
+      # LLM streaming (/chat/stream) can run far longer than the ~30s container default.
+      # Without this, a long generation is cut mid-stream with an InterruptedException.
+      request-timeout: 600000   # 10 minutes; -1 would disable the timeout entirely
 
 app:
   embedding:
