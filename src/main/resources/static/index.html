@@ -4,50 +4,146 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <title>RAG Knowledge Base</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link href="https://fonts.googleapis.com/css2?family=Manrope:wght@400;500;600;700;800&display=swap" rel="stylesheet">
     <link rel="stylesheet" href="style.css">
 </head>
 <body>
-<h1>RAG Knowledge Base</h1>
 
-<section id="import-zone">
-    <h2>Import</h2>
-    <div id="drop-area">
-        <p>Drop a .md file here or</p>
-        <input type="file" id="file-input" accept=".md">
+<!-- Sidebar -->
+<aside class="sidebar">
+    <div class="brand">
+        <div class="brand-logo"><i></i></div>
+        <div>
+            <div class="brand-title">Knowledge Base</div>
+            <div class="brand-sub">RAG workspace</div>
+        </div>
     </div>
-    <p id="import-status" class="status"></p>
-    <table id="doc-table">
-        <thead><tr><th>Doc ID</th><th>Source file</th><th>Chunks</th><th></th></tr></thead>
-        <tbody></tbody>
-    </table>
-</section>
 
-<section id="search-zone">
-    <h2>Search</h2>
-    <form id="search-form">
-        <input type="text" id="search-q" placeholder="query..." required>
-        <select id="search-type">
-            <option value="hybrid" selected>hybrid</option>
-            <option value="rerank">rerank</option>
-            <option value="fts">fts</option>
-            <option value="pgvector">pgvector</option>
-            <option value="qdrant">qdrant</option>
-        </select>
-        <button type="submit">Search</button>
-    </form>
-    <div id="search-results"></div>
-</section>
+    <nav class="nav">
+        <div class="nav-label">Workspace</div>
+        <button class="nav-btn active" id="nav-docs">
+            <span class="nav-dot"></span>Documents
+            <span class="nav-count" id="nav-count">0</span>
+        </button>
+        <button class="nav-btn" id="nav-query">
+            <span class="nav-dot circle"></span>Search &amp; Ask
+        </button>
+    </nav>
 
-<section id="ask-zone">
-    <h2>Ask</h2>
-    <form id="ask-form">
-        <input type="text" id="ask-q" placeholder="ask the knowledge base..." required>
-        <button type="submit">Ask</button>
-    </form>
-    <p id="ask-status" class="status"></p>
-    <div id="ask-answer"></div>
-    <div id="ask-sources"></div>
-</section>
+    <div class="index-status">
+        <div class="index-status-title">Index status</div>
+        <div class="index-status-line">
+            <span class="dot-green"></span><span id="index-host">localhost:8090</span>
+        </div>
+    </div>
+</aside>
+
+<!-- Main -->
+<main class="main">
+    <header class="topbar">
+        <div>
+            <h1 id="screen-title">Documents &amp; Import</h1>
+            <p id="screen-sub">Import markdown files and manage your indexed documents.</p>
+        </div>
+        <button class="theme-toggle" id="theme-toggle">
+            <span class="nav-dot"></span><span id="theme-label">Light</span>
+        </button>
+    </header>
+
+    <!-- Screen 1: Documents -->
+    <div class="screen" id="screen-docs">
+        <section class="stats">
+            <div class="stat-card">
+                <div class="stat-label">Documents</div>
+                <div class="stat-value" id="stat-docs">0</div>
+            </div>
+            <div class="stat-card">
+                <div class="stat-label">Total chunks</div>
+                <div class="stat-value" id="stat-chunks">0</div>
+            </div>
+            <div class="stat-card">
+                <div class="stat-label">Last import</div>
+                <div class="stat-value" id="stat-last">-</div>
+            </div>
+        </section>
+
+        <section class="card">
+            <div class="card-head">
+                <h2>Import</h2>
+                <span class="card-hint">Markdown files are chunked and embedded automatically</span>
+            </div>
+            <div class="import-body">
+                <div class="dropzone" id="drop-area">
+                    <div class="dropzone-plus">+</div>
+                    <div class="dropzone-text">Drop a <span class="mono">.md</span> file here</div>
+                    <button class="btn-primary btn-browse" id="browse-btn" type="button">Browse files</button>
+                    <input type="file" id="file-input" accept=".md" hidden>
+                </div>
+                <!-- Upload progress (hidden until importing) -->
+                <div class="upload-row" id="upload-row" hidden>
+                    <div class="upload-tile mono">MD</div>
+                    <div class="upload-info">
+                        <div class="upload-info-line">
+                            <span class="upload-name" id="upload-name"></span>
+                            <span class="upload-stage" id="upload-stage"></span>
+                        </div>
+                        <div class="progress-track"><div class="progress-fill" id="upload-fill" style="width:0%"></div></div>
+                    </div>
+                    <button class="upload-cancel" id="upload-cancel" type="button">&times;</button>
+                </div>
+            </div>
+        </section>
+
+        <section class="card">
+            <div class="card-head">
+                <h2>Indexed documents</h2>
+                <span class="card-meta" id="doc-meta">0 documents · 0 chunks</span>
+            </div>
+            <div class="doc-cols">
+                <div>Doc ID</div><div>Source file</div><div>Chunks</div><div class="col-act"></div>
+            </div>
+            <div id="doc-list"></div>
+        </section>
+    </div>
+
+    <!-- Screen 2: Search & Ask -->
+    <div class="screen" id="screen-query" hidden>
+        <section class="card">
+            <div class="card-head"><h2>Search</h2></div>
+            <form class="query-row" id="search-form">
+                <input type="text" class="q-input" id="search-q" placeholder="Search chunks..." required>
+                <select class="q-select" id="search-type">
+                    <option value="hybrid" selected>Hybrid</option>
+                    <option value="rerank">Rerank</option>
+                    <option value="fts">Keyword (FTS)</option>
+                    <option value="pgvector">Vector (pgvector)</option>
+                    <option value="qdrant">Vector (Qdrant)</option>
+                </select>
+                <button class="btn-primary btn-search" type="submit">Search</button>
+            </form>
+            <div class="results" id="search-results" hidden>
+                <div class="results-meta" id="search-meta"></div>
+                <div id="search-hits"></div>
+            </div>
+        </section>
+
+        <section class="card">
+            <div class="card-head"><h2>Ask the knowledge base</h2></div>
+            <form class="query-row" id="ask-form">
+                <input type="text" class="q-input" id="ask-q" placeholder="Ask a question..." required>
+                <button class="btn-primary btn-ask" type="submit" id="ask-btn">Ask</button>
+            </form>
+            <div class="answer-area" id="ask-answer-area" hidden>
+                <div class="answer-status">
+                    <span class="dot-green"></span><span id="ask-status">Answer</span>
+                </div>
+                <p class="answer-text" id="ask-answer"></p>
+                <div class="chips" id="ask-sources"></div>
+            </div>
+        </section>
+    </div>
+</main>
 
 <script src="app.js"></script>
 </body>
