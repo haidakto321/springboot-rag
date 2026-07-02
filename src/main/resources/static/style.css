@@ -79,6 +79,7 @@ body {
 .nav-btn.active { color: var(--text); background: var(--surface2); }
 .nav-dot { width: 8px; height: 8px; border-radius: 2.5px; background: var(--ac); flex: none; }
 .nav-dot.circle { border-radius: 50%; opacity: .7; }
+.nav-dot.square2 { border-radius: 2.5px; opacity: .4; transform: rotate(45deg); }
 .nav-count {
   margin-left: auto; font-size: 11px; font-weight: 700; color: var(--muted);
   background: var(--bg); border: 1px solid var(--border); border-radius: 20px; padding: 1px 8px;
@@ -273,7 +274,16 @@ body {
   display: flex; flex-direction: column; gap: 10px;
 }
 .results[hidden] { display: none; }
+.results-header { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
 .results-meta { font-size: 11.5px; font-weight: 700; color: var(--muted); }
+.hl-toggle {
+  display: flex; align-items: center; gap: 6px; font-size: 11.5px; font-weight: 700;
+  color: var(--muted); cursor: pointer; user-select: none;
+}
+.hl-toggle input { accent-color: var(--ac); cursor: pointer; margin: 0; }
+.result-snippet mark {
+  background: var(--chip); color: inherit; border-radius: 3px; padding: 0 2px; font-weight: 700;
+}
 .result-row {
   display: flex; gap: 14px; padding: 12px 14px; border: 1px solid var(--border);
   border-radius: 10px; background: var(--bg);
@@ -291,6 +301,39 @@ body {
 .result-score-val { font-size: 12px; font-weight: 800; color: var(--ac); }
 .score-track { width: 100%; height: 4px; border-radius: 2px; background: var(--surface2); overflow: hidden; }
 .score-fill { height: 100%; background: var(--ac); border-radius: 2px; }
+
+/* ---------- Compare ---------- */
+.compare-grid {
+  display: grid; grid-template-columns: repeat(5, minmax(220px, 1fr)); gap: 14px;
+  overflow-x: auto; padding-bottom: 6px;
+}
+.compare-grid[hidden] { display: none; }
+.backend-card {
+  background: var(--surface); border: 1px solid var(--border); border-radius: 14px;
+  box-shadow: var(--shadow); display: flex; flex-direction: column; min-width: 0;
+}
+.backend-head {
+  padding: 14px 16px; border-bottom: 1px solid var(--border);
+  display: flex; align-items: baseline; gap: 8px;
+}
+.backend-name { font-size: 13.5px; font-weight: 800; letter-spacing: -.01em; }
+.backend-ms {
+  margin-left: auto; font-size: 11px; font-weight: 700; color: var(--muted);
+  background: var(--bg); border: 1px solid var(--border); border-radius: 20px; padding: 1px 8px;
+}
+.backend-body { padding: 6px 0; display: flex; flex-direction: column; }
+.crow { padding: 10px 16px; border-bottom: 1px solid var(--border); display: flex; flex-direction: column; gap: 3px; }
+.crow:last-child { border-bottom: none; }
+.crow-top { display: flex; align-items: baseline; gap: 6px; }
+.crow-rank { font-size: 11px; font-weight: 800; color: var(--muted); min-width: 20px; }
+.crow-doc { font-size: 12px; font-weight: 800; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.crow-score { margin-left: auto; font-size: 11.5px; font-weight: 800; color: var(--ac); flex: none; }
+.crow-heading { font-size: 11px; color: var(--muted); font-weight: 600; margin-left: 26px; }
+.crow-snippet {
+  font-size: 11.5px; color: var(--muted); font-weight: 500; line-height: 1.45; margin-left: 26px;
+  display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden;
+}
+.backend-empty { padding: 14px 16px; font-size: 12px; color: var(--muted); font-weight: 500; }
 
 .answer-area {
   border-top: 1px solid var(--border); padding: 18px 22px 20px;

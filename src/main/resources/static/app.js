@@ -7,26 +7,34 @@ const esc = (s) => String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replac
 
 const SCREENS = {
     docs: {
+        nav: 'nav-docs', el: 'screen-docs',
         title: 'Documents & Import',
         sub: 'Import markdown files and manage your indexed documents.',
     },
     query: {
+        nav: 'nav-query', el: 'screen-query',
         title: 'Search & Ask',
         sub: 'Search chunks and ask questions grounded in your knowledge base.',
+    },
+    compare: {
+        nav: 'nav-compare', el: 'screen-compare',
+        title: 'Compare backends',
+        sub: 'Run one query through every search backend and compare results and latency.',
     },
 };
 
 function showScreen(name) {
-    $('#screen-docs').hidden = name !== 'docs';
-    $('#screen-query').hidden = name !== 'query';
-    $('#nav-docs').classList.toggle('active', name === 'docs');
-    $('#nav-query').classList.toggle('active', name === 'query');
+    for (const [key, s] of Object.entries(SCREENS)) {
+        $('#' + s.el).hidden = key !== name;
+        $('#' + s.nav).classList.toggle('active', key === name);
+    }
     $('#screen-title').textContent = SCREENS[name].title;
     $('#screen-sub').textContent = SCREENS[name].sub;
 }
 
 $('#nav-docs').addEventListener('click', () => { showChunkList(); showScreen('docs'); });
 $('#nav-query').addEventListener('click', () => showScreen('query'));
+$('#nav-compare').addEventListener('click', () => showScreen('compare'));
 
 // ---------- Theme ----------
 
@@ -221,17 +229,66 @@ dropArea.addEventListener('drop', (e) => {
 
 // ---------- Search ----------
 
+let lastHits = [];
+let lastQuery = '';
+
+// Highlight state, persisted like theme.
+const hlToggle = $('#hl-toggle');
+hlToggle.checked = localStorage.getItem('kb-highlight') !== 'off';
+hlToggle.addEventListener('change', () => {
+    localStorage.setItem('kb-highlight', hlToggle.checked ? 'on' : 'off');
+    if (lastHits.length) renderHits();
+});
+
+function escapeRegex(s) { return s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'); }
+
+// Escape content first (XSS-safe), then wrap literal query terms in <mark>.
+// Purely lexical - for semantic modes the query words may not appear, which is expected.
+function highlightSnippet(text) {
+    const safe = esc(text);
+    if (!hlToggle.checked) return safe;
+    const terms = [...new Set(lastQuery.toLowerCase().split(/\s+/).filter((t) => t.length >= 2))];
+    if (!terms.length) return safe;
+    const rx = new RegExp('(' + terms.map(escapeRegex).join('|') + ')', 'gi');
+    return safe.replace(rx, '<mark>$1</mark>');
+}
+
+function renderHits() {
+    const hitsEl = $('#search-hits');
+    hitsEl.innerHTML = '';
+    if (!lastHits.length) { hitsEl.innerHTML = '<div class="empty-line">No results.</div>'; return; }
+
+    const maxScore = Math.max(...lastHits.map((h) => h.score), 0.0001);
+    for (const h of lastHits) {
+        const pct = Math.round((h.score / maxScore) * 100);
+        const row = document.createElement('div');
+        row.className = 'result-row';
+        row.innerHTML = `
+            <div class="result-main">
+                <div class="result-title-line">
+                    <span class="result-doc">${esc(h.docId)}</span>
+                    ${h.headingPath ? `<span class="result-heading">${esc(h.headingPath)}</span>` : ''}
+                </div>
+                <div class="result-snippet">${highlightSnippet(h.content)}</div>
+            </div>
+            <div class="result-score">
+                <span class="result-score-val">${h.score.toFixed(3)}</span>
+                <div class="score-track"><div class="score-fill" style="width:${pct}%"></div></div>
+            </div>`;
+        hitsEl.appendChild(row);
+    }
+}
+
 $('#search-form').addEventListener('submit', async (e) => {
     e.preventDefault();
     const q = $('#search-q').value;
     const type = $('#search-type').value;
     const area = $('#search-results');
     const meta = $('#search-meta');
-    const hitsEl = $('#search-hits');
 
     area.hidden = false;
     meta.textContent = 'Searching…';
-    hitsEl.innerHTML = '';
+    $('#search-hits').innerHTML = '';
 
     const t0 = performance.now();
     const res = await fetch(`/search?q=${encodeURIComponent(q)}&type=${type}&topK=10`);
@@ -243,29 +300,10 @@ $('#search-form').addEventListener('submit', async (e) => {
         meta.textContent = `Error: ${detail}`;
         return;
     }
-    const hits = await res.json();
-    meta.textContent = `${hits.length} result${hits.length === 1 ? '' : 's'} · ${ms} ms`;
-    if (!hits.length) { hitsEl.innerHTML = '<div class="empty-line">No results.</div>'; return; }
-
-    const maxScore = Math.max(...hits.map((h) => h.score), 0.0001);
-    for (const h of hits) {
-        const pct = Math.round((h.score / maxScore) * 100);
-        const row = document.createElement('div');
-        row.className = 'result-row';
-        row.innerHTML = `
-            <div class="result-main">
-                <div class="result-title-line">
-                    <span class="result-doc">${esc(h.docId)}</span>
-                    ${h.headingPath ? `<span class="result-heading">${esc(h.headingPath)}</span>` : ''}
-                </div>
-                <div class="result-snippet">${esc(h.content)}</div>
-            </div>
-            <div class="result-score">
-                <span class="result-score-val">${h.score.toFixed(3)}</span>
-                <div class="score-track"><div class="score-fill" style="width:${pct}%"></div></div>
-            </div>`;
-        hitsEl.appendChild(row);
-    }
+    lastHits = await res.json();
+    lastQuery = q;
+    meta.textContent = `${lastHits.length} result${lastHits.length === 1 ? '' : 's'} · ${ms} ms`;
+    renderHits();
 });
 
 // ---------- Ask ----------
@@ -324,5 +362,62 @@ function toggleSource(chip, source) {
     chip.insertAdjacentElement('afterend', pre);
     chip._detail = pre;
 }
+
+// ---------- Compare ----------
+
+// Fixed backend order, matching the /compare response.
+const BACKENDS = ['fts', 'pgvector', 'qdrant', 'hybrid', 'rerank'];
+
+$('#compare-form').addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const q = $('#compare-q').value;
+    const topK = $('#compare-topk').value;
+    const grid = $('#compare-grid');
+
+    grid.hidden = false;
+    grid.innerHTML = '<div class="backend-empty">Running all backends…</div>';
+
+    const res = await fetch(`/compare?q=${encodeURIComponent(q)}&topK=${topK}`);
+    if (!res.ok) {
+        let detail = res.status;
+        try { detail = (await res.json()).detail ?? detail; } catch (_) {}
+        grid.innerHTML = `<div class="backend-empty">Error: ${esc(String(detail))}</div>`;
+        return;
+    }
+    const data = await res.json();
+    grid.innerHTML = '';
+
+    for (const name of BACKENDS) {
+        const result = data[name];
+        if (!result) continue;
+        const hits = result.hits || [];
+        const card = document.createElement('div');
+        card.className = 'backend-card';
+        let rows = '';
+        if (!hits.length) {
+            rows = '<div class="backend-empty">No results.</div>';
+        } else {
+            hits.forEach((h, i) => {
+                rows += `
+                    <div class="crow">
+                        <div class="crow-top">
+                            <span class="crow-rank">#${i + 1}</span>
+                            <span class="crow-doc">${esc(h.docId)}</span>
+                            <span class="crow-score">${h.score.toFixed(3)}</span>
+                        </div>
+                        ${h.headingPath ? `<div class="crow-heading">${esc(h.headingPath)}</div>` : ''}
+                        <div class="crow-snippet">${esc(h.content)}</div>
+                    </div>`;
+            });
+        }
+        card.innerHTML = `
+            <div class="backend-head">
+                <span class="backend-name">${name}</span>
+                <span class="backend-ms">${result.elapsedMs} ms · ${hits.length}</span>
+            </div>
+            <div class="backend-body">${rows}</div>`;
+        grid.appendChild(card);
+    }
+});
 
 refreshDocs();

@@ -29,6 +29,9 @@
         <button class="nav-btn" id="nav-query">
             <span class="nav-dot circle"></span>Search &amp; Ask
         </button>
+        <button class="nav-btn" id="nav-compare">
+            <span class="nav-dot square2"></span>Compare
+        </button>
     </nav>
 
     <div class="index-status">
@@ -137,7 +140,10 @@
                 <button class="btn-primary btn-search" type="submit">Search</button>
             </form>
             <div class="results" id="search-results" hidden>
-                <div class="results-meta" id="search-meta"></div>
+                <div class="results-header">
+                    <div class="results-meta" id="search-meta"></div>
+                    <label class="hl-toggle"><input type="checkbox" id="hl-toggle" checked> Highlight terms</label>
+                </div>
                 <div id="search-hits"></div>
             </div>
         </section>
@@ -156,6 +162,25 @@
                 <div class="chips" id="ask-sources"></div>
             </div>
         </section>
+    </div>
+
+    <!-- Screen 3: Compare -->
+    <div class="screen" id="screen-compare" hidden>
+        <section class="card">
+            <div class="card-head"><h2>Compare backends</h2>
+                <span class="card-hint">Run the same query through every backend, side by side</span>
+            </div>
+            <form class="query-row" id="compare-form">
+                <input type="text" class="q-input" id="compare-q" placeholder="Query to compare..." required>
+                <select class="q-select" id="compare-topk">
+                    <option value="5">Top 5</option>
+                    <option value="10" selected>Top 10</option>
+                    <option value="20">Top 20</option>
+                </select>
+                <button class="btn-primary btn-search" type="submit">Compare</button>
+            </form>
+        </section>
+        <div id="compare-grid" class="compare-grid" hidden></div>
     </div>
 </main>
 
