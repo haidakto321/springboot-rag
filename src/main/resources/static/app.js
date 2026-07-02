@@ -137,6 +137,19 @@ $('#chunk-back').addEventListener('click', showChunkList);
 
 let currentXhr = null;
 
+// Toast notification, auto-dismisses. kind = 'success' | 'error'.
+function toast(msg, kind = 'success') {
+    const el = document.createElement('div');
+    el.className = 'toast' + (kind === 'error' ? ' error' : '');
+    el.innerHTML = `<span class="toast-dot"></span><span>${esc(msg)}</span>`;
+    $('#toast-host').appendChild(el);
+    setTimeout(() => {
+        el.classList.add('out');
+        el.addEventListener('animationend', () => el.remove(), { once: true });
+    }, kind === 'error' ? 4000 : 2800);
+}
+
+// The progress row is shown ONLY while an upload is in flight.
 function setUpload(name, stage, pct) {
     $('#upload-row').hidden = false;
     $('#upload-name').textContent = name;
@@ -145,13 +158,13 @@ function setUpload(name, stage, pct) {
 }
 function hideUpload() {
     $('#upload-row').hidden = true;
+    $('#upload-fill').style.width = '0%';
     currentXhr = null;
 }
 
 function uploadFile(file) {
     if (!file.name.endsWith('.md')) {
-        setUpload(file.name, 'Only .md files are accepted', 0);
-        setTimeout(hideUpload, 2500);
+        toast('Only .md files are accepted', 'error');
         return;
     }
     const form = new FormData();
@@ -170,20 +183,19 @@ function uploadFile(file) {
     xhr.upload.onload = () => setUpload(file.name, 'Embedding chunks…', 95);
 
     xhr.onload = () => {
+        hideUpload();
         if (xhr.status >= 200 && xhr.status < 300) {
             const body = JSON.parse(xhr.responseText);
-            setUpload(file.name, `Imported · ${body.chunksStored ?? '?'} chunks`, 100);
+            toast(`Imported ${file.name} · ${body.chunksStored ?? '?'} chunks`);
             localStorage.setItem('kb-last-import', 'Today');
-            setTimeout(hideUpload, 1500);
             refreshDocs();
         } else {
             let detail = xhr.status;
             try { detail = JSON.parse(xhr.responseText).detail ?? detail; } catch (_) {}
-            setUpload(file.name, `Error: ${detail}`, 0);
-            setTimeout(hideUpload, 3000);
+            toast(`Import failed: ${detail}`, 'error');
         }
     };
-    xhr.onerror = () => { setUpload(file.name, 'Network error', 0); setTimeout(hideUpload, 3000); };
+    xhr.onerror = () => { hideUpload(); toast('Network error during import', 'error'); };
     xhr.send(form);
 }
 

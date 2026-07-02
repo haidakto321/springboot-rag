@@ -121,6 +121,54 @@ Notes:
 - RAM: the chat model is the heavy part (qwen3:8b ~6-7 GB while loaded). On 16 GB total,
   prefer `qwen3:4b` and cap WSL memory in `%UserProfile%\.wslconfig` if Windows starves.
 
+## Run on native Linux (Ubuntu/Debian)
+
+Same stack, fewer steps than WSL - no systemd/`wsl.conf`/`.wslconfig` and no Windows
+port-forwarding to think about. Clone anywhere on the native filesystem.
+
+**Already have Docker + Compose?** Skip the Docker install. Verify with `docker ps`
+(daemon reachable without sudo) and `docker compose version` (v2 plugin). If both work
+you are set - any real Docker Engine is fine. Docker Desktop / rootless Docker move the
+socket, so Testcontainers may need `DOCKER_HOST` exported; plain Docker Engine needs none.
+
+**One-time setup:**
+```bash
+# 1. JDK 21 (project targets 21, builds fine on newer)
+sudo apt-get install -y openjdk-21-jdk
+
+# 2. Docker Engine + Compose plugin  (SKIP if `docker ps` already works)
+sudo apt-get update
+sudo apt-get install -y ca-certificates curl
+sudo install -m 0755 -d /etc/apt/keyrings
+sudo curl -fsSL https://download.docker.com/linux/ubuntu/gpg -o /etc/apt/keyrings/docker.asc
+echo "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/docker.asc] \
+  https://download.docker.com/linux/ubuntu $(. /etc/os-release && echo $VERSION_CODENAME) stable" \
+  | sudo tee /etc/apt/sources.list.d/docker.list > /dev/null
+sudo apt-get update
+sudo apt-get install -y docker-ce docker-ce-cli containerd.io docker-compose-plugin
+sudo usermod -aG docker $USER   # then log out + back in
+
+# 3. Ollama (native, no container)
+curl -fsSL https://ollama.com/install.sh | sh
+ollama pull qwen3:8b            # or qwen3:4b on 16 GB machines (set app.chat.model)
+
+# 4. Clone anywhere
+git clone <repo-url> ~/springboot-rag && cd ~/springboot-rag
+```
+
+**Run and test (same commands as everywhere):**
+```bash
+docker compose up -d      # postgres + qdrant
+./mvnw spring-boot:run    # app on :8090, open http://localhost:8090/ directly
+./mvnw test               # Testcontainers finds /var/run/docker.sock natively
+```
+
+Notes:
+- The surefire `api.version=1.44` pin in `pom.xml` still applies - native `docker-ce` is
+  also Engine 29.x. Keep it.
+- NVIDIA GPU: install the driver + CUDA; Ollama detects it automatically (`ollama ps`
+  shows GPU vs CPU). No passthrough layer needed.
+
 ## Test
 ```bash
 ./mvnw test          # unit + Testcontainers integration (needs Docker, not Ollama)
