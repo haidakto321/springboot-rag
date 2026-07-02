@@ -27,6 +27,7 @@ public class OllamaChatProvider implements ChatProvider {
                     .body(Map.of(
                             "model", props.getModel(),
                             "stream", false,
+                            "think", false,
                             "messages", List.of(
                                     Map.of("role", "system", "content", systemPrompt),
                                     Map.of("role", "user", "content", userPrompt))))

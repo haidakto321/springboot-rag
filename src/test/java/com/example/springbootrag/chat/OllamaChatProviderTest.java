@@ -48,6 +48,7 @@ class OllamaChatProviderTest {
         String body = req.getBody().readUtf8();
         assertThat(body).contains("\"model\":\"test-model\"");
         assertThat(body).contains("\"stream\":false");
+        assertThat(body).contains("\"think\":false");
         assertThat(body).contains("you are helpful");
         assertThat(body).contains("what is up?");
     }

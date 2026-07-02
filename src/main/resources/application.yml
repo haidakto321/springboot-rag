@@ -19,7 +19,7 @@ app:
     model: nomic-embed-text
     dimension: 768
   chat:
-    model: qwen2.5:7b
+    model: qwen3:8b
     context-chunks: 5
   ollama:
     base-url: http://localhost:11434

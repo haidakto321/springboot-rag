@@ -4,8 +4,8 @@ import org.springframework.boot.context.properties.ConfigurationProperties;
 
 @ConfigurationProperties(prefix = "app.chat")
 public class ChatProperties {
-    /** Ollama chat model name. Substitute the model chosen in Task 5 step 1. */
-    private String model = "qwen2.5:7b";
+    /** Ollama chat model name (qwen3:8b - thinking model with reasoning disabled). */
+    private String model = "qwen3:8b";
     /** How many retrieved chunks go into the ask prompt. */
     private int contextChunks = 5;
 
