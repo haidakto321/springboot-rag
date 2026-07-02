@@ -25,10 +25,12 @@ Merges "streaming answers" + "conversational follow-up".
   retrieving, instead of retrieving on the latest message alone. Known RAG pattern
   (question condensation). Improves multi-turn retrieval quality. (Med)
 
-### Unit C - Document filter  (after B)
+### Unit C - Document filter  ✅ done (2026-07-03)
 - Scope search / ask / compare to a chosen subset of documents.
-- Backend: `doc_id IN (...)` filter across pg (fts + pgvector) and qdrant repos.
-- UI: document chips / checkboxes to pick the scope.
+- Backend: `doc_id IN (...)` filter across pg (fts + pgvector) and Qdrant repos;
+  threaded through `SearchService` + `ChatService`; `docIds` param on `/search`,
+  `/compare`, and the `/chat/stream` body.
+- UI: document scope chips on Search & Ask and Compare (all selected = no filter).
 
 ## Medium-value backlog (agreed, not yet scheduled)
 

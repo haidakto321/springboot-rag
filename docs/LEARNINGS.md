@@ -30,6 +30,15 @@ and never assume "0-1".
 - **Lesson:** retrieve wide, rerank narrow. The reranker is expensive, so only feed it a
   shortlist.
 
+### Filtering must happen IN the query, not after
+- Scoping results to a subset of documents (`doc_id IN (...)`) must be pushed into the SQL /
+  Qdrant query. Retrieving `topK` then filtering in app code silently drops valid hits (you'd
+  get fewer than `topK` from the wrong pool).
+- Postgres: `AND doc_id IN (?,…)`. Qdrant: a `Filter` with OR'd (`should`) `matchKeyword`
+  conditions on the `doc_id` payload.
+- UI convention: "all selected" == "none selected" == no filter (send nothing) - avoids the
+  empty-selection dead end.
+
 ### Semantic search finds meaning, not words
 - Keyword/hybrid highlight of query terms works; pure vector search often returns chunks that
   share NO literal words with the query. That's expected, not a bug.
