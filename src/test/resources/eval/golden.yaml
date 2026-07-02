@@ -4,23 +4,23 @@
 
 # --- roadmap / pipeline spec entries (5) ---
 - question: "Which library loads the cross-encoder reranker model in the sandbox?"
-  expectedDocId: "2026-06-17-rag-roadmap-and-real-project-pipeline-design"
+  expectedDocId: "superpowers-specs-2026-06-17-rag-roadmap-and-real-project-pipeline-design"
   expectedHeadingPath: null
 
 - question: "Why is Neo4j not added up front for graph RAG?"
-  expectedDocId: "2026-06-17-rag-roadmap-and-real-project-pipeline-design"
+  expectedDocId: "superpowers-specs-2026-06-17-rag-roadmap-and-real-project-pipeline-design"
   expectedHeadingPath: null
 
 - question: "What is the enriched-chunk pattern for indexing markdown and JSON fields?"
-  expectedDocId: "2026-06-17-rag-roadmap-and-real-project-pipeline-design"
+  expectedDocId: "superpowers-specs-2026-06-17-rag-roadmap-and-real-project-pipeline-design"
   expectedHeadingPath: null
 
 - question: "What stages make up the real project pipeline from upload to retrieval?"
-  expectedDocId: "2026-06-17-rag-roadmap-and-real-project-pipeline-design"
+  expectedDocId: "superpowers-specs-2026-06-17-rag-roadmap-and-real-project-pipeline-design"
   expectedHeadingPath: null
 
 - question: "Which RAG methods are parked for later and not built in the roadmap?"
-  expectedDocId: "2026-06-17-rag-roadmap-and-real-project-pipeline-design"
+  expectedDocId: "superpowers-specs-2026-06-17-rag-roadmap-and-real-project-pipeline-design"
   expectedHeadingPath: null
 
 # --- design spec entries (4) ---
@@ -68,11 +68,11 @@
 
 # --- knowledge base design spec entries (2) ---
 - question: "What chunking strategy does the knowledge base use for markdown files?"
-  expectedDocId: "2026-07-02-knowledge-base-design"
+  expectedDocId: "superpowers-specs-2026-07-02-knowledge-base-design"
   expectedHeadingPath: null
 
 - question: "What does AskService return when the knowledge base is empty?"
-  expectedDocId: "2026-07-02-knowledge-base-design"
+  expectedDocId: "superpowers-specs-2026-07-02-knowledge-base-design"
   expectedHeadingPath: null
 
 # --- HANDOFF entry (1) ---

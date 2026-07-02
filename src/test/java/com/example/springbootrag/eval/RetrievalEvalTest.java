@@ -18,6 +18,7 @@ import org.testcontainers.utility.DockerImageName;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.List;
+import java.util.Locale;
 import java.util.stream.Stream;
 
 import static org.assertj.core.api.Assertions.assertThat;
@@ -77,7 +78,7 @@ class RetrievalEvalTest {
                 if (rank == 1) hit1++;
             }
             int n = golden.size();
-            System.out.printf("%-10s %10.3f %10.3f %10.3f%n",
+            System.out.printf(Locale.ROOT, "%-10s %10.3f %10.3f %10.3f%n",
                     backend, recall5 / n, mrr / n, hit1 / n);
         }
     }
@@ -87,8 +88,9 @@ class RetrievalEvalTest {
         int count = 0;
         try (Stream<Path> paths = Files.walk(Path.of("docs"))) {
             for (Path p : paths.filter(p -> p.toString().endsWith(".md")).toList()) {
+                String rel = Path.of("docs").relativize(p).toString();
+                String docId = rel.substring(0, rel.length() - 3).replaceAll("[^a-zA-Z0-9._-]", "-");
                 String name = p.getFileName().toString();
-                String docId = name.substring(0, name.length() - 3).replaceAll("[^a-zA-Z0-9._-]", "-");
                 ingestService.ingestMarkdown(docId, name, Files.readString(p));
                 count++;
             }

@@ -36,7 +36,7 @@ public class AskService {
         // "rerank" = hybrid + reranker; with no reranker configured it degrades to plain hybrid.
         List<SearchHit> hits = searchService.search("rerank", question, props.getContextChunks());
         if (hits.isEmpty()) {
-            return new AskResponse("Knowledge base is empty - no relevant chunks found.", List.of());
+            return new AskResponse("No relevant chunks found in the knowledge base.", List.of());
         }
         String answer = chat.chat(SYSTEM_PROMPT, buildUserPrompt(question, hits));
         List<AskResponse.Source> sources = new ArrayList<>();

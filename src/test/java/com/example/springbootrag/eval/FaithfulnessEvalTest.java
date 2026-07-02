@@ -97,8 +97,9 @@ class FaithfulnessEvalTest {
     private void ingestCorpus() throws Exception {
         try (Stream<Path> paths = Files.walk(Path.of("docs"))) {
             for (Path p : paths.filter(p -> p.toString().endsWith(".md")).toList()) {
+                String rel = Path.of("docs").relativize(p).toString();
+                String docId = rel.substring(0, rel.length() - 3).replaceAll("[^a-zA-Z0-9._-]", "-");
                 String name = p.getFileName().toString();
-                String docId = name.substring(0, name.length() - 3).replaceAll("[^a-zA-Z0-9._-]", "-");
                 ingestService.ingestMarkdown(docId, name, Files.readString(p));
             }
         }

@@ -66,7 +66,7 @@ class AskServiceTest {
 
         AskResponse resp = svc.ask("anything?");
 
-        assertThat(resp.answer()).contains("empty");
+        assertThat(resp.answer()).contains("No relevant chunks");
         assertThat(resp.sources()).isEmpty();
         verifyNoInteractions(mockChat);
     }
