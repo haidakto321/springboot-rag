@@ -44,6 +44,28 @@ native PyTorch libraries (hundreds of MB) via DJL, then runs locally/offline aft
 | `app.rerank.candidates` | `50` | hybrid candidates fed to the reranker before trimming to `topK` |
 | `app.rerank.maxLength` | `512` | tokenizer max sequence length |
 
+## Knowledge base
+
+UI at http://localhost:8080/ lets you import .md files, search with the backend dropdown, and ask questions. The backend runs RAG retrieval (hybrid, FTS, pgvector, or qdrant) and answers via a local chat model.
+
+**Endpoints:**
+- `POST /documents` - multipart form upload (*.md file, max 2 MB, UTF-8). Chunks the file by heading, stores chunks in Postgres + embeddings.
+- `GET /documents` - list all imported documents and their chunk counts.
+- `DELETE /documents/{docId}` - delete all chunks for a document.
+- `GET /ask?q=...` - RAG query with the backend specified in `app.search.type` (default `hybrid`). Returns answer and top-K retrieved chunks.
+
+**Chat model prerequisite:**
+```bash
+ollama pull qwen3:8b  # or set app.chat.model to another Ollama model
+ollama serve          # runs on localhost:11434
+```
+
+**Evaluation commands** (with your docs corpus as gold, needs Docker + Ollama):
+```bash
+./mvnw test "-Dgroups=eval" "-DexcludedGroups="        # retrieval metrics (top-K recall, MRR, hit@1)
+./mvnw test "-Dgroups=eval-judge" "-DexcludedGroups="  # faithfulness smoke report (LLM judge, yes/no per answer)
+```
+
 ## Test
 ```bash
 ./mvnw test          # unit + Testcontainers integration (needs Docker, not Ollama)

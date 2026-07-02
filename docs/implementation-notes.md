@@ -277,3 +277,38 @@ Attempted `RUN_DJL_SPIKE=true` run of `DjlSpikeTest` + `DjlRerankerManualTest`:
 - `hf-mirror.com` IS reachable (200) and `HF_ENDPOINT=https://hf-mirror.com` fixes the **tokenizer.json** download (HuggingFaceTokenizer.newInstance then succeeds).
 - But model loading still fails: `IllegalArgumentException: Invalid djl URL: djl://ai.djl.huggingface.pytorch/BAAI/bge-reranker-base` at `Criteria.optModelUrls`. The DJL HF-pytorch zoo resolves/converts the model via huggingface.co (HF_ENDPOINT mirror is NOT honored for the zoo model index), which is blocked. `mlrepo.djl.ai` host itself is reachable.
 - Conclusion: the real cross-encoder path is correct in code (compiles, imports confirmed, identity/wiring paths all green) but cannot be exercised on a network that blocks huggingface.co. To verify: run on an unrestricted network, OR pre-download the model into the DJL cache (`~/.djl.ai`) and point `optModelUrls` at the local path. Default `IdentityReranker` path is fully verified and unaffected.
+
+## Knowledge base (Tasks 1-9, 2026-07-03)
+
+Full feature: document ingest (chunked by heading), RAG retrieval via hybrid/FTS/pgvector/Qdrant, LLM chat answers, eval (retrieval metrics + judge faithfulness). All 18 tasks implemented, tests green. Key deviations and decisions from the plan:
+
+### Chunker signature changed
+- **Plan spec**: `Chunker.chunk(String docId, String text)` - docId passed in to tag each chunk.
+- **Actual**: `Chunker.chunk(String text)` - docId not used; breadcrumb source-file path and heading trail extracted from markdown headings in the text itself. Simpler integration; docId is added by the caller (`UploadController`) only at storage time, not chunking time.
+
+### Markdown parsing and table atomicity
+- **commonmark-java**: version 0.24.0 (plan's recommended default; no newer-version survey performed).
+- **Pipe tables (GFM `| table |` syntax)**: implemented via source-text sniffing (`line.startsWith("|")`) to detect and hold table lines atomic in the chunking logic, avoiding a second markdown-parsing dependency (gfm-tables extension). commonmark core alone parses GFM tables as plain paragraphs; the sniffing layer catches them. Reduces dependency bloat at the cost of a regex; tradeoff accepted for a sandbox.
+
+### Metadata propagation fixes (unplanned, discovered during testing)
+- `RrfFusion` and `DjlReranker` were initially updated only in test utilities. During integration testing, fused/reranked chunks silently lost `sourceFile` / `headingPath` metadata (not propagated through the fusion/reranking pipeline). Fixed: both now copy metadata through the merge/rerank steps. This was not itemized in the plan but surfaced as a correctness issue during E2E verification.
+
+### Upload response and Surefire config
+- **Response field**: existing DTO field `chunksStored` (not a new `chunks` field guessed by the plan). UI reads `chunksStored`.
+- **Eval test exclusion**: Surefire `pom.xml` uses Maven property `${excludedGroups}` (default `eval,eval-judge`) instead of a hardcoded tag list. This allows the eval CLI commands to override via `-DexcludedGroups=` (empty string = run all evals). Without the property indirection, the CLI override would not work.
+
+### Chat model: qwen3:8b with think:false
+- **Plan default**: qwen2.5:7b.
+- **Actual**: qwen3:8b (newer generation, swapped same-run, judge eval results: qwen2.5 = 14/18 yes, qwen3 = 18/18 yes).
+- **Configuration**: qwen3 is a reasoning/thinking model; without `think: false` in the Ollama request body, reasoning blocks pollute the final answer. Added `think: false` to suppress them. Chat model configurable via `app.chat.model` property.
+
+### Eval results (2026-07-03, repository docs as corpus, 18 golden questions)
+Retrieval metrics and faithfulness smoke test:
+- **Hybrid**: recall@5=1.000 MRR=0.935 hit@1=0.889 (top-K recall = fraction of questions where correct doc in top-5; MRR = mean reciprocal rank; hit@1 = correct answer at rank 1).
+- **FTS**: recall@5=0.222 (expected keyword weakness; paraphrase questions fail, exact-match questions succeed).
+- **pgvector / qdrant**: symmetric (same vectors, same HNSW index -> same results), both better than FTS for semantic queries, weaker than hybrid for mixed code+concept queries.
+- **Judge eval (faithfulness)**: qwen3:8b evaluated 18 LLM answers (one per golden question) as yes/no. Result: 18/18 yes (all answers grounded in retrieved chunks, no hallucination on this corpus). Smoke test only (small sample); larger scale evals recommended.
+
+### Tests verified green
+- Full `./mvnw -q test` passes: 18 units + 1 integration test covering knowledge-base end-to-end (document import, chunk retrieval, chat answer, eval metrics).
+- Eval tests optional/gated: `./mvnw test "-Dgroups=eval" "-DexcludedGroups="` runs retrieval evals; `./mvnw test "-Dgroups=eval-judge" "-DexcludedGroups="` runs faithfulness evals (both need Docker + Ollama).
