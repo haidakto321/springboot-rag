@@ -134,6 +134,28 @@ class SearchIntegrationTest {
     }
 
     @Test
+    void docIdFilterScopesResultsAcrossBackends() {
+        ingestService.ingest("doc1", "hydraulic seepage caused a pressure drop on line 3");
+        ingestService.ingest("doc2", "the invoice payment was overdue by thirty days");
+
+        // FTS: "invoice" matches doc2 unscoped, but scoping to doc1 excludes it.
+        assertThat(searchService.search("fts", "invoice", 10, List.of()))
+                .extracting(SearchHit::docId).contains("doc2");
+        assertThat(searchService.search("fts", "invoice", 10, List.of("doc1")))
+                .extracting(SearchHit::docId).doesNotContain("doc2");
+
+        // pgvector + qdrant scoped to doc2 only return doc2.
+        assertThat(searchService.search("pgvector", "machine lost pressure", 10, List.of("doc2")))
+                .extracting(SearchHit::docId).containsOnly("doc2");
+        assertThat(searchService.search("qdrant", "machine lost pressure", 10, List.of("doc2")))
+                .extracting(SearchHit::docId).containsOnly("doc2");
+
+        // hybrid scoped to doc1 only returns doc1.
+        assertThat(searchService.search("hybrid", "pressure", 10, List.of("doc1")))
+                .extracting(SearchHit::docId).containsOnly("doc1");
+    }
+
+    @Test
     void rerankReturnsResultsViaIdentityByDefault() {
         ingestService.ingest("doc1", "hydraulic seepage caused a pressure drop on line 3");
         ingestService.ingest("doc2", "the invoice payment was overdue by thirty days");

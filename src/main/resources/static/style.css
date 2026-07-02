@@ -302,6 +302,30 @@ body {
 .score-track { width: 100%; height: 4px; border-radius: 2px; background: var(--surface2); overflow: hidden; }
 .score-fill { height: 100%; background: var(--ac); border-radius: 2px; }
 
+/* ---------- Scope selector ---------- */
+.scope-bar {
+  display: flex; align-items: center; gap: 12px; flex-wrap: wrap;
+  padding: 12px 16px; background: var(--surface); border: 1px solid var(--border);
+  border-radius: 12px; box-shadow: var(--shadow);
+}
+.scope-bar[hidden] { display: none; }
+.scope-label {
+  font-size: 11px; font-weight: 700; letter-spacing: .07em;
+  text-transform: uppercase; color: var(--muted); flex: none;
+}
+.scope-chips { display: flex; flex-wrap: wrap; gap: 6px; }
+.scope-chip {
+  font-size: 12px; font-weight: 700; padding: 4px 11px; border-radius: 20px;
+  border: 1px solid var(--border2); background: var(--bg); color: var(--muted);
+  font-family: inherit; cursor: pointer; display: flex; align-items: center; gap: 6px;
+}
+.scope-chip::before {
+  content: ''; width: 7px; height: 7px; border-radius: 50%;
+  background: var(--border2); flex: none;
+}
+.scope-chip.on { color: var(--text); border-color: var(--ac); }
+.scope-chip.on::before { background: var(--ac); }
+
 /* ---------- Compare ---------- */
 .compare-grid {
   display: grid; grid-template-columns: repeat(5, minmax(220px, 1fr)); gap: 14px;

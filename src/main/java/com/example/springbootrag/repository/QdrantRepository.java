@@ -96,17 +96,24 @@ public class QdrantRepository {
         client.upsertAsync(collection, List.of(point)).get();
     }
 
-    public List<SearchHit> search(float[] queryEmbedding, int topK)
+    public List<SearchHit> search(float[] queryEmbedding, int topK, List<String> docIds)
             throws ExecutionException, InterruptedException {
         List<Float> vec = new ArrayList<>(queryEmbedding.length);
         for (float f : queryEmbedding) vec.add(f);
 
-        List<ScoredPoint> points = client.searchAsync(SearchPoints.newBuilder()
+        SearchPoints.Builder search = SearchPoints.newBuilder()
                 .setCollectionName(collection)
                 .addAllVector(vec)
                 .setLimit(topK)
-                .setWithPayload(enable(true))
-                .build()).get();
+                .setWithPayload(enable(true));
+        if (docIds != null && !docIds.isEmpty()) {
+            // "should" = OR: keep points whose doc_id matches any of the selected documents.
+            io.qdrant.client.grpc.Points.Filter.Builder filter = io.qdrant.client.grpc.Points.Filter.newBuilder();
+            for (String d : docIds) filter.addShould(matchKeyword("doc_id", d));
+            search.setFilter(filter.build());
+        }
+
+        List<ScoredPoint> points = client.searchAsync(search.build()).get();
 
         List<SearchHit> hits = new ArrayList<>();
         for (ScoredPoint p : points) {

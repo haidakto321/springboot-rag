@@ -4,6 +4,7 @@ import com.example.springbootrag.model.SearchHit;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Repository;
 
+import java.util.ArrayList;
 import java.util.List;
 
 @Repository
@@ -20,12 +21,18 @@ public class PgFtsRepository {
      * Uses websearch_to_tsquery: web-search-style syntax (OR, "phrase", -negation),
      * AND between bare words by default, and never errors on raw user input.
      */
-    public List<SearchHit> search(String query, int topK) {
+    public List<SearchHit> search(String query, int topK, List<String> docIds) {
+        String docClause = DocFilter.active(docIds) ? " AND" + DocFilter.inClause(docIds) : "";
+        List<Object> args = new ArrayList<>();
+        args.add(query);
+        args.add(query);
+        if (DocFilter.active(docIds)) args.addAll(docIds);
+        args.add(topK);
         return jdbc.query(
                 "SELECT id, doc_id, chunk_index, content, source_file, heading_path, " +
                         "       ts_rank(tsv, websearch_to_tsquery('english', ?)) AS rank " +
                         "FROM chunks " +
-                        "WHERE tsv @@ websearch_to_tsquery('english', ?) " +
+                        "WHERE tsv @@ websearch_to_tsquery('english', ?)" + docClause + " " +
                         "ORDER BY rank DESC LIMIT ?",
                 (rs, rowNum) -> new SearchHit(
                         rs.getLong("id"),
@@ -35,6 +42,6 @@ public class PgFtsRepository {
                         rs.getString("source_file"),
                         rs.getString("heading_path"),
                         rs.getDouble("rank")),
-                query, query, topK);
+                args.toArray());
     }
 }

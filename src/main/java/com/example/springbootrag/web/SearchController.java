@@ -20,13 +20,15 @@ public class SearchController {
     @GetMapping("/search")
     public List<SearchHit> search(@RequestParam String q,
                                   @RequestParam(defaultValue = "hybrid") String type,
-                                  @RequestParam(defaultValue = "10") int topK) {
-        return searchService.search(type, q, topK);
+                                  @RequestParam(defaultValue = "10") int topK,
+                                  @RequestParam(required = false) List<String> docIds) {
+        return searchService.search(type, q, topK, docIds == null ? List.of() : docIds);
     }
 
     @GetMapping("/compare")
     public Map<String, BackendResult> compare(@RequestParam String q,
-                                              @RequestParam(defaultValue = "10") int topK) {
-        return searchService.compare(q, topK);
+                                              @RequestParam(defaultValue = "10") int topK,
+                                              @RequestParam(required = false) List<String> docIds) {
+        return searchService.compare(q, topK, docIds == null ? List.of() : docIds);
     }
 }

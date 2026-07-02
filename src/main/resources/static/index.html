@@ -126,6 +126,10 @@
 
     <!-- Screen 2: Search & Ask -->
     <div class="screen" id="screen-query" hidden>
+        <div class="scope-bar" id="query-scope" hidden>
+            <span class="scope-label">Scope</span>
+            <div class="scope-chips" id="query-scope-chips"></div>
+        </div>
         <section class="card">
             <div class="card-head"><h2>Search</h2></div>
             <form class="query-row" id="search-form">
@@ -162,6 +166,10 @@
 
     <!-- Screen 3: Compare -->
     <div class="screen" id="screen-compare" hidden>
+        <div class="scope-bar" id="compare-scope" hidden>
+            <span class="scope-label">Scope</span>
+            <div class="scope-chips" id="compare-scope-chips"></div>
+        </div>
         <section class="card">
             <div class="card-head"><h2>Compare backends</h2>
                 <span class="card-hint">Run the same query through every backend, side by side</span>

@@ -6,6 +6,7 @@ import com.example.springbootrag.web.dto.ChunkView;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Repository;
 
+import java.util.ArrayList;
 import java.util.List;
 
 @Repository
@@ -28,11 +29,16 @@ public class PgVectorRepository {
     }
 
     /** Vector search: lower cosine distance = more similar, so we sort ascending and invert to a score. */
-    public List<SearchHit> search(float[] queryEmbedding, int topK) {
+    public List<SearchHit> search(float[] queryEmbedding, int topK, List<String> docIds) {
+        String where = DocFilter.active(docIds) ? " WHERE" + DocFilter.inClause(docIds) : "";
+        List<Object> args = new ArrayList<>();
+        args.add(toVectorLiteral(queryEmbedding));
+        if (DocFilter.active(docIds)) args.addAll(docIds);
+        args.add(topK);
         return jdbc.query(
                 "SELECT id, doc_id, chunk_index, content, source_file, heading_path, " +
                         "       embedding <=> ?::vector AS distance " +
-                        "FROM chunks ORDER BY distance ASC LIMIT ?",
+                        "FROM chunks" + where + " ORDER BY distance ASC LIMIT ?",
                 (rs, rowNum) -> new SearchHit(
                         rs.getLong("id"),
                         rs.getString("doc_id"),
@@ -41,7 +47,7 @@ public class PgVectorRepository {
                         rs.getString("source_file"),
                         rs.getString("heading_path"),
                         1.0 - rs.getDouble("distance")),
-                toVectorLiteral(queryEmbedding), topK);
+                args.toArray());
     }
 
     public void deleteByDocId(String docId) {

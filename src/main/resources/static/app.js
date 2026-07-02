@@ -52,6 +52,51 @@ $('#theme-toggle').addEventListener('click', () => {
     applyTheme(theme);
 });
 
+// ---------- Document scope (filter) ----------
+
+let allDocIds = [];
+const selectedScope = new Set();   // selected docIds; empty OR all selected = no filter
+let scopeInitialized = false;
+
+// Keep the scope selection in sync with the current document list.
+function syncScope(newDocIds) {
+    if (!scopeInitialized) {
+        newDocIds.forEach((id) => selectedScope.add(id));
+        scopeInitialized = true;
+    } else {
+        for (const id of [...selectedScope]) if (!newDocIds.includes(id)) selectedScope.delete(id);
+        for (const id of newDocIds) if (!allDocIds.includes(id)) selectedScope.add(id); // new doc -> selected
+    }
+    allDocIds = newDocIds;
+    renderScopeChips();
+}
+
+// Empty result = "all documents" (all or none selected -> send no filter).
+function scopeDocIds() {
+    if (selectedScope.size === 0 || selectedScope.size === allDocIds.length) return [];
+    return allDocIds.filter((id) => selectedScope.has(id));
+}
+
+function renderScopeChips() {
+    const show = allDocIds.length > 1;
+    for (const [barId, chipsId] of [['query-scope', 'query-scope-chips'], ['compare-scope', 'compare-scope-chips']]) {
+        $('#' + barId).hidden = !show;
+        const host = $('#' + chipsId);
+        host.innerHTML = '';
+        for (const id of allDocIds) {
+            const b = document.createElement('button');
+            b.type = 'button';
+            b.className = 'scope-chip' + (selectedScope.has(id) ? ' on' : '');
+            b.textContent = id;
+            b.onclick = () => {
+                if (selectedScope.has(id)) selectedScope.delete(id); else selectedScope.add(id);
+                renderScopeChips();
+            };
+            host.appendChild(b);
+        }
+    }
+}
+
 // ---------- Documents + stats ----------
 
 async function refreshDocs() {
@@ -103,6 +148,14 @@ async function refreshDocs() {
     $('#doc-meta').textContent = `${docs.length} document${docs.length === 1 ? '' : 's'} · ${totalChunks} chunk${totalChunks === 1 ? '' : 's'}`;
     const last = localStorage.getItem('kb-last-import');
     $('#stat-last').textContent = last || '—';
+
+    syncScope(docs.map((d) => d.docId));
+}
+
+// Append &docIds=... for each scoped document (nothing when unscoped).
+function appendScope(url) {
+    const ids = scopeDocIds();
+    return ids.reduce((u, id) => u + `&docIds=${encodeURIComponent(id)}`, url);
 }
 
 // ---------- Chunk sub-view ----------
@@ -291,7 +344,7 @@ $('#search-form').addEventListener('submit', async (e) => {
     $('#search-hits').innerHTML = '';
 
     const t0 = performance.now();
-    const res = await fetch(`/search?q=${encodeURIComponent(q)}&type=${type}&topK=10`);
+    const res = await fetch(appendScope(`/search?q=${encodeURIComponent(q)}&type=${type}&topK=10`));
     const ms = Math.round(performance.now() - t0);
 
     if (!res.ok) {
@@ -382,7 +435,7 @@ $('#chat-form').addEventListener('submit', async (e) => {
         const res = await fetch('/chat/stream', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ messages: payload }),
+            body: JSON.stringify({ messages: payload, docIds: scopeDocIds() }),
         });
 
         if (!res.ok || !res.body) {
@@ -461,7 +514,7 @@ $('#compare-form').addEventListener('submit', async (e) => {
     grid.hidden = false;
     grid.innerHTML = '<div class="backend-empty">Running all backends…</div>';
 
-    const res = await fetch(`/compare?q=${encodeURIComponent(q)}&topK=${topK}`);
+    const res = await fetch(appendScope(`/compare?q=${encodeURIComponent(q)}&topK=${topK}`));
     if (!res.ok) {
         let detail = res.status;
         try { detail = (await res.json()).detail ?? detail; } catch (_) {}

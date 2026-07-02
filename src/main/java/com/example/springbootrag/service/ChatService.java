@@ -37,7 +37,7 @@ public class ChatService {
      * Retrieves for the latest question, streams the answer via {@code onToken}, and returns
      * the citation sources. Sources are known before generation, so the caller may emit them first.
      */
-    public List<AskResponse.Source> chatStream(List<ChatMessage> history, Consumer<String> onToken) {
+    public List<AskResponse.Source> chatStream(List<ChatMessage> history, List<String> docIds, Consumer<String> onToken) {
         if (history == null || history.isEmpty()) {
             throw new IllegalArgumentException("messages are required");
         }
@@ -50,7 +50,8 @@ public class ChatService {
             throw new IllegalArgumentException("last message must be a non-empty user turn");
         }
 
-        List<SearchHit> hits = searchService.search("rerank", last.content(), props.getContextChunks());
+        List<String> scope = docIds == null ? List.of() : docIds;
+        List<SearchHit> hits = searchService.search("rerank", last.content(), props.getContextChunks(), scope);
         if (hits.isEmpty()) {
             onToken.accept("No relevant chunks found in the knowledge base.");
             return List.of();

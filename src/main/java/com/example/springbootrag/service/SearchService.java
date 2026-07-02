@@ -43,14 +43,19 @@ public class SearchService {
     private static final int MAX_TOP_K = 100;
 
     public List<SearchHit> search(String type, String query, int topK) {
+        return search(type, query, topK, List.of());
+    }
+
+    /** {@code docIds} scopes the search to a subset of documents; empty = all documents. */
+    public List<SearchHit> search(String type, String query, int topK, List<String> docIds) {
         validateTopK(topK);
         // Embed only for the vector-based backends, and only once per call.
         return switch (type) {
-            case "fts" -> fts.search(query, topK);
-            case "pgvector" -> pgVector.search(embeddings.embed(query), topK);
-            case "qdrant" -> qdrantSearch(embeddings.embed(query), topK);
-            case "hybrid" -> hybrid(query, embeddings.embed(query), topK);
-            case "rerank" -> rerank(query, embeddings.embed(query), topK);
+            case "fts" -> fts.search(query, topK, docIds);
+            case "pgvector" -> pgVector.search(embeddings.embed(query), topK, docIds);
+            case "qdrant" -> qdrantSearch(embeddings.embed(query), topK, docIds);
+            case "hybrid" -> hybrid(query, embeddings.embed(query), topK, docIds);
+            case "rerank" -> rerank(query, embeddings.embed(query), topK, docIds);
             default -> throw new IllegalArgumentException("unknown type: " + type);
         };
     }
@@ -61,15 +66,19 @@ public class SearchService {
      * qdrant, and hybrid - so the timings reflect search cost, not three Ollama round-trips.
      */
     public Map<String, BackendResult> compare(String query, int topK) {
+        return compare(query, topK, List.of());
+    }
+
+    public Map<String, BackendResult> compare(String query, int topK, List<String> docIds) {
         validateTopK(topK);
         float[] qvec = embeddings.embed(query);
 
         Map<String, BackendResult> out = new LinkedHashMap<>();
-        out.put("fts", timed(() -> fts.search(query, topK)));
-        out.put("pgvector", timed(() -> pgVector.search(qvec, topK)));
-        out.put("qdrant", timed(() -> qdrantSearch(qvec, topK)));
-        out.put("hybrid", timed(() -> hybrid(query, qvec, topK)));
-        out.put("rerank", timed(() -> rerank(query, qvec, topK)));
+        out.put("fts", timed(() -> fts.search(query, topK, docIds)));
+        out.put("pgvector", timed(() -> pgVector.search(qvec, topK, docIds)));
+        out.put("qdrant", timed(() -> qdrantSearch(qvec, topK, docIds)));
+        out.put("hybrid", timed(() -> hybrid(query, qvec, topK, docIds)));
+        out.put("rerank", timed(() -> rerank(query, qvec, topK, docIds)));
         return out;
     }
 
@@ -80,20 +89,20 @@ public class SearchService {
         return new BackendResult(hits, ms);
     }
 
-    private List<SearchHit> hybrid(String query, float[] queryEmbedding, int topK) {
-        List<SearchHit> keyword = fts.search(query, topK);
-        List<SearchHit> vector = pgVector.search(queryEmbedding, topK);
+    private List<SearchHit> hybrid(String query, float[] queryEmbedding, int topK, List<String> docIds) {
+        List<SearchHit> keyword = fts.search(query, topK, docIds);
+        List<SearchHit> vector = pgVector.search(queryEmbedding, topK, docIds);
         return rrf.fuse(List.of(keyword, vector), topK);
     }
 
-    private List<SearchHit> rerank(String query, float[] queryEmbedding, int topK) {
-        List<SearchHit> candidates = hybrid(query, queryEmbedding, rerankProps.getCandidates());
+    private List<SearchHit> rerank(String query, float[] queryEmbedding, int topK, List<String> docIds) {
+        List<SearchHit> candidates = hybrid(query, queryEmbedding, rerankProps.getCandidates(), docIds);
         return reranker.rerank(query, candidates, topK);
     }
 
-    private List<SearchHit> qdrantSearch(float[] queryEmbedding, int topK) {
+    private List<SearchHit> qdrantSearch(float[] queryEmbedding, int topK, List<String> docIds) {
         try {
-            return qdrant.search(queryEmbedding, topK);
+            return qdrant.search(queryEmbedding, topK, docIds);
         } catch (ExecutionException | InterruptedException e) {
             throw new IllegalStateException("Qdrant search failed", e);
         }
