@@ -101,6 +101,31 @@ class DocumentIntegrationTest {
     }
 
     @Test
+    void listChunksReturnsOrderedChunks() throws Exception {
+        // Two headings -> two chunks, each carrying its heading path.
+        MockMultipartFile file = new MockMultipartFile(
+                "file", "doc.md", "text/markdown",
+                "# A\n\nfirst body\n\n## B\n\nsecond body".getBytes(StandardCharsets.UTF_8));
+        mvc.perform(multipart("/documents").file(file)).andExpect(status().isOk());
+
+        mvc.perform(get("/documents/doc/chunks"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.length()").value(2))
+                .andExpect(jsonPath("$[0].index").value(0))
+                .andExpect(jsonPath("$[0].headingPath").value("# A"))
+                .andExpect(jsonPath("$[0].content").value(org.hamcrest.Matchers.containsString("first body")))
+                .andExpect(jsonPath("$[1].index").value(1))
+                .andExpect(jsonPath("$[1].content").value(org.hamcrest.Matchers.containsString("second body")));
+    }
+
+    @Test
+    void listChunksUnknownDocReturnsEmpty() throws Exception {
+        mvc.perform(get("/documents/nope/chunks"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$").isEmpty());
+    }
+
+    @Test
     void rejectsNonMarkdownFile() throws Exception {
         MockMultipartFile file = new MockMultipartFile(
                 "file", "data.pdf", "application/pdf", new byte[]{1, 2, 3});

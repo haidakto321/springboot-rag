@@ -2,6 +2,7 @@ package com.example.springbootrag.repository;
 
 import com.example.springbootrag.model.DocumentSummary;
 import com.example.springbootrag.model.SearchHit;
+import com.example.springbootrag.web.dto.ChunkView;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Repository;
 
@@ -56,6 +57,18 @@ public class PgVectorRepository {
                         rs.getString("doc_id"),
                         rs.getString("source_file"),
                         rs.getInt("chunk_count")));
+    }
+
+    /** All chunks of one document, ordered by chunk index, for the chunk-view endpoint. */
+    public List<ChunkView> listChunks(String docId) {
+        return jdbc.query(
+                "SELECT chunk_index, heading_path, content " +
+                        "FROM chunks WHERE doc_id = ? ORDER BY chunk_index",
+                (rs, rowNum) -> new ChunkView(
+                        rs.getInt("chunk_index"),
+                        rs.getString("heading_path"),
+                        rs.getString("content")),
+                docId);
     }
 
     /** pgvector text format: "[0.1,0.2,0.3]". */

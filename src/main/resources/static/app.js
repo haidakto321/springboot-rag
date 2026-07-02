@@ -25,7 +25,7 @@ function showScreen(name) {
     $('#screen-sub').textContent = SCREENS[name].sub;
 }
 
-$('#nav-docs').addEventListener('click', () => showScreen('docs'));
+$('#nav-docs').addEventListener('click', () => { showChunkList(); showScreen('docs'); });
 $('#nav-query').addEventListener('click', () => showScreen('query'));
 
 // ---------- Theme ----------
@@ -65,15 +65,26 @@ async function refreshDocs() {
             <div class="doc-id"><span class="doc-id-dot"></span><span class="doc-id-name">${esc(d.docId)}</span></div>
             <div class="doc-src mono">${d.sourceFile ? esc(d.sourceFile) : '—'}</div>
             <div class="doc-chunks">${d.chunkCount}</div>`;
-        const act = document.createElement('button');
-        act.className = 'btn-delete';
-        act.textContent = 'Delete';
-        act.onclick = async () => {
+        const actions = document.createElement('div');
+        actions.className = 'doc-actions';
+
+        const viewBtn = document.createElement('button');
+        viewBtn.className = 'btn-view';
+        viewBtn.textContent = 'View';
+        viewBtn.onclick = () => showChunkView(d.docId);
+
+        const delBtn = document.createElement('button');
+        delBtn.className = 'btn-delete';
+        delBtn.textContent = 'Delete';
+        delBtn.onclick = async () => {
             if (!confirm(`Delete document "${d.docId}"?`)) return;
             await fetch(`/documents/${encodeURIComponent(d.docId)}`, { method: 'DELETE' });
             refreshDocs();
         };
-        row.appendChild(act);
+
+        actions.appendChild(viewBtn);
+        actions.appendChild(delBtn);
+        row.appendChild(actions);
         list.appendChild(row);
     }
 
@@ -85,6 +96,42 @@ async function refreshDocs() {
     const last = localStorage.getItem('kb-last-import');
     $('#stat-last').textContent = last || '—';
 }
+
+// ---------- Chunk sub-view ----------
+
+function showChunkList() {
+    $('#docs-list-view').hidden = false;
+    $('#docs-chunk-view').hidden = true;
+}
+
+async function showChunkView(docId) {
+    const list = $('#chunk-list');
+    $('#chunk-doc-title').textContent = docId;
+    $('#chunk-meta').textContent = 'Loading…';
+    list.innerHTML = '';
+    $('#docs-list-view').hidden = true;
+    $('#docs-chunk-view').hidden = false;
+
+    const res = await fetch(`/documents/${encodeURIComponent(docId)}/chunks`);
+    if (!res.ok) { $('#chunk-meta').textContent = `Error: ${res.status}`; return; }
+    const chunks = await res.json();
+    $('#chunk-meta').textContent = `${chunks.length} chunk${chunks.length === 1 ? '' : 's'}`;
+
+    if (!chunks.length) { list.innerHTML = '<div class="empty-line">No chunks.</div>'; return; }
+    for (const c of chunks) {
+        const row = document.createElement('div');
+        row.className = 'result-row';
+        row.innerHTML = `
+            <span class="chunk-index-badge">${c.index}</span>
+            <div class="chunk-body">
+                ${c.headingPath ? `<div class="chunk-heading">${esc(c.headingPath)}</div>` : ''}
+                <pre class="chunk-content">${esc(c.content)}</pre>
+            </div>`;
+        list.appendChild(row);
+    }
+}
+
+$('#chunk-back').addEventListener('click', showChunkList);
 
 // ---------- Upload (with progress via XHR) ----------
 

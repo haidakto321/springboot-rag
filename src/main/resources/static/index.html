@@ -53,6 +53,7 @@
 
     <!-- Screen 1: Documents -->
     <div class="screen" id="screen-docs">
+      <div id="docs-list-view">
         <section class="stats">
             <div class="stat-card">
                 <div class="stat-label">Documents</div>
@@ -105,6 +106,19 @@
             </div>
             <div id="doc-list"></div>
         </section>
+      </div>
+
+      <!-- Chunk sub-view (hidden until a doc's View is clicked) -->
+      <div id="docs-chunk-view" hidden>
+        <section class="card">
+            <div class="card-head chunk-head">
+                <button class="btn-back" id="chunk-back" type="button">&larr; Back to documents</button>
+                <span class="chunk-title" id="chunk-doc-title"></span>
+                <span class="card-meta" id="chunk-meta"></span>
+            </div>
+            <div class="results" id="chunk-list"></div>
+        </section>
+      </div>
     </div>
 
     <!-- Screen 2: Search & Ask -->

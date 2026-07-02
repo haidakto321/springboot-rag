@@ -3,6 +3,7 @@ package com.example.springbootrag.web;
 import com.example.springbootrag.model.DocumentSummary;
 import com.example.springbootrag.repository.PgVectorRepository;
 import com.example.springbootrag.service.IngestService;
+import com.example.springbootrag.web.dto.ChunkView;
 import com.example.springbootrag.web.dto.IngestResponse;
 import org.springframework.http.MediaType;
 import org.springframework.web.bind.annotation.*;
@@ -46,6 +47,11 @@ public class DocumentController {
     @GetMapping("/documents")
     public List<DocumentSummary> list() {
         return pgVector.listDocuments();
+    }
+
+    @GetMapping("/documents/{docId}/chunks")
+    public List<ChunkView> chunks(@PathVariable String docId) {
+        return pgVector.listChunks(docId);
     }
 
     @DeleteMapping("/documents/{docId}")
