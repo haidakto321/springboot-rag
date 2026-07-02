@@ -47,7 +47,7 @@ public class AskService {
         return new AskResponse(answer, sources);
     }
 
-    private static String buildUserPrompt(String question, List<SearchHit> hits) {
+    static String buildUserPrompt(String question, List<SearchHit> hits) {
         StringBuilder sb = new StringBuilder("Context:\n");
         for (int i = 0; i < hits.size(); i++) {
             SearchHit h = hits.get(i);

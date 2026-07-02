@@ -306,48 +306,132 @@ $('#search-form').addEventListener('submit', async (e) => {
     renderHits();
 });
 
-// ---------- Ask ----------
+// ---------- Chat (streaming, multi-turn) ----------
 
-$('#ask-form').addEventListener('submit', async (e) => {
+const MAX_SENT = 10;               // trim history sent to the server, matches backend guard
+const chatMessages = [];           // client-held memory: {role, content, sources?, streaming?, error?}
+const threadEl = $('#chat-thread');
+
+function scrollThreadBottom() { threadEl.scrollTop = threadEl.scrollHeight; }
+
+function renderThread() {
+    threadEl.innerHTML = '';
+    threadEl.hidden = chatMessages.length === 0;
+    $('#chat-new').hidden = chatMessages.length === 0;
+
+    for (const m of chatMessages) {
+        const wrap = document.createElement('div');
+        wrap.className = 'chat-msg ' + m.role;
+        const bubble = document.createElement('div');
+        bubble.className = 'bubble';
+
+        const text = document.createElement('div');
+        text.className = 'bubble-text' + (m.error ? ' error' : '') + (m.streaming ? ' streaming' : '');
+        text.textContent = m.content || '';
+        bubble.appendChild(text);
+
+        if (m.sources && m.sources.length) {
+            const chips = document.createElement('div');
+            chips.className = 'chips';
+            for (const s of m.sources) {
+                const label = s.headingPath ? `${s.docId} · ${s.headingPath}` : `${s.docId} · [${s.index}]`;
+                const chip = document.createElement('button');
+                chip.className = 'chip';
+                chip.type = 'button';
+                chip.textContent = label;
+                chip.title = 'Click to view source chunk';
+                chip.onclick = () => toggleSource(chip, s);
+                chips.appendChild(chip);
+            }
+            bubble.appendChild(chips);
+        }
+        wrap.appendChild(bubble);
+        threadEl.appendChild(wrap);
+    }
+    scrollThreadBottom();
+}
+
+$('#chat-new').addEventListener('click', () => {
+    chatMessages.length = 0;
+    renderThread();
+    $('#chat-q').focus();
+});
+
+$('#chat-form').addEventListener('submit', async (e) => {
     e.preventDefault();
-    const q = $('#ask-q').value;
-    const area = $('#ask-answer-area');
-    const status = $('#ask-status');
-    const answerEl = $('#ask-answer');
-    const sourcesEl = $('#ask-sources');
-    const btn = $('#ask-btn');
+    const q = $('#chat-q').value.trim();
+    if (!q) return;
+    $('#chat-q').value = '';
 
-    area.hidden = false;
-    btn.disabled = true;
-    status.textContent = 'Thinking…';
-    answerEl.textContent = '';
-    sourcesEl.innerHTML = '';
+    chatMessages.push({ role: 'user', content: q });
+    const assistant = { role: 'assistant', content: '', sources: null, streaming: true };
+    chatMessages.push(assistant);
+    renderThread();
+
+    // Live handle to the streaming bubble's text node (last message).
+    const streamEl = threadEl.querySelector('.chat-msg:last-child .bubble-text');
+    const send = $('#chat-send');
+    send.disabled = true;
 
     try {
-        const res = await fetch(`/ask?q=${encodeURIComponent(q)}`);
-        if (!res.ok) {
+        const payload = chatMessages
+            .filter((m) => !m.streaming)
+            .map((m) => ({ role: m.role, content: m.content }))
+            .slice(-MAX_SENT);
+
+        const res = await fetch('/chat/stream', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ messages: payload }),
+        });
+
+        if (!res.ok || !res.body) {
             let detail = res.status;
             try { detail = (await res.json()).detail ?? detail; } catch (_) {}
-            status.textContent = `Error: ${detail}`;
+            assistant.content = `Error: ${detail}`;
+            assistant.error = true;
+            streamEl.classList.add('error');
+            streamEl.textContent = assistant.content;
             return;
         }
-        const body = await res.json();
-        const n = body.sources.length;
-        status.textContent = `Answer · grounded in ${n} chunk${n === 1 ? '' : 's'}`;
-        answerEl.textContent = body.answer;
 
-        for (const s of body.sources) {
-            const label = s.headingPath ? `${s.docId} · ${s.headingPath}` : `${s.docId} · [${s.index}]`;
-            const chip = document.createElement('button');
-            chip.className = 'chip';
-            chip.type = 'button';
-            chip.textContent = label;
-            chip.title = 'Click to view source chunk';
-            chip.onclick = () => toggleSource(chip, s);
-            sourcesEl.appendChild(chip);
+        const reader = res.body.getReader();
+        const decoder = new TextDecoder();
+        let buf = '';
+        while (true) {
+            const { done, value } = await reader.read();
+            if (done) break;
+            buf += decoder.decode(value, { stream: true });
+            let nl;
+            while ((nl = buf.indexOf('\n')) >= 0) {
+                const line = buf.slice(0, nl).trim();
+                buf = buf.slice(nl + 1);
+                if (!line) continue;
+                let frame;
+                try { frame = JSON.parse(line); } catch (_) { continue; }
+                if (frame.type === 'token') {
+                    assistant.content += frame.text;
+                    streamEl.textContent = assistant.content;
+                    scrollThreadBottom();
+                } else if (frame.type === 'sources') {
+                    assistant.sources = frame.sources;
+                } else if (frame.type === 'error') {
+                    assistant.content = (assistant.content ? assistant.content + '\n' : '') + `[error: ${frame.message}]`;
+                    assistant.error = true;
+                    streamEl.classList.add('error');
+                    streamEl.textContent = assistant.content;
+                }
+            }
         }
+    } catch (err) {
+        assistant.content = `Error: ${err.message}`;
+        assistant.error = true;
+        streamEl.textContent = assistant.content;
     } finally {
-        btn.disabled = false;
+        assistant.streaming = false;
+        send.disabled = false;
+        renderThread();       // finalize: drop caret, render citation chips
+        $('#chat-q').focus();
     }
 });
 

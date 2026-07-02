@@ -1,0 +1,76 @@
+package com.example.springbootrag.service;
+
+import com.example.springbootrag.chat.ChatProvider;
+import com.example.springbootrag.chat.ChatProvider.ChatMessage;
+import com.example.springbootrag.config.ChatProperties;
+import com.example.springbootrag.model.SearchHit;
+import com.example.springbootrag.web.dto.AskResponse;
+import org.springframework.stereotype.Service;
+
+import java.util.ArrayList;
+import java.util.List;
+import java.util.function.Consumer;
+
+/**
+ * Streaming, multi-turn RAG chat. Stateless: the client sends the conversation each turn.
+ * Retrieval runs on the latest user message; the whole (trimmed) thread is fed to the model.
+ */
+@Service
+public class ChatService {
+
+    /** Max conversation turns forwarded to the model, newest kept. Guards context + cost. */
+    static final int MAX_HISTORY = 10;
+    /** Hard reject threshold before trimming - defends against oversized request bodies. */
+    static final int MAX_INCOMING = 50;
+
+    private final SearchService searchService;
+    private final ChatProvider chat;
+    private final ChatProperties props;
+
+    public ChatService(SearchService searchService, ChatProvider chat, ChatProperties props) {
+        this.searchService = searchService;
+        this.chat = chat;
+        this.props = props;
+    }
+
+    /**
+     * Retrieves for the latest question, streams the answer via {@code onToken}, and returns
+     * the citation sources. Sources are known before generation, so the caller may emit them first.
+     */
+    public List<AskResponse.Source> chatStream(List<ChatMessage> history, Consumer<String> onToken) {
+        if (history == null || history.isEmpty()) {
+            throw new IllegalArgumentException("messages are required");
+        }
+        if (history.size() > MAX_INCOMING) {
+            throw new IllegalArgumentException("too many messages (max " + MAX_INCOMING + ")");
+        }
+        List<ChatMessage> trimmed = trimToLast(history, MAX_HISTORY);
+        ChatMessage last = trimmed.get(trimmed.size() - 1);
+        if (!"user".equals(last.role()) || last.content() == null || last.content().isBlank()) {
+            throw new IllegalArgumentException("last message must be a non-empty user turn");
+        }
+
+        List<SearchHit> hits = searchService.search("rerank", last.content(), props.getContextChunks());
+        if (hits.isEmpty()) {
+            onToken.accept("No relevant chunks found in the knowledge base.");
+            return List.of();
+        }
+
+        // Prior turns verbatim; the final user turn carries the numbered context + question.
+        List<ChatMessage> modelMessages = new ArrayList<>(trimmed.subList(0, trimmed.size() - 1));
+        modelMessages.add(new ChatMessage("user", AskService.buildUserPrompt(last.content(), hits)));
+
+        chat.chatStream(AskService.SYSTEM_PROMPT, modelMessages, onToken);
+
+        List<AskResponse.Source> sources = new ArrayList<>();
+        for (int i = 0; i < hits.size(); i++) {
+            SearchHit h = hits.get(i);
+            sources.add(new AskResponse.Source(i + 1, h.docId(), h.headingPath(), h.score(), h.content()));
+        }
+        return sources;
+    }
+
+    private static List<ChatMessage> trimToLast(List<ChatMessage> messages, int n) {
+        return messages.size() <= n ? messages : messages.subList(messages.size() - n, messages.size());
+    }
+}

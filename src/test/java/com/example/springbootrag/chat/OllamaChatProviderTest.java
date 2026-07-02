@@ -9,6 +9,9 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.web.client.RestClient;
 
+import java.util.ArrayList;
+import java.util.List;
+
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
@@ -76,6 +79,52 @@ class OllamaChatProviderTest {
         server.enqueue(new MockResponse().setResponseCode(500).setBody("model crashed"));
 
         assertThatThrownBy(() -> provider.chat("s", "u"))
+                .isInstanceOf(ChatUnavailableException.class);
+    }
+
+    @Test
+    void streamsTokenDeltasInOrderAndSendsStreamTrue() throws Exception {
+        server.enqueue(new MockResponse()
+                .setHeader("Content-Type", "application/x-ndjson")
+                .setBody("""
+                        {"message":{"role":"assistant","content":"Hello"},"done":false}
+                        {"message":{"role":"assistant","content":" world"},"done":false}
+                        {"message":{"role":"assistant","content":"!"},"done":true}
+                        """));
+
+        List<String> tokens = new ArrayList<>();
+        provider.chatStream("you are helpful",
+                List.of(new ChatProvider.ChatMessage("user", "hi")), tokens::add);
+
+        assertThat(tokens).containsExactly("Hello", " world", "!");
+        String body = server.takeRequest().getBody().readUtf8();
+        assertThat(body).contains("\"stream\":true");
+        assertThat(body).contains("\"role\":\"system\"");
+        assertThat(body).contains("\"role\":\"user\"");
+    }
+
+    @Test
+    void streamStopsAtDoneAndIgnoresUnknownFields() throws Exception {
+        server.enqueue(new MockResponse()
+                .setHeader("Content-Type", "application/x-ndjson")
+                .setBody("""
+                        {"model":"m","created_at":"t","message":{"role":"assistant","content":"a"},"done":false}
+                        {"message":{"role":"assistant","content":"b"},"done":true,"total_duration":123}
+                        {"message":{"role":"assistant","content":"SHOULD-NOT-APPEAR"},"done":false}
+                        """));
+
+        List<String> tokens = new ArrayList<>();
+        provider.chatStream("s", List.of(new ChatProvider.ChatMessage("user", "u")), tokens::add);
+
+        assertThat(tokens).containsExactly("a", "b");
+    }
+
+    @Test
+    void streamHttpErrorBecomesChatUnavailable() {
+        server.enqueue(new MockResponse().setResponseCode(500).setBody("boom"));
+
+        assertThatThrownBy(() -> provider.chatStream(
+                "s", List.of(new ChatProvider.ChatMessage("user", "u")), t -> {}))
                 .isInstanceOf(ChatUnavailableException.class);
     }
 }

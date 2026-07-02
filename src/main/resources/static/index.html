@@ -149,18 +149,14 @@
         </section>
 
         <section class="card">
-            <div class="card-head"><h2>Ask the knowledge base</h2></div>
-            <form class="query-row" id="ask-form">
-                <input type="text" class="q-input" id="ask-q" placeholder="Ask a question..." required>
-                <button class="btn-primary btn-ask" type="submit" id="ask-btn">Ask</button>
-            </form>
-            <div class="answer-area" id="ask-answer-area" hidden>
-                <div class="answer-status">
-                    <span class="dot-green"></span><span id="ask-status">Answer</span>
-                </div>
-                <p class="answer-text" id="ask-answer"></p>
-                <div class="chips" id="ask-sources"></div>
+            <div class="card-head"><h2>Ask the knowledge base</h2>
+                <button class="btn-newchat" id="chat-new" type="button" hidden>New chat</button>
             </div>
+            <div class="chat-thread" id="chat-thread" hidden></div>
+            <form class="query-row" id="chat-form">
+                <input type="text" class="q-input" id="chat-q" placeholder="Ask a question..." autocomplete="off" required>
+                <button class="btn-primary btn-ask" type="submit" id="chat-send">Send</button>
+            </form>
         </section>
     </div>
 
