@@ -18,28 +18,41 @@ public class PgVectorRepository {
         this.jdbc = jdbc;
     }
 
-    /** Inserts one chunk and returns its generated id. */
-    public long insert(String docId, int chunkIndex, String content,
+    /** Inserts one chunk under the given project and returns its generated id. */
+    public long insert(long projectId, String docId, int chunkIndex, String content,
                        String sourceFile, String headingPath, float[] embedding) {
         return jdbc.queryForObject(
-                "INSERT INTO chunks (doc_id, chunk_index, content, source_file, heading_path, embedding) " +
-                        "VALUES (?, ?, ?, ?, ?, ?::vector) RETURNING id",
+                "INSERT INTO chunks (project_id, doc_id, chunk_index, content, source_file, heading_path, embedding) " +
+                        "VALUES (?, ?, ?, ?, ?, ?, ?::vector) RETURNING id",
                 Long.class,
-                docId, chunkIndex, content, sourceFile, headingPath, toVectorLiteral(embedding));
+                projectId, docId, chunkIndex, content, sourceFile, headingPath, toVectorLiteral(embedding));
     }
 
-    /** Vector search: lower cosine distance = more similar, so we sort ascending and invert to a score. */
-    public List<SearchHit> search(float[] queryEmbedding, int topK, List<String> docIds) {
-        String where = DocFilter.active(docIds) ? " WHERE" + DocFilter.inClause(docIds) : "";
+    /**
+     * Vector search with optional project and doc filters.
+     * Empty list for either filter means that filter is absent (all projects / all docs).
+     */
+    public List<SearchHit> search(float[] queryEmbedding, int topK,
+                                  List<Long> projectIds, List<String> docIds) {
+        StringBuilder where = new StringBuilder();
         List<Object> args = new ArrayList<>();
         args.add(toVectorLiteral(queryEmbedding));
-        if (DocFilter.active(docIds)) args.addAll(docIds);
+        if (DocFilter.active(projectIds)) {
+            where.append(where.isEmpty() ? " WHERE" : " AND")
+                 .append(" project_id IN (").append(DocFilter.placeholders(projectIds.size())).append(")");
+            args.addAll(projectIds);
+        }
+        if (DocFilter.active(docIds)) {
+            where.append(where.isEmpty() ? " WHERE" : " AND")
+                 .append(" doc_id IN (").append(DocFilter.placeholders(docIds.size())).append(")");
+            args.addAll(docIds);
+        }
         args.add(topK);
         return jdbc.query(
                 "SELECT id, doc_id, chunk_index, content, source_file, heading_path, " +
-                        "       embedding <=> ?::vector AS distance " +
-                        "FROM chunks" + where + " ORDER BY distance ASC LIMIT ?",
-                (rs, rowNum) -> new SearchHit(
+                "       embedding <=> ?::vector AS distance FROM chunks" + where +
+                " ORDER BY distance ASC LIMIT ?",
+                (rs, n) -> new SearchHit(
                         rs.getLong("id"),
                         rs.getString("doc_id"),
                         rs.getInt("chunk_index"),
@@ -50,31 +63,32 @@ public class PgVectorRepository {
                 args.toArray());
     }
 
-    public void deleteByDocId(String docId) {
-        jdbc.update("DELETE FROM chunks WHERE doc_id = ?", docId);
+    public void deleteByDocId(long projectId, String docId) {
+        jdbc.update("DELETE FROM chunks WHERE project_id = ? AND doc_id = ?", projectId, docId);
     }
 
-    /** One row per ingested document, for the documents list endpoint. */
-    public List<DocumentSummary> listDocuments() {
+    /** One row per ingested document for the given project. */
+    public List<DocumentSummary> listDocuments(long projectId) {
         return jdbc.query(
                 "SELECT doc_id, MAX(source_file) AS source_file, COUNT(*) AS chunk_count " +
-                        "FROM chunks GROUP BY doc_id ORDER BY doc_id",
+                        "FROM chunks WHERE project_id = ? GROUP BY doc_id ORDER BY doc_id",
                 (rs, rowNum) -> new DocumentSummary(
                         rs.getString("doc_id"),
                         rs.getString("source_file"),
-                        rs.getInt("chunk_count")));
+                        rs.getInt("chunk_count")),
+                projectId);
     }
 
-    /** All chunks of one document, ordered by chunk index, for the chunk-view endpoint. */
-    public List<ChunkView> listChunks(String docId) {
+    /** All chunks of one document ordered by chunk index, scoped to the given project. */
+    public List<ChunkView> listChunks(long projectId, String docId) {
         return jdbc.query(
                 "SELECT chunk_index, heading_path, content " +
-                        "FROM chunks WHERE doc_id = ? ORDER BY chunk_index",
+                        "FROM chunks WHERE project_id = ? AND doc_id = ? ORDER BY chunk_index",
                 (rs, rowNum) -> new ChunkView(
                         rs.getInt("chunk_index"),
                         rs.getString("heading_path"),
                         rs.getString("content")),
-                docId);
+                projectId, docId);
     }
 
     /** pgvector text format: "[0.1,0.2,0.3]". */

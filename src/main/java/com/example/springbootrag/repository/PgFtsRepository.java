@@ -18,21 +18,28 @@ public class PgFtsRepository {
 
     /**
      * Postgres native full-text search ranked by ts_rank.
-     * Uses websearch_to_tsquery: web-search-style syntax (OR, "phrase", -negation),
-     * AND between bare words by default, and never errors on raw user input.
+     * Uses websearch_to_tsquery: web-search-style syntax (OR, "phrase", -negation).
+     * Empty projectIds / docIds list means that filter is absent.
      */
-    public List<SearchHit> search(String query, int topK, List<String> docIds) {
-        String docClause = DocFilter.active(docIds) ? " AND" + DocFilter.inClause(docIds) : "";
+    public List<SearchHit> search(String query, int topK,
+                                  List<Long> projectIds, List<String> docIds) {
+        String projectClause = DocFilter.active(projectIds)
+                ? " AND project_id IN (" + DocFilter.placeholders(projectIds.size()) + ")"
+                : "";
+        String docClause = DocFilter.active(docIds)
+                ? " AND doc_id IN (" + DocFilter.placeholders(docIds.size()) + ")"
+                : "";
         List<Object> args = new ArrayList<>();
         args.add(query);
         args.add(query);
+        if (DocFilter.active(projectIds)) args.addAll(projectIds);
         if (DocFilter.active(docIds)) args.addAll(docIds);
         args.add(topK);
         return jdbc.query(
                 "SELECT id, doc_id, chunk_index, content, source_file, heading_path, " +
                         "       ts_rank(tsv, websearch_to_tsquery('english', ?)) AS rank " +
                         "FROM chunks " +
-                        "WHERE tsv @@ websearch_to_tsquery('english', ?)" + docClause + " " +
+                        "WHERE tsv @@ websearch_to_tsquery('english', ?)" + projectClause + docClause + " " +
                         "ORDER BY rank DESC LIMIT ?",
                 (rs, rowNum) -> new SearchHit(
                         rs.getLong("id"),
