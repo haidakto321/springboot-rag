@@ -26,16 +26,17 @@ public class ProjectService {
     public void delete(long id) { repo.delete(id); }
 
     public long defaultProjectId() {
-        return repo.listWithCounts().stream()
+        List<ProjectSummary> all = repo.listWithCounts();
+        return all.stream()
             .filter(p -> p.name().equals("Default")).map(ProjectSummary::id).findFirst()
-            .orElseGet(() -> repo.listWithCounts().stream().map(ProjectSummary::id).findFirst()
+            .orElseGet(() -> all.stream().map(ProjectSummary::id).findFirst()
                 .orElseThrow(() -> new IllegalStateException("no projects exist")));
     }
 
     public List<Long> resolveScope(long projectId, boolean group) {
         if (!group) return List.of(projectId);
         Project p = repo.find(projectId).orElse(null);
-        if (p == null || p.groupName() == null) return List.of(projectId);
+        if (p == null || p.groupName() == null || p.groupName().isBlank()) return List.of(projectId);
         List<Long> ids = repo.idsInGroup(p.groupName());
         return ids.isEmpty() ? List.of(projectId) : ids;
     }
