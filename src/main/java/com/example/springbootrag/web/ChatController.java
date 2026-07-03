@@ -43,9 +43,7 @@ public class ChatController {
             throw new IllegalArgumentException("messages are required");
         }
         // Resolve project scope before the stream starts so any bad projectId fails fast (400/500).
-        List<Long> scope = projectService.resolveScope(
-                req.projectId() != null ? req.projectId() : projectService.defaultProjectId(),
-                req.group());
+        List<Long> scope = projectService.resolveScope(req.projectId(), req.group());
         return out -> {
             try {
                 List<AskResponse.Source> sources =

@@ -63,6 +63,7 @@ public class DocumentController {
     @PostMapping(value = "/projects/{projectId}/documents", consumes = MediaType.MULTIPART_FORM_DATA_VALUE)
     public IngestResponse uploadToProject(@PathVariable long projectId,
                                           @RequestParam("file") MultipartFile file) {
+        if (!projectService.exists(projectId)) throw new IllegalArgumentException("project not found: " + projectId);
         UploadResult u = parseUpload(file);
         int stored = ingestService.ingestMarkdown(projectId, u.docId(), u.sourceFile(), u.text());
         return new IngestResponse(u.docId(), stored);

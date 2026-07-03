@@ -24,8 +24,7 @@ public class AskController {
     public AskResponse ask(@RequestParam String q,
                            @RequestParam(required = false) Long projectId,
                            @RequestParam(defaultValue = "false") boolean group) {
-        List<Long> scope = projectService.resolveScope(
-                projectId != null ? projectId : projectService.defaultProjectId(), group);
+        List<Long> scope = projectService.resolveScope(projectId, group);
         return askService.ask(q, scope);
     }
 }

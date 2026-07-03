@@ -27,8 +27,7 @@ public class SearchController {
                                   @RequestParam(required = false) List<String> docIds,
                                   @RequestParam(required = false) Long projectId,
                                   @RequestParam(defaultValue = "false") boolean group) {
-        List<Long> scope = projectService.resolveScope(
-                projectId != null ? projectId : projectService.defaultProjectId(), group);
+        List<Long> scope = projectService.resolveScope(projectId, group);
         return searchService.search(type, q, topK, scope, docIds == null ? List.of() : docIds);
     }
 
@@ -38,8 +37,7 @@ public class SearchController {
                                               @RequestParam(required = false) List<String> docIds,
                                               @RequestParam(required = false) Long projectId,
                                               @RequestParam(defaultValue = "false") boolean group) {
-        List<Long> scope = projectService.resolveScope(
-                projectId != null ? projectId : projectService.defaultProjectId(), group);
+        List<Long> scope = projectService.resolveScope(projectId, group);
         return searchService.compare(q, topK, scope, docIds == null ? List.of() : docIds);
     }
 }

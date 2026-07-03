@@ -17,8 +17,9 @@ import java.util.function.Consumer;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyList;
-import static org.mockito.ArgumentMatchers.anyLong;
 import static org.mockito.ArgumentMatchers.anyBoolean;
+import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.asyncDispatch;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
@@ -35,7 +36,7 @@ class ChatControllerTest {
     @BeforeEach
     void setupProjectService() {
         when(projectService.defaultProjectId()).thenReturn(1L);
-        when(projectService.resolveScope(anyLong(), anyBoolean())).thenReturn(List.of(1L));
+        when(projectService.resolveScope(any(), anyBoolean())).thenReturn(List.of(1L));
     }
 
     @Test
@@ -62,6 +63,8 @@ class ChatControllerTest {
                 .contains("\"type\":\"token\"").contains("Hi").contains("!")
                 .contains("\"type\":\"sources\"").contains("doc-a")
                 .contains("\"type\":\"done\"");
+
+        verify(chatService).chatStream(anyList(), eq(List.of(1L)), any(), any());
     }
 
     @Test

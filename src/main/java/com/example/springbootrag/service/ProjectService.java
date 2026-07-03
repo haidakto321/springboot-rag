@@ -41,5 +41,12 @@ public class ProjectService {
         return ids.isEmpty() ? List.of(projectId) : ids;
     }
 
+    /** Resolves scope for a nullable projectId (null -> the Default project). Per-request DB lookup of the default is acceptable at this app's scale. */
+    public List<Long> resolveScope(Long nullableProjectId, boolean group) {
+        return resolveScope(nullableProjectId != null ? nullableProjectId : defaultProjectId(), group);
+    }
+
+    public boolean exists(long id) { return repo.find(id).isPresent(); }
+
     private static String blankToNull(String s) { return (s == null || s.isBlank()) ? null : s.strip(); }
 }
