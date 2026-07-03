@@ -289,6 +289,17 @@ body {
   border-radius: 10px; background: var(--bg);
 }
 .result-row:hover { border-color: var(--border2); }
+.result-row.clickable { cursor: pointer; }
+.result-row.clickable:hover { border-color: var(--ac); }
+.open-cue { font-size: 10.5px; font-weight: 700; color: var(--ac); opacity: 0; transition: opacity .12s; margin-left: auto; }
+.result-row.clickable:hover .open-cue { opacity: 1; }
+.crow.clickable { cursor: pointer; }
+.crow.clickable:hover { background: var(--surface2); }
+.chunk-flash { animation: chunk-flash 1.4s ease-out; }
+@keyframes chunk-flash {
+  0% { background: var(--chip); box-shadow: 0 0 0 2px var(--ac) inset; }
+  100% { background: var(--bg); box-shadow: none; }
+}
 .result-main { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 4px; }
 .result-title-line { display: flex; align-items: baseline; gap: 8px; flex-wrap: wrap; }
 .result-doc { font-size: 12.5px; font-weight: 800; }

@@ -165,7 +165,7 @@ function showChunkList() {
     $('#docs-chunk-view').hidden = true;
 }
 
-async function showChunkView(docId) {
+async function showChunkView(docId, focusIndex) {
     const list = $('#chunk-list');
     $('#chunk-doc-title').textContent = docId;
     $('#chunk-meta').textContent = 'Loading…';
@@ -182,6 +182,7 @@ async function showChunkView(docId) {
     for (const c of chunks) {
         const row = document.createElement('div');
         row.className = 'result-row';
+        row.dataset.index = c.index;
         row.innerHTML = `
             <span class="chunk-index-badge">${c.index}</span>
             <div class="chunk-body">
@@ -190,6 +191,21 @@ async function showChunkView(docId) {
             </div>`;
         list.appendChild(row);
     }
+
+    if (focusIndex !== undefined && focusIndex !== null) {
+        const target = list.querySelector(`.result-row[data-index="${focusIndex}"]`);
+        if (target) {
+            target.scrollIntoView({ block: 'center', behavior: 'smooth' });
+            target.classList.add('chunk-flash');
+            target.addEventListener('animationend', () => target.classList.remove('chunk-flash'), { once: true });
+        }
+    }
+}
+
+// Jump from a search/compare hit to its chunk in the Documents chunk view.
+function openInContext(docId, chunkIndex) {
+    showScreen('docs');
+    showChunkView(docId, chunkIndex);
 }
 
 $('#chunk-back').addEventListener('click', showChunkList);
@@ -315,12 +331,15 @@ function renderHits() {
     for (const h of lastHits) {
         const pct = Math.round((h.score / maxScore) * 100);
         const row = document.createElement('div');
-        row.className = 'result-row';
+        row.className = 'result-row clickable';
+        row.title = 'Open in document';
+        row.onclick = () => openInContext(h.docId, h.chunkIndex);
         row.innerHTML = `
             <div class="result-main">
                 <div class="result-title-line">
                     <span class="result-doc">${esc(h.docId)}</span>
                     ${h.headingPath ? `<span class="result-heading">${esc(h.headingPath)}</span>` : ''}
+                    <span class="open-cue">open ↗</span>
                 </div>
                 <div class="result-snippet">${highlightSnippet(h.content)}</div>
             </div>
@@ -536,7 +555,7 @@ $('#compare-form').addEventListener('submit', async (e) => {
         } else {
             hits.forEach((h, i) => {
                 rows += `
-                    <div class="crow">
+                    <div class="crow clickable" data-doc="${esc(h.docId)}" data-index="${h.chunkIndex}" title="Open in document">
                         <div class="crow-top">
                             <span class="crow-rank">#${i + 1}</span>
                             <span class="crow-doc">${esc(h.docId)}</span>
@@ -555,6 +574,12 @@ $('#compare-form').addEventListener('submit', async (e) => {
             <div class="backend-body">${rows}</div>`;
         grid.appendChild(card);
     }
+});
+
+// Delegated: click a compare row to open that chunk in its document.
+$('#compare-grid').addEventListener('click', (e) => {
+    const row = e.target.closest('.crow');
+    if (row && row.dataset.doc) openInContext(row.dataset.doc, Number(row.dataset.index));
 });
 
 refreshDocs();
