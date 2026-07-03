@@ -22,10 +22,9 @@ public class ProjectController {
     public List<ProjectSummary> list() { return projects.list(); }
 
     @PatchMapping("/projects/{id}")
-    public void update(@PathVariable long id, @RequestBody ProjectRequest req) {
-        if (req.name() != null) projects.rename(id, req.name());
-        // groupName is set unconditionally (even null clears the group)
-        projects.setGroup(id, req.groupName());
+    public void update(@PathVariable long id, @RequestBody java.util.Map<String, Object> body) {
+        if (body.containsKey("name")) projects.rename(id, (String) body.get("name"));
+        if (body.containsKey("groupName")) projects.setGroup(id, (String) body.get("groupName"));
     }
 
     @DeleteMapping("/projects/{id}")
