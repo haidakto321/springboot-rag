@@ -1,22 +1,31 @@
 package com.example.springbootrag.web;
 
 import com.example.springbootrag.service.AskService;
+import com.example.springbootrag.service.ProjectService;
 import com.example.springbootrag.web.dto.AskResponse;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 
+import java.util.List;
+
 @RestController
 public class AskController {
 
     private final AskService askService;
+    private final ProjectService projectService;
 
-    public AskController(AskService askService) {
+    public AskController(AskService askService, ProjectService projectService) {
         this.askService = askService;
+        this.projectService = projectService;
     }
 
     @GetMapping("/ask")
-    public AskResponse ask(@RequestParam String q) {
-        return askService.ask(q);
+    public AskResponse ask(@RequestParam String q,
+                           @RequestParam(required = false) Long projectId,
+                           @RequestParam(defaultValue = "false") boolean group) {
+        List<Long> scope = projectService.resolveScope(
+                projectId != null ? projectId : projectService.defaultProjectId(), group);
+        return askService.ask(q, scope);
     }
 }

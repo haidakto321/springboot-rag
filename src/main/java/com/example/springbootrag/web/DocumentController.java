@@ -34,19 +34,13 @@ public class DocumentController {
         this.projectService = projectService;
     }
 
+    // ---- Legacy endpoints (scoped to Default project) ------------------------------------
+
     @PostMapping(value = "/documents", consumes = MediaType.MULTIPART_FORM_DATA_VALUE)
     public IngestResponse upload(@RequestParam("file") MultipartFile file) {
-        String name = file.getOriginalFilename();
-        if (name == null || !name.toLowerCase().endsWith(".md")) {
-            throw new IllegalArgumentException("only .md files are accepted");
-        }
-        if (file.getSize() > MAX_BYTES) {
-            throw new IllegalArgumentException("file too large (max 2 MB)");
-        }
-        String text = decodeUtf8(file);
-        String docId = sanitizeDocId(name);
-        int stored = ingestService.ingestMarkdown(docId, name, text);
-        return new IngestResponse(docId, stored);
+        UploadResult u = parseUpload(file);
+        int stored = ingestService.ingestMarkdown(u.docId(), u.sourceFile(), u.text());
+        return new IngestResponse(u.docId(), stored);
     }
 
     @GetMapping("/documents")
@@ -63,6 +57,53 @@ public class DocumentController {
     public void delete(@PathVariable String docId) {
         ingestService.delete(docId);
     }
+
+    // ---- Project-scoped endpoints --------------------------------------------------------
+
+    @PostMapping(value = "/projects/{projectId}/documents", consumes = MediaType.MULTIPART_FORM_DATA_VALUE)
+    public IngestResponse uploadToProject(@PathVariable long projectId,
+                                          @RequestParam("file") MultipartFile file) {
+        UploadResult u = parseUpload(file);
+        int stored = ingestService.ingestMarkdown(projectId, u.docId(), u.sourceFile(), u.text());
+        return new IngestResponse(u.docId(), stored);
+    }
+
+    @GetMapping("/projects/{projectId}/documents")
+    public List<DocumentSummary> listForProject(@PathVariable long projectId) {
+        return pgVector.listDocuments(projectId);
+    }
+
+    @DeleteMapping("/projects/{projectId}/documents/{docId}")
+    public void deleteFromProject(@PathVariable long projectId, @PathVariable String docId) {
+        ingestService.delete(projectId, docId);
+    }
+
+    @GetMapping("/projects/{projectId}/documents/{docId}/chunks")
+    public List<ChunkView> chunksForProject(@PathVariable long projectId,
+                                            @PathVariable String docId) {
+        return pgVector.listChunks(projectId, docId);
+    }
+
+    // ---- Shared upload logic -------------------------------------------------------------
+
+    /**
+     * Validates and decodes the uploaded file.
+     * Throws {@link IllegalArgumentException} on wrong extension, oversized content, or invalid UTF-8.
+     */
+    private UploadResult parseUpload(MultipartFile file) {
+        String name = file.getOriginalFilename();
+        if (name == null || !name.toLowerCase().endsWith(".md")) {
+            throw new IllegalArgumentException("only .md files are accepted");
+        }
+        if (file.getSize() > MAX_BYTES) {
+            throw new IllegalArgumentException("file too large (max 2 MB)");
+        }
+        String text = decodeUtf8(file);
+        String docId = sanitizeDocId(name);
+        return new UploadResult(docId, name, text);
+    }
+
+    private record UploadResult(String docId, String sourceFile, String text) {}
 
     /* Strict UTF-8 decode: malformed bytes are a client error, not replacement chars. */
     private static String decodeUtf8(MultipartFile file) {

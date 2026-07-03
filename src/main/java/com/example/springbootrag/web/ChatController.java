@@ -1,6 +1,7 @@
 package com.example.springbootrag.web;
 
 import com.example.springbootrag.service.ChatService;
+import com.example.springbootrag.service.ProjectService;
 import com.example.springbootrag.web.dto.AskResponse;
 import com.example.springbootrag.web.dto.ChatRequest;
 import com.fasterxml.jackson.databind.ObjectMapper;
@@ -28,10 +29,12 @@ public class ChatController {
 
     private final ChatService chatService;
     private final ObjectMapper mapper;
+    private final ProjectService projectService;
 
-    public ChatController(ChatService chatService, ObjectMapper mapper) {
+    public ChatController(ChatService chatService, ObjectMapper mapper, ProjectService projectService) {
         this.chatService = chatService;
         this.mapper = mapper;
+        this.projectService = projectService;
     }
 
     @PostMapping(value = "/chat/stream", produces = "application/x-ndjson")
@@ -39,10 +42,14 @@ public class ChatController {
         if (req == null || req.messages() == null || req.messages().isEmpty()) {
             throw new IllegalArgumentException("messages are required");
         }
+        // Resolve project scope before the stream starts so any bad projectId fails fast (400/500).
+        List<Long> scope = projectService.resolveScope(
+                req.projectId() != null ? req.projectId() : projectService.defaultProjectId(),
+                req.group());
         return out -> {
             try {
                 List<AskResponse.Source> sources =
-                        chatService.chatStream(req.messages(), List.of(), req.docIds(),
+                        chatService.chatStream(req.messages(), scope, req.docIds(),
                                 token -> writeFrame(out, Map.of("type", "token", "text", token)));
                 writeFrame(out, Map.of("type", "sources", "sources", sources));
                 writeFrame(out, Map.of("type", "done"));

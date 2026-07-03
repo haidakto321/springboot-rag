@@ -7,5 +7,7 @@ import java.util.List;
 /**
  * Client-held conversation sent each turn; the last message is the new user question.
  * {@code docIds} optionally scopes retrieval to a subset of documents (null/empty = all).
+ * {@code projectId} optionally scopes retrieval to a specific project (null = default project).
+ * {@code group} when true, expands scope to all projects in the same group as {@code projectId}.
  */
-public record ChatRequest(List<ChatMessage> messages, List<String> docIds) {}
+public record ChatRequest(List<ChatMessage> messages, List<String> docIds, Long projectId, boolean group) {}

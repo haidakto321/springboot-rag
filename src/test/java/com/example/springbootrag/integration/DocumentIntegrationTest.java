@@ -1,6 +1,7 @@
 package com.example.springbootrag.integration;
 
 import com.example.springbootrag.embedding.EmbeddingProvider;
+import com.example.springbootrag.repository.ProjectRepository;
 import com.example.springbootrag.service.IngestService;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -68,6 +69,7 @@ class DocumentIntegrationTest {
 
     @Autowired MockMvc mvc;
     @Autowired IngestService ingestService;
+    @Autowired ProjectRepository projectRepository;
 
     @BeforeEach
     void cleanup() {
@@ -159,5 +161,38 @@ class DocumentIntegrationTest {
         mvc.perform(get("/documents"))
                 .andExpect(jsonPath("$.length()").value(1))
                 .andExpect(jsonPath("$[0].chunkCount").value(1));
+    }
+
+    @Test
+    void projectScopedUploadIsIsolatedFromOtherProjects() throws Exception {
+        long projectA = projectRepository.create("IsolationTestA", null);
+        long projectB = projectRepository.create("IsolationTestB", null);
+        try {
+            MockMultipartFile file = new MockMultipartFile(
+                    "file", "note.md", "text/markdown",
+                    "# Note\n\nsome isolated content".getBytes(StandardCharsets.UTF_8));
+
+            // Upload to project A via project-scoped route
+            mvc.perform(multipart("/projects/" + projectA + "/documents").file(file))
+                    .andExpect(status().isOk())
+                    .andExpect(jsonPath("$.docId").value("note"))
+                    .andExpect(jsonPath("$.chunksStored").value(1));
+
+            // GET for project A shows the document with the right chunk count
+            mvc.perform(get("/projects/" + projectA + "/documents"))
+                    .andExpect(status().isOk())
+                    .andExpect(jsonPath("$.length()").value(1))
+                    .andExpect(jsonPath("$[0].docId").value("note"))
+                    .andExpect(jsonPath("$[0].chunkCount").value(1));
+
+            // GET for project B returns nothing - isolation is enforced
+            mvc.perform(get("/projects/" + projectB + "/documents"))
+                    .andExpect(status().isOk())
+                    .andExpect(jsonPath("$").isEmpty());
+        } finally {
+            ingestService.delete(projectA, "note");
+            projectRepository.delete(projectA);
+            projectRepository.delete(projectB);
+        }
     }
 }

@@ -1,7 +1,9 @@
 package com.example.springbootrag.web;
 
 import com.example.springbootrag.service.ChatService;
+import com.example.springbootrag.service.ProjectService;
 import com.example.springbootrag.web.dto.AskResponse;
+import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.autoconfigure.web.servlet.WebMvcTest;
@@ -15,6 +17,8 @@ import java.util.function.Consumer;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyList;
+import static org.mockito.ArgumentMatchers.anyLong;
+import static org.mockito.ArgumentMatchers.anyBoolean;
 import static org.mockito.Mockito.when;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.asyncDispatch;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
@@ -26,6 +30,13 @@ class ChatControllerTest {
 
     @Autowired MockMvc mvc;
     @MockBean ChatService chatService;
+    @MockBean ProjectService projectService;
+
+    @BeforeEach
+    void setupProjectService() {
+        when(projectService.defaultProjectId()).thenReturn(1L);
+        when(projectService.resolveScope(anyLong(), anyBoolean())).thenReturn(List.of(1L));
+    }
 
     @Test
     @SuppressWarnings("unchecked")
