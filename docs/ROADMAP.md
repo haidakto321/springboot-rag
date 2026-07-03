@@ -35,24 +35,29 @@ Merged "streaming answers" + "conversational follow-up".
   `/compare`, and the `/chat/stream` body.
 - UI: document scope chips on Search & Ask and Compare (all selected = no filter).
 
-## Medium-value backlog (agreed, not yet scheduled)
+## Medium-value backlog  ✅ all done (2026-07-03)
 
-- **Recent searches / history** - localStorage dropdown of past queries. (Low effort)
-- **Result -> open in context**  ✅ done (2026-07-03) - click a search or compare hit to
-  jump to that document's chunk view, scrolled to the chunk with a highlight flash. Reuses
-  the chunk sub-view; `SearchHit.chunkIndex` drives the target. Frontend-only.
-- **Pagination / "load more"** - `topK` is hard-locked at 10; add a way to fetch more. (Low)
-- **Snippet windowing** - results dump the whole chunk; show the best-matching passage
-  window with expand-to-full. (Med)
-- **Copy answer / richer citations** - copy button on the answer; citation chips that
-  scroll to the cited chunk in its document. (Low)
+- **Recent searches / history** ✅ - `<datalist>` of the last 8 queries (localStorage),
+  recorded on submit.
+- **Result -> open in context** ✅ - click a search or compare hit to jump to that document's
+  chunk view, scrolled + highlight flash. `SearchHit.chunkIndex` drives the target.
+- **Pagination / "load more"** ✅ - `topK` starts at 10; a "Load more" button fetches +10 more.
+- **Snippet windowing** ✅ - results show the best-matching passage window centered on the first
+  query-term match, with a "Show full / Show less" toggle.
+- **Copy answer / richer citations** ✅ - Copy button on assistant answers; citation chips gain
+  an "↗" that opens the cited chunk in its document (needed `chunkIndex` on `AskResponse.Source`).
 
-## Low-value / polish
+## Low-value / polish  ✅ all done (2026-07-03)
 
-- Keyboard shortcut (`/` to focus search).
-- Search-as-you-type (debounced live search).
-- Thumbs up/down relevance feedback.
-- Empty-state hint ("no results - try semantic mode").
+- **Keyboard shortcut** ✅ - `/` focuses the search box (jumps to Search & Ask).
+- **Search-as-you-type** ✅ - debounced live search (450ms, min 2 chars); recorded only on submit.
+- **Thumbs up/down feedback** ✅ - per-answer 👍/👎, toggled, logged to localStorage (local-only,
+  no backend).
+- **Empty-state hint** ✅ - "no results" suggests switching mode (keyword <-> semantic).
+
+## Everything on this roadmap is now built.
+Possible future directions (not scheduled): server-side session persistence, token-budget
+history trimming, streaming the compare screen, and a real feedback backend.
 
 ## Notes
 - Keep everything plain HTML/CSS/JS (no framework), matching the current static frontend.
