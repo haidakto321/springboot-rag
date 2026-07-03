@@ -47,7 +47,7 @@ class AskServiceTest {
 
     @Test
     void buildsNumberedContextAndReturnsSources() {
-        when(searchService.search(eq("rerank"), anyString(), anyInt(), anyList(), anyList())).thenReturn(List.of(
+        when(searchService.search(eq("rerank"), anyString(), anyInt(), eq(List.of(1L)), anyList())).thenReturn(List.of(
                 new SearchHit(1, "doc-a", 0, "chunk one text", "a.md", "# A > ## S", 0.9),
                 new SearchHit(2, "doc-b", 3, "chunk two text", "b.md", null, 0.7)));
 

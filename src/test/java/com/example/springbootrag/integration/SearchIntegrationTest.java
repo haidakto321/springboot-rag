@@ -175,7 +175,14 @@ class SearchIntegrationTest {
         ingestService.ingest(a, "d1", "hydraulic pressure drop on line 3");
         ingestService.ingest(b, "d2", "hydraulic pressure drop on line 3");
 
-        var onlyA = searchService.search("pgvector", "pressure", 10, List.of(a), List.of());
-        assertThat(onlyA).extracting(SearchHit::docId).containsOnly("d1");
+        assertThat(searchService.search("pgvector", "pressure", 10, List.of(a), List.of()))
+                .extracting(SearchHit::docId).containsOnly("d1");
+        assertThat(searchService.search("qdrant", "pressure", 10, List.of(a), List.of()))
+                .extracting(SearchHit::docId).containsOnly("d1");
+        assertThat(searchService.search("fts", "pressure", 10, List.of(a), List.of()))
+                .extracting(SearchHit::docId).containsOnly("d1");
+
+        ingestService.delete(a, "d1");
+        ingestService.delete(b, "d2");
     }
 }
