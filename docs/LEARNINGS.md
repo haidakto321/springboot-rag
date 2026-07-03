@@ -311,9 +311,17 @@ yes/no "is this grounded?". Cheap, repeatable, good as a smoke test (here: 18/18
 - **Testcontainers + Docker 29:** pin the client `api.version=1.44` and Qdrant image `v1.9.0`;
   newer Docker Engines otherwise break the test client. Bites on WSL and native Ubuntu alike
   (both ship Engine 29.x).
-- **`think:false` for qwen3:** it's a reasoning model; left on, it emits `<think>` blocks that
-  pollute answers and break the judge's parsing. (qwen2.5:7b judged 14/18, qwen3 with thinking
-  off judged 18/18.) Know your model's quirks.
+- **Reasoning models leak their thinking.** qwen3 (and similar) emit a `<think>...</think>`
+  chain-of-thought before the answer. Left on, it pollutes answers and breaks the judge's parsing
+  (qwen2.5:7b judged 14/18, qwen3 with thinking off judged 18/18). Disabling it is not one switch:
+  - the Ollama API `think:false` param works only on **new enough** Ollama builds;
+  - qwen3 also honors a `/no_think` **soft-switch** appended to the prompt (template-level);
+  - **older Ollama or smaller models (qwen3:4b) ignore both and stream the whole reasoning** -
+    slow, and the raw thoughts show up as the "answer".
+  So we do all three: send `think:false`, append `/no_think`, AND **strip `<think>...</think>`
+  defensively** from the stream (a small stateful filter that suppresses text between the tags,
+  buffering a few chars so a tag split across token boundaries is still caught). Belt, suspenders,
+  and a second belt - never trust a single model-behavior flag.
 - **Embed once per request:** an embedding call is a network round-trip. `/compare` embeds the
   query a SINGLE time and shares the vector across pgvector/qdrant/hybrid so timings reflect
   search cost, not three model calls. Don't re-embed the same text.
