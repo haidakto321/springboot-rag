@@ -29,6 +29,7 @@ app:
   chat:
     model: qwen3:8b
     context-chunks: 5
+    condense-followups: true   # rewrite chat follow-ups into a standalone search query before retrieving
   ollama:
     base-url: http://localhost:11434
   qdrant:

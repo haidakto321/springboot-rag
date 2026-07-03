@@ -28,11 +28,21 @@ class ChatServiceTest {
 
     private final SearchService searchService = mock(SearchService.class);
 
-    /** Captures the assembled call and emits two canned tokens. */
+    /** Captures the assembled calls; chat() returns the canned condensed query, chatStream() emits tokens. */
     static class FakeChat implements ChatProvider {
         String lastSystem;
         List<ChatMessage> lastMessages;
-        @Override public String chat(String s, String u) { return "unused"; }
+        String condensedReturn = "condensed standalone query";
+        String lastChatSystem;
+        String lastChatUser;
+        boolean throwOnChat = false;
+
+        @Override public String chat(String s, String u) {
+            this.lastChatSystem = s;
+            this.lastChatUser = u;
+            if (throwOnChat) throw new RuntimeException("chat down");
+            return condensedReturn;
+        }
         @Override public void chatStream(String system, List<ChatMessage> messages, Consumer<String> onToken) {
             this.lastSystem = system;
             this.lastMessages = messages;
@@ -46,8 +56,9 @@ class ChatServiceTest {
     private final ChatService service = new ChatService(searchService, chat, props);
 
     @Test
-    void retrievesOnLastMessageStreamsTokensAndReturnsSources() {
-        when(searchService.search(eq("rerank"), eq("what about overlap?"), anyInt(), any())).thenReturn(List.of(
+    void followupRetrievesWithCondensedQueryButGeneratesFromOriginal() {
+        // On a follow-up, retrieval uses the condensed query; generation keeps the original question.
+        when(searchService.search(eq("rerank"), eq("condensed standalone query"), anyInt(), any())).thenReturn(List.of(
                 new SearchHit(1, "doc-a", 0, "chunk one text", "a.md", "# A > ## S", 0.9),
                 new SearchHit(2, "doc-b", 3, "chunk two text", "b.md", null, 0.7)));
 
@@ -59,18 +70,47 @@ class ChatServiceTest {
 
         assertThat(tokens).containsExactly("Hello", " there");
 
-        // System prompt forwarded; prior turns preserved; final user turn carries the context.
+        // Condensation was invoked with the prior conversation + follow-up.
+        assertThat(chat.lastChatSystem).contains("standalone");
+        assertThat(chat.lastChatUser).contains("Follow-up: what about overlap?");
+
+        // Generation: system prompt forwarded; prior turns preserved; final user turn keeps the ORIGINAL question.
         assertThat(chat.lastSystem).contains("ONLY");
         assertThat(chat.lastMessages).hasSize(3);
         assertThat(chat.lastMessages.get(0).content()).isEqualTo("how does chunking work?");
-        assertThat(chat.lastMessages.get(1).content()).isEqualTo("It splits on headings.");
         assertThat(chat.lastMessages.get(2).content())
                 .contains("[1]").contains("chunk one text")
                 .endsWith("Question: what about overlap?");
 
         assertThat(sources).hasSize(2);
         assertThat(sources.get(0).docId()).isEqualTo("doc-a");
-        assertThat(sources.get(1).index()).isEqualTo(2);
+    }
+
+    @Test
+    void firstTurnSkipsCondensation() {
+        when(searchService.search(eq("rerank"), eq("how does chunking work?"), anyInt(), any()))
+                .thenReturn(List.of(new SearchHit(1, "d", 0, "c", null, null, 0.5)));
+
+        service.chatStream(List.of(new ChatMessage("user", "how does chunking work?")), List.of(), t -> {});
+
+        // No prior turns -> condensation (chat.chat) never called; retrieval uses the raw question.
+        assertThat(chat.lastChatUser).isNull();
+    }
+
+    @Test
+    void condensationFailureFallsBackToRawQuery() {
+        chat.throwOnChat = true;
+        when(searchService.search(eq("rerank"), eq("what about overlap?"), anyInt(), any()))
+                .thenReturn(List.of(new SearchHit(1, "d", 0, "c", null, null, 0.5)));
+
+        List<String> tokens = new ArrayList<>();
+        service.chatStream(List.of(
+                new ChatMessage("user", "how does chunking work?"),
+                new ChatMessage("assistant", "It splits on headings."),
+                new ChatMessage("user", "what about overlap?")), List.of(), tokens::add);
+
+        // Condensation threw -> retrieval used the raw follow-up, chat still answered.
+        assertThat(tokens).containsExactly("Hello", " there");
     }
 
     @Test

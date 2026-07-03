@@ -23,6 +23,11 @@ public class ChatService {
     /** Hard reject threshold before trimming - defends against oversized request bodies. */
     static final int MAX_INCOMING = 50;
 
+    static final String CONDENSE_SYSTEM = """
+            Given a conversation and a follow-up question, rewrite the follow-up as a single \
+            standalone search query that captures what to look for, using context from the \
+            conversation. Output ONLY the rewritten query text, with no preamble or quotes.""";
+
     private final SearchService searchService;
     private final ChatProvider chat;
     private final ChatProperties props;
@@ -50,8 +55,16 @@ public class ChatService {
             throw new IllegalArgumentException("last message must be a non-empty user turn");
         }
 
+        // On follow-up turns, retrieve using a standalone query condensed from the conversation;
+        // the first turn's question is already standalone.
+        String retrievalQuery = last.content();
+        List<ChatMessage> prior = trimmed.subList(0, trimmed.size() - 1);
+        if (props.isCondenseFollowups() && !prior.isEmpty()) {
+            retrievalQuery = condenseQuery(prior, last.content());
+        }
+
         List<String> scope = docIds == null ? List.of() : docIds;
-        List<SearchHit> hits = searchService.search("rerank", last.content(), props.getContextChunks(), scope);
+        List<SearchHit> hits = searchService.search("rerank", retrievalQuery, props.getContextChunks(), scope);
         if (hits.isEmpty()) {
             onToken.accept("No relevant chunks found in the knowledge base.");
             return List.of();
@@ -69,6 +82,27 @@ public class ChatService {
             sources.add(new AskResponse.Source(i + 1, h.docId(), h.headingPath(), h.score(), h.content()));
         }
         return sources;
+    }
+
+    /**
+     * Rewrites a follow-up into a standalone search query using the prior conversation.
+     * Best-effort: any failure or empty result falls back to the raw question.
+     */
+    private String condenseQuery(List<ChatMessage> prior, String question) {
+        StringBuilder sb = new StringBuilder("Conversation:\n");
+        for (ChatMessage m : prior) {
+            sb.append(m.role()).append(": ").append(m.content()).append('\n');
+        }
+        sb.append("Follow-up: ").append(question);
+        try {
+            String rewritten = chat.chat(CONDENSE_SYSTEM, sb.toString());
+            if (rewritten != null && !rewritten.strip().isBlank()) {
+                return rewritten.strip();
+            }
+        } catch (RuntimeException e) {
+            // condensation is best-effort; retrieval falls back to the raw question
+        }
+        return question;
     }
 
     private static List<ChatMessage> trimToLast(List<ChatMessage> messages, int n) {

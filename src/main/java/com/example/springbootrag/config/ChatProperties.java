@@ -8,9 +8,13 @@ public class ChatProperties {
     private String model = "qwen3:8b";
     /** How many retrieved chunks go into the ask prompt. */
     private int contextChunks = 5;
+    /** On chat follow-up turns, rewrite {history + question} into a standalone search query before retrieving. */
+    private boolean condenseFollowups = true;
 
     public String getModel() { return model; }
     public void setModel(String model) { this.model = model; }
     public int getContextChunks() { return contextChunks; }
     public void setContextChunks(int contextChunks) { this.contextChunks = contextChunks; }
+    public boolean isCondenseFollowups() { return condenseFollowups; }
+    public void setCondenseFollowups(boolean condenseFollowups) { this.condenseFollowups = condenseFollowups; }
 }
