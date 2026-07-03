@@ -96,11 +96,40 @@ class OllamaChatProviderTest {
         provider.chatStream("you are helpful",
                 List.of(new ChatProvider.ChatMessage("user", "hi")), tokens::add);
 
-        assertThat(tokens).containsExactly("Hello", " world", "!");
+        // ThinkFilter may re-chunk token boundaries; assert the assembled text.
+        assertThat(String.join("", tokens)).isEqualTo("Hello world!");
         String body = server.takeRequest().getBody().readUtf8();
         assertThat(body).contains("\"stream\":true");
         assertThat(body).contains("\"role\":\"system\"");
         assertThat(body).contains("\"role\":\"user\"");
+    }
+
+    @Test
+    void streamSuppressesThinkBlock() {
+        server.enqueue(new MockResponse()
+                .setHeader("Content-Type", "application/x-ndjson")
+                .setBody("""
+                        {"message":{"role":"assistant","content":"<think>let me "},"done":false}
+                        {"message":{"role":"assistant","content":"reason about this</think>"},"done":false}
+                        {"message":{"role":"assistant","content":"The real "},"done":false}
+                        {"message":{"role":"assistant","content":"answer."},"done":true}
+                        """));
+
+        List<String> tokens = new ArrayList<>();
+        provider.chatStream("s", List.of(new ChatProvider.ChatMessage("user", "u")), tokens::add);
+
+        assertThat(String.join("", tokens)).isEqualTo("The real answer.");
+    }
+
+    @Test
+    void chatStripsThinkBlock() {
+        server.enqueue(new MockResponse()
+                .setHeader("Content-Type", "application/json")
+                .setBody("""
+                        {"message": {"role": "assistant", "content": "<think>reasoning here</think>\\n\\nFinal answer [1]"}}
+                        """));
+
+        assertThat(provider.chat("s", "u")).isEqualTo("Final answer [1]");
     }
 
     @Test
@@ -116,7 +145,7 @@ class OllamaChatProviderTest {
         List<String> tokens = new ArrayList<>();
         provider.chatStream("s", List.of(new ChatProvider.ChatMessage("user", "u")), tokens::add);
 
-        assertThat(tokens).containsExactly("a", "b");
+        assertThat(String.join("", tokens)).isEqualTo("ab");
     }
 
     @Test
