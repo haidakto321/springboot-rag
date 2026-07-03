@@ -21,11 +21,12 @@ Merged "streaming answers" + "conversational follow-up".
 - Note: needs `spring.mvc.async.request-timeout` raised or long generations get cut with
   an InterruptedException.
 
-**Deferred from Unit B:**
-- **Condense-question retrieval** - for vague follow-ups ("tell me more", "why?"),
-  rewrite the conversation history + new question into a standalone search query before
-  retrieving, instead of retrieving on the latest message alone. Known RAG pattern
-  (question condensation). Improves multi-turn retrieval quality. (Med)
+**Condense-question retrieval  ✅ done (2026-07-03)** (was deferred from Unit B)
+- For vague follow-ups ("tell me more", "why?"), `ChatService` first rewrites the
+  conversation history + new question into a standalone search query (one non-streaming
+  LLM call) and retrieves with that; the answer is still generated from the original
+  question. First turn skips it; condensation failure falls back to the raw question.
+  Toggle via `app.chat.condense-followups` (default true).
 
 ### Unit C - Document filter  ✅ done (2026-07-03)
 - Scope search / ask / compare to a chosen subset of documents.

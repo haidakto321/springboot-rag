@@ -226,11 +226,16 @@ overlap?" only makes sense given the previous turn).
 - **What creates "memory":** you resend the previous turns to the model each request. The model
   itself is stateless; the *conversation* lives on the client and is replayed every turn. That's
   the whole trick.
-- **Retrieval vs memory are separate.** Here retrieval runs on the **latest message only**, yet
-  it's still a real chat because the model sees the full history. The gap: a vague follow-up
-  ("tell me more") has no keywords, so latest-only retrieval finds junk. The fix is
-  **query condensation** - rewrite {history + new question} into a standalone search query first.
-  (Deferred; see ROADMAP.)
+- **Retrieval vs memory are separate.** The model always sees the full (trimmed) history, which
+  is what makes it a real chat. Retrieval is a different question: what do you *search* for on a
+  follow-up? Retrieving on the latest message alone breaks for vague follow-ups ("tell me more",
+  "why is that better?") that have no keywords - you'd search for "why" and get junk.
+- **Query condensation** (implemented here) fixes that: on a follow-up turn, a cheap LLM call
+  first rewrites {history + new question} into a standalone search query ("why is that better?"
+  after a reranker discussion -> "why is a cross-encoder reranker better than bi-encoder search"),
+  and retrieval uses THAT. The answer is still generated from the original question + full history.
+  First turn skips it (already standalone); a condensation failure falls back to the raw question.
+  Toggle: `app.chat.condense-followups`. Cost: one extra short LLM call per follow-up.
 - **Context window = the model's finite short-term memory**, measured in tokens (word-pieces).
   Everything - system prompt, retrieved chunks, entire history, and the answer - must fit. Overflow
   and the model silently forgets the oldest content.
