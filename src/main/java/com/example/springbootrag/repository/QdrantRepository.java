@@ -25,6 +25,7 @@ import java.util.concurrent.ExecutionException;
 import static io.qdrant.client.PointIdFactory.id;
 import static io.qdrant.client.ValueFactory.value;
 import static io.qdrant.client.VectorsFactory.vectors;
+import static io.qdrant.client.ConditionFactory.match;
 import static io.qdrant.client.ConditionFactory.matchKeyword;
 import static io.qdrant.client.WithPayloadSelectorFactory.enable;
 
@@ -75,10 +76,12 @@ public class QdrantRepository {
         }
     }
 
-    public void upsert(long id, String docId, int chunkIndex, String content,
+    /** Upserts one chunk with its project association into Qdrant. */
+    public void upsert(long id, long projectId, String docId, int chunkIndex, String content,
                        String sourceFile, String headingPath, float[] embedding)
             throws ExecutionException, InterruptedException {
         Map<String, Value> payload = new HashMap<>();
+        payload.put("project_id", value(projectId));
         payload.put("doc_id", value(docId));
         payload.put("chunk_index", value((long) chunkIndex));
         payload.put("content", value(content));
@@ -96,7 +99,13 @@ public class QdrantRepository {
         client.upsertAsync(collection, List.of(point)).get();
     }
 
-    public List<SearchHit> search(float[] queryEmbedding, int topK, List<String> docIds)
+    /**
+     * Vector search with optional project and doc filters.
+     * Empty lists mean that filter is absent. Project uses integer match; doc uses keyword match.
+     * Both active: must satisfy BOTH (AND); within each group it is an OR over the values.
+     */
+    public List<SearchHit> search(float[] queryEmbedding, int topK,
+                                  List<Long> projectIds, List<String> docIds)
             throws ExecutionException, InterruptedException {
         List<Float> vec = new ArrayList<>(queryEmbedding.length);
         for (float f : queryEmbedding) vec.add(f);
@@ -106,10 +115,26 @@ public class QdrantRepository {
                 .addAllVector(vec)
                 .setLimit(topK)
                 .setWithPayload(enable(true));
-        if (docIds != null && !docIds.isEmpty()) {
-            // "should" = OR: keep points whose doc_id matches any of the selected documents.
-            io.qdrant.client.grpc.Points.Filter.Builder filter = io.qdrant.client.grpc.Points.Filter.newBuilder();
-            for (String d : docIds) filter.addShould(matchKeyword("doc_id", d));
+
+        boolean hasProject = projectIds != null && !projectIds.isEmpty();
+        boolean hasDoc = docIds != null && !docIds.isEmpty();
+        if (hasProject || hasDoc) {
+            io.qdrant.client.grpc.Points.Filter.Builder filter =
+                    io.qdrant.client.grpc.Points.Filter.newBuilder();
+            if (hasProject) {
+                io.qdrant.client.grpc.Points.Filter.Builder pf =
+                        io.qdrant.client.grpc.Points.Filter.newBuilder();
+                for (Long pid : projectIds) pf.addShould(match("project_id", pid));
+                filter.addMust(io.qdrant.client.grpc.Points.Condition.newBuilder()
+                        .setFilter(pf.build()).build());
+            }
+            if (hasDoc) {
+                io.qdrant.client.grpc.Points.Filter.Builder df =
+                        io.qdrant.client.grpc.Points.Filter.newBuilder();
+                for (String d : docIds) df.addShould(matchKeyword("doc_id", d));
+                filter.addMust(io.qdrant.client.grpc.Points.Condition.newBuilder()
+                        .setFilter(df.build()).build());
+            }
             search.setFilter(filter.build());
         }
 
@@ -130,10 +155,20 @@ public class QdrantRepository {
         return hits;
     }
 
-    public void deleteByDocId(String docId) throws ExecutionException, InterruptedException {
+    /** Deletes all Qdrant points for the given project+doc combination. */
+    public void deleteByDocId(long projectId, String docId) throws ExecutionException, InterruptedException {
         client.deleteAsync(collection,
                 io.qdrant.client.grpc.Points.Filter.newBuilder()
+                        .addMust(match("project_id", projectId))
                         .addMust(matchKeyword("doc_id", docId))
+                        .build()).get();
+    }
+
+    /** Deletes all Qdrant points belonging to the given project. */
+    public void deleteByProject(long projectId) throws ExecutionException, InterruptedException {
+        client.deleteAsync(collection,
+                io.qdrant.client.grpc.Points.Filter.newBuilder()
+                        .addMust(match("project_id", projectId))
                         .build()).get();
     }
 }
