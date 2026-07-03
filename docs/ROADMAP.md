@@ -38,8 +38,9 @@ Merged "streaming answers" + "conversational follow-up".
 ## Medium-value backlog (agreed, not yet scheduled)
 
 - **Recent searches / history** - localStorage dropdown of past queries. (Low effort)
-- **Result -> open in context** - click a search hit to jump to that document's chunk
-  view, scrolled to the chunk. Reuses the existing chunk sub-view. (Low-Med)
+- **Result -> open in context**  ✅ done (2026-07-03) - click a search or compare hit to
+  jump to that document's chunk view, scrolled to the chunk with a highlight flash. Reuses
+  the chunk sub-view; `SearchHit.chunkIndex` drives the target. Frontend-only.
 - **Pagination / "load more"** - `topK` is hard-locked at 10; add a way to fetch more. (Low)
 - **Snippet windowing** - results dump the whole chunk; show the best-matching passage
   window with expand-to-full. (Med)
