@@ -2,8 +2,9 @@ package com.example.springbootrag.integration;
 
 import com.example.springbootrag.embedding.EmbeddingProvider;
 import com.example.springbootrag.model.SearchHit;
-import com.example.springbootrag.service.SearchService;
+import com.example.springbootrag.repository.ProjectRepository;
 import com.example.springbootrag.service.IngestService;
+import com.example.springbootrag.service.SearchService;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -75,6 +76,7 @@ class SearchIntegrationTest {
 
     @Autowired IngestService ingestService;
     @Autowired SearchService searchService;
+    @Autowired ProjectRepository projectRepository;
 
     /** Wipe all known doc IDs before each test so the shared container does not bleed state. */
     @BeforeEach
@@ -164,5 +166,16 @@ class SearchIntegrationTest {
         List<SearchHit> out = searchService.search("rerank", "pressure", 5);
         assertThat(out).isNotEmpty();
         assertThat(out.size()).isLessThanOrEqualTo(5);
+    }
+
+    @Test
+    void searchFiltersByProject() {
+        long a = projectRepository.create("A", null);
+        long b = projectRepository.create("B", null);
+        ingestService.ingest(a, "d1", "hydraulic pressure drop on line 3");
+        ingestService.ingest(b, "d2", "hydraulic pressure drop on line 3");
+
+        var onlyA = searchService.search("pgvector", "pressure", 10, List.of(a), List.of());
+        assertThat(onlyA).extracting(SearchHit::docId).containsOnly("d1");
     }
 }

@@ -3,6 +3,7 @@ package com.example.springbootrag.web;
 import com.example.springbootrag.model.DocumentSummary;
 import com.example.springbootrag.repository.PgVectorRepository;
 import com.example.springbootrag.service.IngestService;
+import com.example.springbootrag.service.ProjectService;
 import com.example.springbootrag.web.dto.ChunkView;
 import com.example.springbootrag.web.dto.IngestResponse;
 import org.springframework.http.MediaType;
@@ -23,10 +24,14 @@ public class DocumentController {
 
     private final IngestService ingestService;
     private final PgVectorRepository pgVector;
+    private final ProjectService projectService;
 
-    public DocumentController(IngestService ingestService, PgVectorRepository pgVector) {
+    public DocumentController(IngestService ingestService,
+                              PgVectorRepository pgVector,
+                              ProjectService projectService) {
         this.ingestService = ingestService;
         this.pgVector = pgVector;
+        this.projectService = projectService;
     }
 
     @PostMapping(value = "/documents", consumes = MediaType.MULTIPART_FORM_DATA_VALUE)
@@ -46,12 +51,12 @@ public class DocumentController {
 
     @GetMapping("/documents")
     public List<DocumentSummary> list() {
-        return pgVector.listDocuments();
+        return pgVector.listDocuments(projectService.defaultProjectId());
     }
 
     @GetMapping("/documents/{docId}/chunks")
     public List<ChunkView> chunks(@PathVariable String docId) {
-        return pgVector.listChunks(docId);
+        return pgVector.listChunks(projectService.defaultProjectId(), docId);
     }
 
     @DeleteMapping("/documents/{docId}")

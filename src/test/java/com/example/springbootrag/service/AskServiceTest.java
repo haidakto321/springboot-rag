@@ -4,6 +4,7 @@ import com.example.springbootrag.chat.ChatProvider;
 import com.example.springbootrag.config.ChatProperties;
 import com.example.springbootrag.model.SearchHit;
 import com.example.springbootrag.web.dto.AskResponse;
+import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 
 import java.util.List;
@@ -11,15 +12,17 @@ import java.util.List;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.anyInt;
+import static org.mockito.ArgumentMatchers.anyList;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.mock;
-import static org.mockito.Mockito.when;
 import static org.mockito.Mockito.verifyNoInteractions;
+import static org.mockito.Mockito.when;
 
 class AskServiceTest {
 
     private final SearchService searchService = mock(SearchService.class);
+    private final ProjectService projectService = mock(ProjectService.class);
 
     /** Captures prompts and returns a canned answer. */
     static class FakeChat implements ChatProvider {
@@ -34,11 +37,17 @@ class AskServiceTest {
 
     private final FakeChat chat = new FakeChat();
     private final ChatProperties props = new ChatProperties();
-    private final AskService askService = new AskService(searchService, chat, props);
+    private AskService askService;
+
+    @BeforeEach
+    void setup() {
+        when(projectService.defaultProjectId()).thenReturn(1L);
+        askService = new AskService(searchService, chat, props, projectService);
+    }
 
     @Test
     void buildsNumberedContextAndReturnsSources() {
-        when(searchService.search(eq("rerank"), anyString(), anyInt())).thenReturn(List.of(
+        when(searchService.search(eq("rerank"), anyString(), anyInt(), anyList(), anyList())).thenReturn(List.of(
                 new SearchHit(1, "doc-a", 0, "chunk one text", "a.md", "# A > ## S", 0.9),
                 new SearchHit(2, "doc-b", 3, "chunk two text", "b.md", null, 0.7)));
 
@@ -59,10 +68,10 @@ class AskServiceTest {
     }
 
     @Test
-    void emptyRetrievalShortCircuitsWithoutCallingLlm(){
-        when(searchService.search(eq("rerank"), anyString(), anyInt())).thenReturn(List.of());
+    void emptyRetrievalShortCircuitsWithoutCallingLlm() {
+        when(searchService.search(eq("rerank"), anyString(), anyInt(), anyList(), anyList())).thenReturn(List.of());
         ChatProvider mockChat = mock(ChatProvider.class);
-        AskService svc = new AskService(searchService, mockChat, props);
+        AskService svc = new AskService(searchService, mockChat, props, projectService);
 
         AskResponse resp = svc.ask("anything?");
 

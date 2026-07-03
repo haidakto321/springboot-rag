@@ -22,19 +22,29 @@ public class AskService {
     private final SearchService searchService;
     private final ChatProvider chat;
     private final ChatProperties props;
+    private final ProjectService projectService;
 
-    public AskService(SearchService searchService, ChatProvider chat, ChatProperties props) {
+    public AskService(SearchService searchService, ChatProvider chat,
+                      ChatProperties props, ProjectService projectService) {
         this.searchService = searchService;
         this.chat = chat;
         this.props = props;
+        this.projectService = projectService;
     }
 
+    /** Legacy single-question entry point: scopes to the default project. */
     public AskResponse ask(String question) {
+        return ask(question, List.of(projectService.defaultProjectId()));
+    }
+
+    /** Ask scoped to a specific set of projects (empty = all projects). */
+    public AskResponse ask(String question, List<Long> projectIds) {
         if (question == null || question.isBlank()) {
             throw new IllegalArgumentException("question is required");
         }
         // "rerank" = hybrid + reranker; with no reranker configured it degrades to plain hybrid.
-        List<SearchHit> hits = searchService.search("rerank", question, props.getContextChunks());
+        List<SearchHit> hits = searchService.search("rerank", question, props.getContextChunks(),
+                projectIds, List.of());
         if (hits.isEmpty()) {
             return new AskResponse("No relevant chunks found in the knowledge base.", List.of());
         }

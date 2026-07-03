@@ -13,6 +13,7 @@ import java.util.List;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyList;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.when;
@@ -32,8 +33,8 @@ class SearchServiceRerankTest {
 
         when(embeddings.embed("q")).thenReturn(new float[]{0.1f});
         // Same list from both arms so hybrid order is deterministic: 1,2,3
-        when(fts.search(eq("q"), eq(50), any())).thenReturn(List.of(hit(1), hit(2), hit(3)));
-        when(pgVector.search(eq(new float[]{0.1f}), eq(50), any())).thenReturn(List.of(hit(1), hit(2), hit(3)));
+        when(fts.search(eq("q"), eq(50), anyList(), any())).thenReturn(List.of(hit(1), hit(2), hit(3)));
+        when(pgVector.search(eq(new float[]{0.1f}), eq(50), anyList(), any())).thenReturn(List.of(hit(1), hit(2), hit(3)));
 
         RerankProperties props = new RerankProperties();
         props.setCandidates(50);

@@ -41,8 +41,14 @@ public class ChatService {
     /**
      * Retrieves for the latest question, streams the answer via {@code onToken}, and returns
      * the citation sources. Sources are known before generation, so the caller may emit them first.
+     *
+     * @param projectIds optional project scope (empty = all projects)
+     * @param docIds optional document scope (empty = all documents)
      */
-    public List<AskResponse.Source> chatStream(List<ChatMessage> history, List<String> docIds, Consumer<String> onToken) {
+    public List<AskResponse.Source> chatStream(List<ChatMessage> history,
+                                               List<Long> projectIds,
+                                               List<String> docIds,
+                                               Consumer<String> onToken) {
         if (history == null || history.isEmpty()) {
             throw new IllegalArgumentException("messages are required");
         }
@@ -63,8 +69,10 @@ public class ChatService {
             retrievalQuery = condenseQuery(prior, last.content());
         }
 
-        List<String> scope = docIds == null ? List.of() : docIds;
-        List<SearchHit> hits = searchService.search("rerank", retrievalQuery, props.getContextChunks(), scope);
+        List<Long> pScope = projectIds == null ? List.of() : projectIds;
+        List<String> dScope = docIds == null ? List.of() : docIds;
+        List<SearchHit> hits = searchService.search("rerank", retrievalQuery,
+                props.getContextChunks(), pScope, dScope);
         if (hits.isEmpty()) {
             onToken.accept("No relevant chunks found in the knowledge base.");
             return List.of();
