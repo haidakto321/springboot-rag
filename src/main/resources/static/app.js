@@ -52,6 +52,227 @@ $('#theme-toggle').addEventListener('click', () => {
     applyTheme(theme);
 });
 
+// ---------- Projects ----------
+
+let activeProjectId = null;
+
+// Helper for Task 11: prefix any path with /projects/{activeProjectId}.
+function projectFetch(path, opts) {
+    return fetch(`/projects/${activeProjectId}${path}`, opts);
+}
+
+async function loadProjects() {
+    const res = await fetch('/projects');
+    if (!res.ok) return;
+    const projects = await res.json();
+
+    const sel = $('#project-select');
+    sel.innerHTML = '';
+
+    // Group projects by groupName
+    const grouped = {};
+    const ungrouped = [];
+    for (const p of projects) {
+        if (p.groupName) {
+            if (!grouped[p.groupName]) grouped[p.groupName] = [];
+            grouped[p.groupName].push(p);
+        } else {
+            ungrouped.push(p);
+        }
+    }
+
+    for (const [grp, list] of Object.entries(grouped)) {
+        const og = document.createElement('optgroup');
+        og.label = grp;
+        for (const p of list) {
+            const o = document.createElement('option');
+            o.value = p.id;
+            o.textContent = p.name;
+            og.appendChild(o);
+        }
+        sel.appendChild(og);
+    }
+
+    if (ungrouped.length) {
+        const og = document.createElement('optgroup');
+        og.label = 'No group';
+        for (const p of ungrouped) {
+            const o = document.createElement('option');
+            o.value = p.id;
+            o.textContent = p.name;
+            og.appendChild(o);
+        }
+        sel.appendChild(og);
+    }
+
+    // Restore active project: localStorage -> "Default" -> first
+    const saved = localStorage.getItem('kb-project');
+    let target = projects.find((p) => String(p.id) === String(saved));
+    if (!target) target = projects.find((p) => p.name === 'Default');
+    if (!target && projects.length) target = projects[0];
+
+    if (target) {
+        sel.value = String(target.id);
+        activeProjectId = String(target.id);
+        localStorage.setItem('kb-project', activeProjectId);
+    }
+
+    refreshDocs();
+}
+
+async function loadGroups() {
+    try {
+        const res = await fetch('/groups');
+        if (!res.ok) return;
+        const groups = await res.json();
+        const dl = $('#group-list');
+        dl.innerHTML = '';
+        for (const g of groups) {
+            const o = document.createElement('option');
+            o.value = g;
+            dl.appendChild(o);
+        }
+    } catch (_) {}
+}
+
+async function renderModalProjectList() {
+    const res = await fetch('/projects');
+    if (!res.ok) return;
+    const projects = await res.json();
+    const list = $('#modal-project-list');
+    list.innerHTML = '';
+
+    if (!projects.length) {
+        list.innerHTML = '<div class="empty-line">No projects yet.</div>';
+        return;
+    }
+
+    for (const p of projects) {
+        const row = document.createElement('div');
+        row.className = 'pm-row';
+
+        const nameIn = document.createElement('input');
+        nameIn.type = 'text';
+        nameIn.className = 'pm-input pm-name';
+        nameIn.value = p.name;
+        nameIn.autocomplete = 'off';
+
+        const groupIn = document.createElement('input');
+        groupIn.type = 'text';
+        groupIn.className = 'pm-input pm-group';
+        groupIn.setAttribute('list', 'group-list');
+        groupIn.value = p.groupName || '';
+        groupIn.placeholder = 'No group';
+        groupIn.autocomplete = 'off';
+
+        const saveBtn = document.createElement('button');
+        saveBtn.type = 'button';
+        saveBtn.className = 'btn-pm-save';
+        saveBtn.textContent = 'Save';
+        saveBtn.onclick = async () => {
+            const newName = nameIn.value.trim();
+            const newGroup = groupIn.value.trim() || null;
+            if (!newName) return;
+            const patch = {};
+            if (newName !== p.name) patch.name = newName;
+            const oldGroup = p.groupName || null;
+            if (newGroup !== oldGroup) patch.groupName = newGroup;
+            if (!Object.keys(patch).length) return;
+            const r = await fetch(`/projects/${p.id}`, {
+                method: 'PATCH',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(patch),
+            });
+            if (r.ok) {
+                toast('Project updated');
+                await loadProjects();
+                await loadGroups();
+                await renderModalProjectList();
+            } else {
+                toast('Update failed', 'error');
+            }
+        };
+
+        const delBtn = document.createElement('button');
+        delBtn.type = 'button';
+        delBtn.className = 'btn-pm-delete';
+        delBtn.textContent = 'Delete';
+        delBtn.onclick = async () => {
+            if (!confirm(`Delete "${p.name}"?`)) return;
+            const r = await fetch(`/projects/${p.id}`, { method: 'DELETE' });
+            if (r.ok) {
+                toast('Project deleted');
+                await loadProjects();
+                await renderModalProjectList();
+            } else {
+                toast('Delete failed', 'error');
+            }
+        };
+
+        row.appendChild(nameIn);
+        row.appendChild(groupIn);
+        row.appendChild(saveBtn);
+        row.appendChild(delBtn);
+        list.appendChild(row);
+    }
+}
+
+async function openProjectModal() {
+    await Promise.all([loadGroups(), renderModalProjectList()]);
+    $('#project-modal').hidden = false;
+}
+
+function closeProjectModal() {
+    $('#project-modal').hidden = true;
+}
+
+$('#ps-new').addEventListener('click', async () => {
+    await openProjectModal();
+    $('#pc-name').focus();
+});
+
+$('#ps-manage').addEventListener('click', openProjectModal);
+
+$('#modal-close').addEventListener('click', closeProjectModal);
+
+$('#project-modal').addEventListener('click', (e) => {
+    if (e.target === $('#project-modal')) closeProjectModal();
+});
+
+$('#project-select').addEventListener('change', () => {
+    activeProjectId = $('#project-select').value;
+    localStorage.setItem('kb-project', activeProjectId);
+    // Clear search results and chat thread
+    $('#search-results').hidden = true;
+    lastHits = [];
+    lastQuery = '';
+    chatMessages.length = 0;
+    renderThread();
+    refreshDocs();
+});
+
+$('#project-create-form').addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const name = $('#pc-name').value.trim();
+    const group = $('#pc-group').value.trim() || null;
+    if (!name) return;
+    const r = await fetch('/projects', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ name, groupName: group }),
+    });
+    if (r.ok) {
+        toast('Project created');
+        $('#pc-name').value = '';
+        $('#pc-group').value = '';
+        await loadProjects();
+        await loadGroups();
+        await renderModalProjectList();
+    } else {
+        toast('Create failed', 'error');
+    }
+});
+
 // ---------- Document scope (filter) ----------
 
 let allDocIds = [];
@@ -732,4 +953,4 @@ document.addEventListener('keydown', (e) => {
     $('#search-q').focus();
 });
 
-refreshDocs();
+loadProjects();

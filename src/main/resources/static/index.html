@@ -20,6 +20,14 @@
         </div>
     </div>
 
+    <div class="project-switcher">
+        <select id="project-select"></select>
+        <div class="project-switcher-btns">
+            <button class="btn-ps-new" id="ps-new" type="button">&#xFF0B; New</button>
+            <button class="btn-ps-manage" id="ps-manage" type="button">Manage</button>
+        </div>
+    </div>
+
     <nav class="nav">
         <div class="nav-label">Workspace</div>
         <button class="nav-btn active" id="nav-docs">
@@ -189,6 +197,28 @@
         <div id="compare-grid" class="compare-grid" hidden></div>
     </div>
 </main>
+
+<div class="modal" id="project-modal" hidden>
+    <div class="modal-card">
+        <div class="modal-head">
+            <span class="modal-title">Projects</span>
+            <button class="modal-close" id="modal-close" type="button">&times;</button>
+        </div>
+        <div class="modal-section">
+            <div class="modal-section-title">Create project</div>
+            <form id="project-create-form" class="pm-create-form">
+                <input class="pm-input" type="text" id="pc-name" placeholder="Project name" required autocomplete="off">
+                <input class="pm-input" type="text" id="pc-group" list="group-list" placeholder="Group (optional)" autocomplete="off">
+                <datalist id="group-list"></datalist>
+                <button class="btn-primary btn-pm-create" type="submit">Create</button>
+            </form>
+        </div>
+        <div class="modal-section">
+            <div class="modal-section-title">Existing projects</div>
+            <div id="modal-project-list"></div>
+        </div>
+    </div>
+</div>
 
 <div id="toast-host"></div>
 
