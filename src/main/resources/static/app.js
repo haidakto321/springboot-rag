@@ -55,6 +55,9 @@ $('#theme-toggle').addEventListener('click', () => {
 // ---------- Projects ----------
 
 let activeProjectId = null;
+let activeProjectGroup = null;   // groupName of the active project, or null
+let groupSearchEnabled = false;  // bound to both group-toggle checkboxes
+let projectsCache = [];          // full project list, kept fresh by loadProjects()
 
 // Helper for Task 11: prefix any path with /projects/{activeProjectId}.
 function projectFetch(path, opts) {
@@ -65,6 +68,7 @@ async function loadProjects() {
     const res = await fetch('/projects');
     if (!res.ok) return;
     const projects = await res.json();
+    projectsCache = projects;
 
     const sel = $('#project-select');
     sel.innerHTML = '';
@@ -114,10 +118,12 @@ async function loadProjects() {
     if (target) {
         sel.value = String(target.id);
         activeProjectId = String(target.id);
+        activeProjectGroup = target.groupName || null;
         localStorage.setItem('kb-project', activeProjectId);
     }
 
     refreshDocs();
+    updateGroupToggleVisibility();
 }
 
 async function loadGroups() {
@@ -247,6 +253,13 @@ $('#project-modal').addEventListener('click', (e) => {
 
 $('#project-select').addEventListener('change', () => {
     activeProjectId = $('#project-select').value;
+    const found = projectsCache.find((p) => String(p.id) === activeProjectId);
+    activeProjectGroup = found ? (found.groupName || null) : null;
+    // Reset group toggle on project switch
+    groupSearchEnabled = false;
+    $('#group-search-q').checked = false;
+    $('#group-search-c').checked = false;
+    updateGroupToggleVisibility();
     localStorage.setItem('kb-project', activeProjectId);
     // Clear search results and chat thread
     $('#search-results').hidden = true;
@@ -309,7 +322,8 @@ function scopeDocIds() {
 }
 
 function renderScopeChips() {
-    const show = allDocIds.length > 1;
+    // Show scope bar when there are multiple docs to filter, or when a group toggle is visible
+    const show = allDocIds.length > 1 || !!activeProjectGroup;
     for (const [barId, chipsId] of [['query-scope', 'query-scope-chips'], ['compare-scope', 'compare-scope-chips']]) {
         $('#' + barId).hidden = !show;
         const host = $('#' + chipsId);
@@ -328,10 +342,37 @@ function renderScopeChips() {
     }
 }
 
+// Show/hide the "Search whole group" toggle labels and update their text.
+// Called after activeProjectGroup is set (loadProjects, select-change).
+function updateGroupToggleVisibility() {
+    const show = !!activeProjectGroup;
+    for (const [labelId, nameId, cbId] of [
+        ['group-toggle-q', 'group-name-q', 'group-search-q'],
+        ['group-toggle-c', 'group-name-c', 'group-search-c'],
+    ]) {
+        const label = $('#' + labelId);
+        if (!label) continue;
+        label.hidden = !show;
+        if (show) $('#' + nameId).textContent = activeProjectGroup;
+        $('#' + cbId).checked = groupSearchEnabled;
+    }
+    // Refresh scope bar visibility because it also depends on group state
+    renderScopeChips();
+}
+
+$('#group-search-q').addEventListener('change', (e) => {
+    groupSearchEnabled = e.target.checked;
+    $('#group-search-c').checked = groupSearchEnabled;
+});
+$('#group-search-c').addEventListener('change', (e) => {
+    groupSearchEnabled = e.target.checked;
+    $('#group-search-q').checked = groupSearchEnabled;
+});
+
 // ---------- Documents + stats ----------
 
 async function refreshDocs() {
-    const res = await fetch('/documents');
+    const res = await projectFetch('/documents');
     const docs = await res.json();
     const list = $('#doc-list');
     list.innerHTML = '';
@@ -362,7 +403,7 @@ async function refreshDocs() {
         delBtn.textContent = 'Delete';
         delBtn.onclick = async () => {
             if (!confirm(`Delete document "${d.docId}"?`)) return;
-            await fetch(`/documents/${encodeURIComponent(d.docId)}`, { method: 'DELETE' });
+            await projectFetch('/documents/' + encodeURIComponent(d.docId), { method: 'DELETE' });
             refreshDocs();
         };
 
@@ -383,10 +424,13 @@ async function refreshDocs() {
     syncScope(docs.map((d) => d.docId));
 }
 
-// Append &docIds=... for each scoped document (nothing when unscoped).
+// Append &docIds=..., &projectId=..., and &group=... to a search/compare URL.
 function appendScope(url) {
     const ids = scopeDocIds();
-    return ids.reduce((u, id) => u + `&docIds=${encodeURIComponent(id)}`, url);
+    let u = ids.reduce((acc, id) => acc + '&docIds=' + encodeURIComponent(id), url);
+    u += '&projectId=' + encodeURIComponent(activeProjectId);
+    u += '&group=' + groupSearchEnabled;
+    return u;
 }
 
 // ---------- Chunk sub-view ----------
@@ -404,7 +448,7 @@ async function showChunkView(docId, focusIndex) {
     $('#docs-list-view').hidden = true;
     $('#docs-chunk-view').hidden = false;
 
-    const res = await fetch(`/documents/${encodeURIComponent(docId)}/chunks`);
+    const res = await projectFetch('/documents/' + encodeURIComponent(docId) + '/chunks');
     if (!res.ok) { $('#chunk-meta').textContent = `Error: ${res.status}`; return; }
     const chunks = await res.json();
     $('#chunk-meta').textContent = `${chunks.length} chunk${chunks.length === 1 ? '' : 's'}`;
@@ -480,7 +524,7 @@ function uploadFile(file) {
 
     const xhr = new XMLHttpRequest();
     currentXhr = xhr;
-    xhr.open('POST', '/documents');
+    xhr.open('POST', '/projects/' + activeProjectId + '/documents');
 
     xhr.upload.onprogress = (e) => {
         if (e.lengthComputable) {
@@ -812,7 +856,7 @@ $('#chat-form').addEventListener('submit', async (e) => {
         const res = await fetch('/chat/stream', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ messages: payload, docIds: scopeDocIds() }),
+            body: JSON.stringify({ messages: payload, docIds: scopeDocIds(), projectId: Number(activeProjectId), group: groupSearchEnabled }),
         });
 
         if (!res.ok || !res.body) {

@@ -7,6 +7,14 @@
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link href="https://fonts.googleapis.com/css2?family=Manrope:wght@400;500;600;700;800&display=swap" rel="stylesheet">
     <link rel="stylesheet" href="style.css">
+    <style>
+        .group-toggle {
+            display: flex; align-items: center; gap: 6px; font-size: 11.5px; font-weight: 700;
+            color: var(--muted); cursor: pointer; user-select: none; margin-left: auto;
+        }
+        .group-toggle input { accent-color: var(--ac); cursor: pointer; margin: 0; }
+        .group-toggle[hidden] { display: none; }
+    </style>
 </head>
 <body>
 
@@ -137,6 +145,7 @@
         <div class="scope-bar" id="query-scope" hidden>
             <span class="scope-label">Scope</span>
             <div class="scope-chips" id="query-scope-chips"></div>
+            <label class="group-toggle" id="group-toggle-q" hidden><input type="checkbox" id="group-search-q"> Search whole group (<span id="group-name-q"></span>)</label>
         </div>
         <section class="card">
             <div class="card-head"><h2>Search</h2></div>
@@ -179,6 +188,7 @@
         <div class="scope-bar" id="compare-scope" hidden>
             <span class="scope-label">Scope</span>
             <div class="scope-chips" id="compare-scope-chips"></div>
+            <label class="group-toggle" id="group-toggle-c" hidden><input type="checkbox" id="group-search-c"> Search whole group (<span id="group-name-c"></span>)</label>
         </div>
         <section class="card">
             <div class="card-head"><h2>Compare backends</h2>
