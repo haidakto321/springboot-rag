@@ -67,6 +67,9 @@ class ProjectRepositoryIntegrationTest {
     @BeforeEach
     void cleanup() {
         jdbc.update("DELETE FROM chunks WHERE doc_id = 'd'");
+        // Remove test projects created in previous tests; preserve the seeded Default project.
+        // Chunks belonging to deleted projects cascade via FK.
+        jdbc.update("DELETE FROM projects WHERE name <> 'Default'");
     }
 
     @Test
@@ -84,12 +87,18 @@ class ProjectRepositoryIntegrationTest {
         repo.setGroup(solo, "MyApp");
         assertThat(repo.idsInGroup("MyApp")).contains(solo);
 
+        // Verify that setGroup(null) actually clears the group.
+        repo.setGroup(fe, null);
+        assertThat(repo.find(fe).orElseThrow().groupName()).isNull();
+
         repo.delete(be);
         assertThat(repo.find(be)).isEmpty();
     }
 
     @Test
     void listWithCountsReportsDocAndChunkTotals() {
+        // "A" in group "Alpha" must sort before "P" with no group (ORDER BY group_name NULLS LAST, name).
+        long a = repo.create("A", "Alpha");
         long p = repo.create("P", null);
         String embedding = "[" + "0,".repeat(767) + "0]";
         jdbc.update(
@@ -99,7 +108,13 @@ class ProjectRepositoryIntegrationTest {
             "INSERT INTO chunks (project_id, doc_id, chunk_index, content, embedding) VALUES (?,?,?,?, ?::vector)",
             p, "d", 1, "more text body", embedding);
 
-        ProjectSummary s = repo.listWithCounts().stream()
+        var list = repo.listWithCounts();
+
+        // Assert ordering: grouped project "A" (Alpha) comes before ungrouped project "P" (NULLS LAST).
+        var names = list.stream().map(ProjectSummary::name).toList();
+        assertThat(names.indexOf("A")).isLessThan(names.indexOf("P"));
+
+        ProjectSummary s = list.stream()
             .filter(x -> x.id() == p).findFirst().orElseThrow();
         assertThat(s.docCount()).isEqualTo(1);
         assertThat(s.chunkCount()).isEqualTo(2);

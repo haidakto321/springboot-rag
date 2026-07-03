@@ -67,6 +67,7 @@ public class ProjectRepository {
             String.class);
     }
 
+    /** A null groupName returns an empty list (SQL: group_name = NULL is never true). */
     public List<Long> idsInGroup(String groupName) {
         return jdbc.queryForList(
             "SELECT id FROM projects WHERE group_name = ?",
