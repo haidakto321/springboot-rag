@@ -80,4 +80,47 @@ class ProjectSchemaIntegrationTest {
             String.class);
         assertThat(defaultName).isEqualTo("Default");
     }
+
+    @Test
+    void nullProjectRowsAreBackfilledToDefault() {
+        // Clean up any leftover rows from a previous interrupted run
+        jdbc.update("DELETE FROM chunks WHERE doc_id = 'backfill-test'");
+
+        // Disable the trigger so we can insert a chunk with NULL project_id directly
+        jdbc.execute("ALTER TABLE chunks DISABLE TRIGGER trg_chunks_default_project");
+        try {
+            String embedding = "[" + "0,".repeat(767) + "0]";
+            jdbc.update(
+                "INSERT INTO chunks (doc_id, chunk_index, content, embedding, project_id) " +
+                "VALUES ('backfill-test', 0, 'backfill content', '" + embedding + "'::vector, NULL)"
+            );
+        } finally {
+            jdbc.execute("ALTER TABLE chunks ENABLE TRIGGER trg_chunks_default_project");
+        }
+
+        // Confirm the row is still NULL before we run the backfill
+        Integer nullBefore = jdbc.queryForObject(
+            "SELECT count(*) FROM chunks WHERE doc_id = 'backfill-test' AND project_id IS NULL",
+            Integer.class);
+        assertThat(nullBefore).isEqualTo(1);
+
+        // Run the same backfill UPDATE that schema.sql applies on startup
+        jdbc.update(
+            "UPDATE chunks SET project_id = " +
+            "(SELECT id FROM projects WHERE name = 'Default' ORDER BY id LIMIT 1) " +
+            "WHERE project_id IS NULL"
+        );
+
+        // Assert the row now points at the Default project
+        Long defaultId = jdbc.queryForObject(
+            "SELECT id FROM projects WHERE name = 'Default' ORDER BY id LIMIT 1",
+            Long.class);
+        Long rowProjectId = jdbc.queryForObject(
+            "SELECT project_id FROM chunks WHERE doc_id = 'backfill-test'",
+            Long.class);
+        assertThat(rowProjectId).isEqualTo(defaultId);
+
+        // Cleanup
+        jdbc.update("DELETE FROM chunks WHERE doc_id = 'backfill-test'");
+    }
 }

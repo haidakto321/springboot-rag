@@ -54,13 +54,16 @@ CREATE OR REPLACE FUNCTION fn_chunks_default_project()
 RETURNS TRIGGER LANGUAGE plpgsql AS '
 BEGIN
     IF NEW.project_id IS NULL THEN
+        RAISE WARNING ''chunks INSERT missing project_id; defaulting to Default project'';
         SELECT id INTO NEW.project_id FROM projects WHERE name = ''Default'' ORDER BY id LIMIT 1;
+        IF NEW.project_id IS NULL THEN
+            RAISE EXCEPTION ''Default project missing from projects table'';
+        END IF;
     END IF;
     RETURN NEW;
 END;
 ';
 
-DROP TRIGGER IF EXISTS trg_chunks_default_project ON chunks;
-CREATE TRIGGER trg_chunks_default_project
+CREATE OR REPLACE TRIGGER trg_chunks_default_project
     BEFORE INSERT ON chunks
     FOR EACH ROW EXECUTE FUNCTION fn_chunks_default_project();
