@@ -135,10 +135,12 @@ async function loadGroups() {
     } catch (_) {}
 }
 
-async function renderModalProjectList() {
-    const res = await fetch('/projects');
-    if (!res.ok) return;
-    const projects = await res.json();
+async function renderModalProjectList(projects) {
+    if (!projects) {
+        const res = await fetch('/projects');
+        if (!res.ok) return;
+        projects = await res.json();
+    }
     const list = $('#modal-project-list');
     list.innerHTML = '';
 
@@ -178,19 +180,21 @@ async function renderModalProjectList() {
             const oldGroup = p.groupName || null;
             if (newGroup !== oldGroup) patch.groupName = newGroup;
             if (!Object.keys(patch).length) return;
-            const r = await fetch(`/projects/${p.id}`, {
-                method: 'PATCH',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify(patch),
-            });
-            if (r.ok) {
-                toast('Project updated');
-                await loadProjects();
-                await loadGroups();
-                await renderModalProjectList();
-            } else {
-                toast('Update failed', 'error');
-            }
+            try {
+                const r = await fetch(`/projects/${p.id}`, {
+                    method: 'PATCH',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(patch),
+                });
+                if (r.ok) {
+                    toast('Project updated');
+                    await loadProjects();
+                    await loadGroups();
+                    await renderModalProjectList();
+                } else {
+                    toast('Update failed', 'error');
+                }
+            } catch (_) { toast('Network error', 'error'); }
         };
 
         const delBtn = document.createElement('button');
@@ -199,14 +203,16 @@ async function renderModalProjectList() {
         delBtn.textContent = 'Delete';
         delBtn.onclick = async () => {
             if (!confirm(`Delete "${p.name}"?`)) return;
-            const r = await fetch(`/projects/${p.id}`, { method: 'DELETE' });
-            if (r.ok) {
-                toast('Project deleted');
-                await loadProjects();
-                await renderModalProjectList();
-            } else {
-                toast('Delete failed', 'error');
-            }
+            try {
+                const r = await fetch(`/projects/${p.id}`, { method: 'DELETE' });
+                if (r.ok) {
+                    toast('Project deleted');
+                    await loadProjects();
+                    await renderModalProjectList();
+                } else {
+                    toast('Delete failed', 'error');
+                }
+            } catch (_) { toast('Network error', 'error'); }
         };
 
         row.appendChild(nameIn);
@@ -256,21 +262,25 @@ $('#project-create-form').addEventListener('submit', async (e) => {
     const name = $('#pc-name').value.trim();
     const group = $('#pc-group').value.trim() || null;
     if (!name) return;
-    const r = await fetch('/projects', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ name, groupName: group }),
-    });
-    if (r.ok) {
-        toast('Project created');
-        $('#pc-name').value = '';
-        $('#pc-group').value = '';
-        await loadProjects();
-        await loadGroups();
-        await renderModalProjectList();
-    } else {
-        toast('Create failed', 'error');
-    }
+    try {
+        const r = await fetch('/projects', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ name, groupName: group }),
+        });
+        if (r.ok) {
+            const data = await r.json();
+            toast('Project created');
+            $('#pc-name').value = '';
+            $('#pc-group').value = '';
+            localStorage.setItem('kb-project', String(data.id));
+            await loadProjects();
+            await loadGroups();
+            await renderModalProjectList();
+        } else {
+            toast('Create failed', 'error');
+        }
+    } catch (_) { toast('Network error', 'error'); }
 });
 
 // ---------- Document scope (filter) ----------
