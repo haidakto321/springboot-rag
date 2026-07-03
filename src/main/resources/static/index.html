@@ -133,7 +133,8 @@
         <section class="card">
             <div class="card-head"><h2>Search</h2></div>
             <form class="query-row" id="search-form">
-                <input type="text" class="q-input" id="search-q" placeholder="Search chunks..." required>
+                <input type="text" class="q-input" id="search-q" placeholder="Search chunks..." list="recent-list" autocomplete="off" required>
+                <datalist id="recent-list"></datalist>
                 <select class="q-select" id="search-type">
                     <option value="hybrid" selected>Hybrid</option>
                     <option value="rerank">Rerank</option>
@@ -149,6 +150,7 @@
                     <label class="hl-toggle"><input type="checkbox" id="hl-toggle" checked> Highlight terms</label>
                 </div>
                 <div id="search-hits"></div>
+                <button class="btn-more" id="search-more" type="button" hidden>Load more</button>
             </div>
         </section>
 

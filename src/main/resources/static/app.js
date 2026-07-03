@@ -300,6 +300,9 @@ dropArea.addEventListener('drop', (e) => {
 
 let lastHits = [];
 let lastQuery = '';
+let searchTopK = 10;
+const SNIPPET_WINDOW = 260;
+const expandedHits = new Set();   // hit ids whose snippet is expanded to full
 
 // Highlight state, persisted like theme.
 const hlToggle = $('#hl-toggle');
@@ -322,18 +325,46 @@ function highlightSnippet(text) {
     return safe.replace(rx, '<mark>$1</mark>');
 }
 
+// Best-matching passage window: center on the first query-term match, else the start.
+function windowSnippet(content) {
+    if (content.length <= SNIPPET_WINDOW) return { text: content, truncated: false };
+    const terms = lastQuery.toLowerCase().split(/\s+/).filter((t) => t.length >= 2);
+    const lc = content.toLowerCase();
+    let at = -1;
+    for (const t of terms) { const i = lc.indexOf(t); if (i >= 0 && (at < 0 || i < at)) at = i; }
+    const start = at < 0 ? 0 : Math.max(0, at - 60);
+    let text = content.slice(start, start + SNIPPET_WINDOW);
+    if (start > 0) text = '…' + text;
+    if (start + SNIPPET_WINDOW < content.length) text = text + '…';
+    return { text, truncated: true };
+}
+
 function renderHits() {
     const hitsEl = $('#search-hits');
     hitsEl.innerHTML = '';
-    if (!lastHits.length) { hitsEl.innerHTML = '<div class="empty-line">No results.</div>'; return; }
-
+    if (!lastHits.length) {
+        const type = $('#search-type').value;
+        const tip = type === 'fts'
+            ? ' Try a semantic mode (pgvector / qdrant / hybrid) for meaning-based matches.'
+            : (type === 'pgvector' || type === 'qdrant')
+                ? ' Try hybrid or keyword (FTS) for exact terms and codes.'
+                : '';
+        hitsEl.innerHTML = `<div class="empty-line">No results.${tip}</div>`;
+        return;
+    }
     const maxScore = Math.max(...lastHits.map((h) => h.score), 0.0001);
     for (const h of lastHits) {
         const pct = Math.round((h.score / maxScore) * 100);
+        const expanded = expandedHits.has(h.id);
+        const win = windowSnippet(h.content);
+        const snippet = expanded ? highlightSnippet(h.content) : highlightSnippet(win.text);
+        const toggle = win.truncated
+            ? `<button class="snippet-toggle" data-id="${h.id}" type="button">${expanded ? 'Show less' : 'Show full'}</button>`
+            : '';
         const row = document.createElement('div');
         row.className = 'result-row clickable';
         row.title = 'Open in document';
-        row.onclick = () => openInContext(h.docId, h.chunkIndex);
+        row.onclick = (e) => { if (e.target.closest('.snippet-toggle')) return; openInContext(h.docId, h.chunkIndex); };
         row.innerHTML = `
             <div class="result-main">
                 <div class="result-title-line">
@@ -341,7 +372,8 @@ function renderHits() {
                     ${h.headingPath ? `<span class="result-heading">${esc(h.headingPath)}</span>` : ''}
                     <span class="open-cue">open ↗</span>
                 </div>
-                <div class="result-snippet">${highlightSnippet(h.content)}</div>
+                <div class="result-snippet">${snippet}</div>
+                ${toggle}
             </div>
             <div class="result-score">
                 <span class="result-score-val">${h.score.toFixed(3)}</span>
@@ -351,31 +383,78 @@ function renderHits() {
     }
 }
 
-$('#search-form').addEventListener('submit', async (e) => {
-    e.preventDefault();
+// Delegated: expand/collapse a snippet without triggering the row's open-in-context.
+$('#search-hits').addEventListener('click', (e) => {
+    const t = e.target.closest('.snippet-toggle');
+    if (!t) return;
+    const id = Number(t.dataset.id);
+    if (expandedHits.has(id)) expandedHits.delete(id); else expandedHits.add(id);
+    renderHits();
+});
+
+// ---------- Recent searches (localStorage) ----------
+
+function recentSearches() {
+    try { return JSON.parse(localStorage.getItem('kb-recent') || '[]'); } catch (_) { return []; }
+}
+function recordRecent(q) {
+    const list = recentSearches().filter((x) => x !== q);
+    list.unshift(q);
+    localStorage.setItem('kb-recent', JSON.stringify(list.slice(0, 8)));
+    renderRecent();
+}
+function renderRecent() {
+    const dl = $('#recent-list');
+    dl.innerHTML = '';
+    for (const q of recentSearches()) {
+        const o = document.createElement('option');
+        o.value = q;
+        dl.appendChild(o);
+    }
+}
+renderRecent();
+
+// ---------- Search runner (pagination + debounce) ----------
+
+async function runSearch(reset, record) {
     const q = $('#search-q').value;
     const type = $('#search-type').value;
+    if (!q.trim()) return;
+    if (reset) { searchTopK = 10; expandedHits.clear(); }
+
     const area = $('#search-results');
     const meta = $('#search-meta');
-
     area.hidden = false;
     meta.textContent = 'Searching…';
-    $('#search-hits').innerHTML = '';
 
     const t0 = performance.now();
-    const res = await fetch(appendScope(`/search?q=${encodeURIComponent(q)}&type=${type}&topK=10`));
+    const res = await fetch(appendScope(`/search?q=${encodeURIComponent(q)}&type=${type}&topK=${searchTopK}`));
     const ms = Math.round(performance.now() - t0);
 
     if (!res.ok) {
         let detail = res.status;
         try { detail = (await res.json()).detail ?? detail; } catch (_) {}
         meta.textContent = `Error: ${detail}`;
+        $('#search-more').hidden = true;
         return;
     }
     lastHits = await res.json();
     lastQuery = q;
     meta.textContent = `${lastHits.length} result${lastHits.length === 1 ? '' : 's'} · ${ms} ms`;
     renderHits();
+    // Heuristic: a full page back means there may be more.
+    $('#search-more').hidden = !(lastHits.length > 0 && lastHits.length === searchTopK);
+    if (record) recordRecent(q);
+}
+
+$('#search-form').addEventListener('submit', (e) => { e.preventDefault(); runSearch(true, true); });
+$('#search-more').addEventListener('click', () => { searchTopK += 10; runSearch(false, false); });
+
+let searchDebounce;
+$('#search-q').addEventListener('input', () => {
+    clearTimeout(searchDebounce);
+    if ($('#search-q').value.trim().length < 2) return;
+    searchDebounce = setTimeout(() => runSearch(true, false), 450);   // live search; recorded only on submit
 });
 
 // ---------- Chat (streaming, multi-turn) ----------
@@ -407,16 +486,64 @@ function renderThread() {
             chips.className = 'chips';
             for (const s of m.sources) {
                 const label = s.headingPath ? `${s.docId} · ${s.headingPath}` : `${s.docId} · [${s.index}]`;
-                const chip = document.createElement('button');
+                const chip = document.createElement('span');
                 chip.className = 'chip';
-                chip.type = 'button';
-                chip.textContent = label;
-                chip.title = 'Click to view source chunk';
-                chip.onclick = () => toggleSource(chip, s);
+
+                const peek = document.createElement('button');
+                peek.type = 'button';
+                peek.className = 'chip-label';
+                peek.textContent = label;
+                peek.title = 'Show source chunk inline';
+                peek.onclick = () => toggleSource(chip, s);
+
+                const open = document.createElement('button');
+                open.type = 'button';
+                open.className = 'chip-open';
+                open.textContent = '↗';
+                open.title = 'Open in document';
+                open.onclick = () => openInContext(s.docId, s.chunkIndex);
+
+                chip.appendChild(peek);
+                chip.appendChild(open);
                 chips.appendChild(chip);
             }
             bubble.appendChild(chips);
         }
+
+        // Finalized assistant answers get copy + feedback actions.
+        if (m.role === 'assistant' && !m.streaming && !m.error && m.content) {
+            const actions = document.createElement('div');
+            actions.className = 'msg-actions';
+
+            const copy = document.createElement('button');
+            copy.type = 'button';
+            copy.className = 'msg-action';
+            copy.textContent = 'Copy';
+            copy.onclick = () => navigator.clipboard.writeText(m.content).then(() => toast('Answer copied'));
+
+            const up = document.createElement('button');
+            up.type = 'button';
+            up.className = 'msg-action';
+            up.textContent = '👍';
+            up.title = 'Helpful';
+            up.onclick = () => recordFeedback(m, 'up', up, down);
+
+            const down = document.createElement('button');
+            down.type = 'button';
+            down.className = 'msg-action';
+            down.textContent = '👎';
+            down.title = 'Not helpful';
+            down.onclick = () => recordFeedback(m, 'down', up, down);
+
+            if (m.feedback === 'up') up.classList.add('on');
+            if (m.feedback === 'down') down.classList.add('on');
+
+            actions.appendChild(copy);
+            actions.appendChild(up);
+            actions.appendChild(down);
+            bubble.appendChild(actions);
+        }
+
         wrap.appendChild(bubble);
         threadEl.appendChild(wrap);
     }
@@ -519,6 +646,19 @@ function toggleSource(chip, source) {
     chip._detail = pre;
 }
 
+// Local-only thumbs feedback (no backend); toggles and logs to localStorage.
+function recordFeedback(m, rating, upBtn, downBtn) {
+    m.feedback = m.feedback === rating ? null : rating;
+    upBtn.classList.toggle('on', m.feedback === 'up');
+    downBtn.classList.toggle('on', m.feedback === 'down');
+    try {
+        const log = JSON.parse(localStorage.getItem('kb-feedback') || '[]');
+        log.push({ rating: m.feedback, answer: (m.content || '').slice(0, 80), at: Date.now() });
+        localStorage.setItem('kb-feedback', JSON.stringify(log.slice(-100)));
+    } catch (_) {}
+    if (m.feedback) toast(m.feedback === 'up' ? 'Marked helpful' : 'Marked not helpful');
+}
+
 // ---------- Compare ----------
 
 // Fixed backend order, matching the /compare response.
@@ -580,6 +720,16 @@ $('#compare-form').addEventListener('submit', async (e) => {
 $('#compare-grid').addEventListener('click', (e) => {
     const row = e.target.closest('.crow');
     if (row && row.dataset.doc) openInContext(row.dataset.doc, Number(row.dataset.index));
+});
+
+// ---------- Keyboard shortcut: "/" focuses the search box ----------
+document.addEventListener('keydown', (e) => {
+    if (e.key !== '/' || e.metaKey || e.ctrlKey || e.altKey) return;
+    const tag = document.activeElement && document.activeElement.tagName;
+    if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT') return;
+    e.preventDefault();
+    showScreen('query');
+    $('#search-q').focus();
 });
 
 refreshDocs();

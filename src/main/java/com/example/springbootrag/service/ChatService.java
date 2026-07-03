@@ -79,7 +79,7 @@ public class ChatService {
         List<AskResponse.Source> sources = new ArrayList<>();
         for (int i = 0; i < hits.size(); i++) {
             SearchHit h = hits.get(i);
-            sources.add(new AskResponse.Source(i + 1, h.docId(), h.headingPath(), h.score(), h.content()));
+            sources.add(new AskResponse.Source(i + 1, h.docId(), h.headingPath(), h.score(), h.content(), h.chunkIndex()));
         }
         return sources;
     }

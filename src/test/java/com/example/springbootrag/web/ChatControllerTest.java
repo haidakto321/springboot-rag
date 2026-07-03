@@ -34,7 +34,7 @@ class ChatControllerTest {
             Consumer<String> onToken = inv.getArgument(2);
             onToken.accept("Hi");
             onToken.accept("!");
-            return List.of(new AskResponse.Source(1, "doc-a", "# H", 0.9, "chunk text"));
+            return List.of(new AskResponse.Source(1, "doc-a", "# H", 0.9, "chunk text", 4));
         });
 
         MvcResult started = mvc.perform(post("/chat/stream")
