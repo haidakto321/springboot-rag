@@ -348,6 +348,8 @@ body {
 .btn-primary:disabled { opacity: .5; cursor: default; }
 .btn-browse { padding: 8px 18px; border-radius: 8px; font-size: 13px; }
 
+#upload-list { display: flex; flex-direction: column; gap: 12px; }
+#upload-list:empty { display: none; }
 .upload-row {
   display: flex; align-items: center; gap: 14px; padding: 12px 14px;
   border: 1px solid var(--border); border-radius: 10px; background: var(--surface);

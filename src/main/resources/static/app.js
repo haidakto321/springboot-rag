@@ -489,8 +489,6 @@ $('#chunk-back').addEventListener('click', showChunkList);
 
 // ---------- Upload (with progress via XHR) ----------
 
-let currentXhr = null;
-
 // Toast notification, auto-dismisses. kind = 'success' | 'error'.
 function toast(msg, kind = 'success') {
     const el = document.createElement('div');
@@ -503,41 +501,56 @@ function toast(msg, kind = 'success') {
     }, kind === 'error' ? 4000 : 2800);
 }
 
-// The progress row is shown ONLY while an upload is in flight.
-function setUpload(name, stage, pct) {
-    $('#upload-row').hidden = false;
-    $('#upload-name').textContent = name;
-    $('#upload-stage').textContent = stage;
-    $('#upload-fill').style.width = pct + '%';
-}
-function hideUpload() {
-    $('#upload-row').hidden = true;
-    $('#upload-fill').style.width = '0%';
-    currentXhr = null;
+// Each concurrent upload gets its own row so a second dropped file never overwrites the first.
+function createUploadRow(name) {
+    const row = document.createElement('div');
+    row.className = 'upload-row';
+    row.innerHTML = `
+        <div class="upload-tile mono">MD</div>
+        <div class="upload-info">
+            <div class="upload-info-line">
+                <span class="upload-name"></span>
+                <span class="upload-stage"></span>
+            </div>
+            <div class="progress-track"><div class="progress-fill" style="width:0%"></div></div>
+        </div>
+        <button class="upload-cancel" type="button">&times;</button>`;
+    row.querySelector('.upload-name').textContent = name;
+    $('#upload-list').appendChild(row);
+    return {
+        set(stage, pct) {
+            row.querySelector('.upload-stage').textContent = stage;
+            row.querySelector('.progress-fill').style.width = pct + '%';
+        },
+        remove() { row.remove(); },
+        cancelBtn: row.querySelector('.upload-cancel'),
+    };
 }
 
 function uploadFile(file) {
     if (!file.name.endsWith('.md')) {
-        toast('Only .md files are accepted', 'error');
+        toast(`${file.name}: only .md files are accepted`, 'error');
         return;
     }
     const form = new FormData();
     form.append('file', file);
 
+    const ui = createUploadRow(file.name);
     const xhr = new XMLHttpRequest();
-    currentXhr = xhr;
     xhr.open('POST', '/projects/' + activeProjectId + '/documents');
+
+    ui.cancelBtn.addEventListener('click', () => { xhr.abort(); ui.remove(); });
 
     xhr.upload.onprogress = (e) => {
         if (e.lengthComputable) {
             const pct = Math.round((e.loaded / e.total) * 90); // reserve last 10% for embedding
-            setUpload(file.name, `Uploading · ${pct}%`, pct);
+            ui.set(`Uploading · ${pct}%`, pct);
         }
     };
-    xhr.upload.onload = () => setUpload(file.name, 'Embedding chunks…', 95);
+    xhr.upload.onload = () => ui.set('Embedding chunks…', 95);
 
     xhr.onload = () => {
-        hideUpload();
+        ui.remove();
         if (xhr.status >= 200 && xhr.status < 300) {
             const body = JSON.parse(xhr.responseText);
             toast(`Imported ${file.name} · ${body.chunksStored ?? '?'} chunks`);
@@ -546,21 +559,22 @@ function uploadFile(file) {
         } else {
             let detail = xhr.status;
             try { detail = JSON.parse(xhr.responseText).detail ?? detail; } catch (_) {}
-            toast(`Import failed: ${detail}`, 'error');
+            toast(`${file.name} import failed: ${detail}`, 'error');
         }
     };
-    xhr.onerror = () => { hideUpload(); toast('Network error during import', 'error'); };
+    xhr.onerror = () => { ui.remove(); toast(`${file.name}: network error during import`, 'error'); };
     xhr.send(form);
+}
+
+// Accept one or many files (browse or drop).
+function uploadFiles(fileList) {
+    for (const f of fileList) uploadFile(f);
 }
 
 $('#browse-btn').addEventListener('click', () => $('#file-input').click());
 $('#file-input').addEventListener('change', (e) => {
-    if (e.target.files.length) uploadFile(e.target.files[0]);
+    if (e.target.files.length) uploadFiles(e.target.files);
     e.target.value = '';
-});
-$('#upload-cancel').addEventListener('click', () => {
-    if (currentXhr) currentXhr.abort();
-    hideUpload();
 });
 
 const dropArea = $('#drop-area');
@@ -570,7 +584,7 @@ dropArea.addEventListener('dragleave', () => dropArea.classList.remove('drag'));
 dropArea.addEventListener('drop', (e) => {
     e.preventDefault();
     dropArea.classList.remove('drag');
-    if (e.dataTransfer.files.length) uploadFile(e.dataTransfer.files[0]);
+    if (e.dataTransfer.files.length) uploadFiles(e.dataTransfer.files);
 });
 
 // ---------- Search ----------

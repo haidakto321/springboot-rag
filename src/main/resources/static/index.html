@@ -90,20 +90,10 @@
                     <div class="dropzone-plus">+</div>
                     <div class="dropzone-text">Drop a <span class="mono">.md</span> file here</div>
                     <button class="btn-primary btn-browse" id="browse-btn" type="button">Browse files</button>
-                    <input type="file" id="file-input" accept=".md" hidden>
+                    <input type="file" id="file-input" accept=".md" multiple hidden>
                 </div>
-                <!-- Upload progress (hidden until importing) -->
-                <div class="upload-row" id="upload-row" hidden>
-                    <div class="upload-tile mono">MD</div>
-                    <div class="upload-info">
-                        <div class="upload-info-line">
-                            <span class="upload-name" id="upload-name"></span>
-                            <span class="upload-stage" id="upload-stage"></span>
-                        </div>
-                        <div class="progress-track"><div class="progress-fill" id="upload-fill" style="width:0%"></div></div>
-                    </div>
-                    <button class="upload-cancel" id="upload-cancel" type="button">&times;</button>
-                </div>
+                <!-- One progress row per in-flight upload (added/removed dynamically) -->
+                <div id="upload-list"></div>
             </div>
         </section>
 
