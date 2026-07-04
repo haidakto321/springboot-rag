@@ -43,10 +43,15 @@ app:
     maxLength: 512
   graph:
     enabled: true
-    edges: both            # structural | semantic | both
+    # structural | semantic | both.
+    # structural (default): link/hierarchy edges only - fast, no LLM.
+    # semantic | both: entity extraction runs ONE LLM (app.chat.model) call PER CHUNK at
+    #   ingest AND one extraction call per graph query. Opt in when you want orphan
+    #   reconnection via shared entities; expect much slower ingest on large corpora.
+    edges: structural
     neighbor-hops: 1
     candidates: 50
-    extract-model: ""      # blank = reuse app.chat.model
+    extract-model: ""      # RESERVED - not yet wired; extraction currently uses app.chat.model
     min-mentions: 1
 
 management:

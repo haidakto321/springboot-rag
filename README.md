@@ -128,8 +128,8 @@ Swagger UI: http://localhost:8085/swagger-ui.html
 
 ## Endpoints
 - `POST /ingest` - ingest a document `{ "docId": "...", "text": "..." }`
-- `GET /search?q=...&type=fts|pgvector|qdrant|hybrid|rerank&topK=10` - optional `projectId=<id>` or `group=true` to scope results
-- `GET /compare?q=...&topK=10` - all backends side by side (scores + timing), including the `rerank` column; accepts optional `projectId` / `group=true`
+- `GET /search?q=...&type=fts|pgvector|qdrant|hybrid|rerank|graph&topK=10` - optional `projectId=<id>` or `group=true` to scope results
+- `GET /compare?q=...&topK=10` - all backends side by side (scores + timing), including the `rerank` and `graph` columns; accepts optional `projectId` / `group=true`
 - `DELETE /docs/{docId}`
 - `GET /actuator/health`
 
@@ -148,6 +148,39 @@ native PyTorch libraries (hundreds of MB) via DJL, then runs locally/offline aft
 | `app.rerank.model` | `BAAI/bge-reranker-base` | HuggingFace cross-encoder id |
 | `app.rerank.candidates` | `50` | hybrid candidates fed to the reranker before trimming to `topK` |
 | `app.rerank.maxLength` | `512` | tokenizer max sequence length |
+
+## Graph retrieval (`type=graph`, GraphRAG)
+
+`graph` seeds with `hybrid`, then expands over a knowledge graph before reranking, so it can
+surface pages that keyword/vector search miss - especially **orphan pages** (no inbound links)
+reconnected through a shared entity. Two edge sources, selected by `app.graph.edges`:
+
+- **structural** (default): parse the wiki's own markdown links + `.order` hierarchy into
+  `doc_edge`. Free, instant, no LLM. Retrieval hops from seed pages to linked pages.
+- **semantic** / **both**: additionally run entity extraction so pages that mention the same
+  entity are connected even without an explicit link (this is what reconnects orphans).
+
+> **Cost warning:** `semantic` and `both` run **one LLM call (`app.chat.model`) per chunk at
+> ingest** and one extraction call per graph query. On a large corpus (e.g. a few hundred wiki
+> pages) that is thousands of calls - expect much slower imports. The default is `structural`
+> precisely to avoid this surprise; opt into the entity layer explicitly when you want it.
+
+Enable the entity layer via `application.yml` or a flag: `--app.graph.edges=both`. Extraction is
+best-effort - if the chat model is unavailable, ingest still succeeds (just without entities).
+`graph` also carries a per-document **recency tiebreak**: among equally-relevant chunks the newer
+document (by git commit date, populated by the bulk importer) ranks first.
+
+| property | default | meaning |
+|---|---|---|
+| `app.graph.enabled` | `true` | master switch for graph expansion |
+| `app.graph.edges` | `structural` | `structural` \| `semantic` \| `both` |
+| `app.graph.neighbor-hops` | `1` | graph traversal depth |
+| `app.graph.candidates` | `50` | seed candidates gathered before rerank |
+| `app.graph.min-mentions` | `1` | drop entities mentioned fewer than N times at query match |
+| `app.graph.extract-model` | `""` | RESERVED - not yet wired; extraction uses `app.chat.model` |
+
+Bulk-import an Azure DevOps wiki clone (structural edges + git-date recency) with the
+`WikiImporter` dev component; the gated `WikiImporterManualTest` shows the entry point.
 
 ## Knowledge base
 
