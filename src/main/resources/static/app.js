@@ -373,6 +373,7 @@ $('#group-search-c').addEventListener('change', (e) => {
 
 async function refreshDocs() {
     const res = await projectFetch('/documents');
+    if (!res.ok) return;
     const docs = await res.json();
     const list = $('#doc-list');
     list.innerHTML = '';
@@ -426,6 +427,7 @@ async function refreshDocs() {
 
 // Append &docIds=..., &projectId=..., and &group=... to a search/compare URL.
 function appendScope(url) {
+    if (!activeProjectId) return url;
     const ids = scopeDocIds();
     let u = ids.reduce((acc, id) => acc + '&docIds=' + encodeURIComponent(id), url);
     u += '&projectId=' + encodeURIComponent(activeProjectId);
@@ -835,6 +837,7 @@ $('#chat-form').addEventListener('submit', async (e) => {
     e.preventDefault();
     const q = $('#chat-q').value.trim();
     if (!q) return;
+    if (!activeProjectId) { toast('Select or create a project first', 'error'); return; }
     $('#chat-q').value = '';
 
     chatMessages.push({ role: 'user', content: q });
