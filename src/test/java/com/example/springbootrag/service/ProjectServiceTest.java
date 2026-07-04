@@ -2,6 +2,7 @@ package com.example.springbootrag.service;
 
 import com.example.springbootrag.model.Project;
 import com.example.springbootrag.repository.ProjectRepository;
+import com.example.springbootrag.repository.QdrantRepository;
 import org.junit.jupiter.api.Test;
 
 import java.util.List;
@@ -18,7 +19,8 @@ import static org.mockito.Mockito.when;
 
 class ProjectServiceTest {
     ProjectRepository repo = mock(ProjectRepository.class);
-    ProjectService svc = new ProjectService(repo);
+    QdrantRepository qdrant = mock(QdrantRepository.class);
+    ProjectService svc = new ProjectService(repo, qdrant);
 
     @Test void resolveScopeSingleProjectWhenNotGroup() {
         assertThat(svc.resolveScope(5, false)).containsExactly(5L);
