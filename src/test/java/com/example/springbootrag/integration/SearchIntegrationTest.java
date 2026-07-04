@@ -169,6 +169,18 @@ class SearchIntegrationTest {
     }
 
     @Test
+    void graphBackendReturnsHitsForKnownQuery() {
+        ingestService.ingest("doc1", "hydraulic seepage caused a pressure drop on line 3");
+        ingestService.ingest("doc2", "the invoice payment was overdue by thirty days");
+
+        // graph seeds from hybrid, expands via doc-edge neighbors (none configured here),
+        // then reranks - so it should behave like hybrid/rerank for this fixture.
+        List<SearchHit> hits = searchService.search("graph", "pressure", 5, List.of(), List.of());
+        assertThat(hits).isNotEmpty();
+        assertThat(hits.get(0).docId()).isEqualTo("doc1");
+    }
+
+    @Test
     void searchFiltersByProject() {
         long a = projectRepository.create("A", null);
         long b = projectRepository.create("B", null);

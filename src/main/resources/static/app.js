@@ -954,7 +954,7 @@ function recordFeedback(m, rating, upBtn, downBtn) {
 // ---------- Compare ----------
 
 // Fixed backend order, matching the /compare response.
-const BACKENDS = ['fts', 'pgvector', 'qdrant', 'hybrid', 'rerank'];
+const BACKENDS = ['fts', 'pgvector', 'qdrant', 'hybrid', 'rerank', 'graph'];
 
 $('#compare-form').addEventListener('submit', async (e) => {
     e.preventDefault();

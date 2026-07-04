@@ -33,7 +33,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 @Tag("eval")
 class RetrievalEvalTest {
 
-    static final List<String> BACKENDS = List.of("fts", "pgvector", "qdrant", "hybrid", "rerank");
+    static final List<String> BACKENDS = List.of("fts", "pgvector", "qdrant", "hybrid", "rerank", "graph");
     static final int TOP_K = 10;
 
     @Container
