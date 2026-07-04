@@ -1,7 +1,8 @@
 package com.example.springbootrag.integration;
 
+import com.example.springbootrag.chat.ChatProvider;
 import com.example.springbootrag.embedding.EmbeddingProvider;
-import com.example.springbootrag.repository.DocEdgeRepository;
+import com.example.springbootrag.repository.EntityRepository;
 import com.example.springbootrag.service.IngestService;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -22,11 +23,9 @@ import java.time.Instant;
 import java.util.List;
 import static org.assertj.core.api.Assertions.assertThat;
 
-// edges=structural: this test exercises doc-link edges only; pin the mode so it stays
-// hermetic and unaffected by the app-wide "both" default (no ChatProvider stub here).
-@SpringBootTest(properties = "app.graph.edges=structural")
+@SpringBootTest(properties = "app.graph.edges=both")
 @Testcontainers
-class GraphIngestIntegrationTest {
+class SemanticIngestIntegrationTest {
 
     @Container
     static PostgreSQLContainer<?> pg = new PostgreSQLContainer<>("pgvector/pgvector:pg16");
@@ -44,7 +43,7 @@ class GraphIngestIntegrationTest {
         r.add("app.qdrant.port", qdrant::getGrpcPort);
     }
 
-    /** Constant fake embedding: this test exercises graph edge/cascade plumbing, not similarity. */
+    /** Constant fake embedding: this test exercises entity extraction plumbing, not similarity. */
     @TestConfiguration
     static class FakeEmbeddingConfig {
         @Bean
@@ -61,8 +60,25 @@ class GraphIngestIntegrationTest {
         }
     }
 
+    /** Deterministic fake ChatProvider: no real Ollama, always returns the same fixed entity JSON. */
+    @TestConfiguration
+    static class FakeChatConfig {
+        @Bean
+        @Primary
+        ChatProvider fakeChatProvider() {
+            return new ChatProvider() {
+                @Override public String chat(String systemPrompt, String userPrompt) {
+                    return """
+                            {"entities":[{"name":"PaymentsService","type":"service"},{"name":"Alice","type":"team"}],
+                             "relations":[{"src":"Alice","rel":"owns","dst":"PaymentsService"}]}
+                            """;
+                }
+            };
+        }
+    }
+
     @Autowired IngestService ingest;
-    @Autowired DocEdgeRepository edges;
+    @Autowired EntityRepository entities;
     @Autowired JdbcTemplate jdbc;
 
     private long projectId() {
@@ -70,14 +86,15 @@ class GraphIngestIntegrationTest {
     }
 
     @Test
-    void ingestWritesLinkEdgesAndDeleteCascades() {
+    void ingestExtractsEntitiesAndDeleteGcsThem() {
         long p = projectId();
-        String md = "# Page A\n\nLinks to [B](/Page-B).";
-        ingest.ingestMarkdown(p, "Page-A", "Page-A.md", md, Instant.parse("2026-06-01T00:00:00Z"));
+        ingest.ingestMarkdown(p, "Feature-X", "Feature-X.md",
+                "# Feature X\n\nAlice owns the PaymentsService.", Instant.now());
 
-        assertThat(edges.neighbors(p, List.of("Page-A"))).containsExactly("Page-B");
+        // A deterministic fake ChatProvider (see FakeChatConfig above) yields at least one entity.
+        assertThat(entities.matchEntityIds(p, List.of("PaymentsService"), 1)).isNotEmpty();
 
-        ingest.delete(p, "Page-A");
-        assertThat(edges.neighbors(p, List.of("Page-A"))).isEmpty();
+        ingest.delete(p, "Feature-X");
+        assertThat(entities.matchEntityIds(p, List.of("PaymentsService"), 1)).isEmpty();
     }
 }

@@ -24,7 +24,9 @@ import java.util.List;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
-@SpringBootTest
+// edges=structural: no ChatProvider stub here, so pin the mode to avoid a real-Ollama
+// call from the app-wide "both" default.
+@SpringBootTest(properties = "app.graph.edges=structural")
 @Testcontainers
 class SearchIntegrationTest {
 

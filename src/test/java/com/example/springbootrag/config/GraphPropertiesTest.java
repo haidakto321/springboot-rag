@@ -13,8 +13,10 @@ class GraphPropertiesTest {
     @Test
     void defaultsAreLoaded() {
         assertThat(props.isEnabled()).isTrue();
-        assertThat(props.getEdges()).isEqualTo("structural");
+        assertThat(props.getEdges()).isEqualTo("both");
         assertThat(props.getNeighborHops()).isEqualTo(1);
         assertThat(props.getCandidates()).isEqualTo(50);
+        assertThat(props.getExtractModel()).isEmpty();
+        assertThat(props.getMinMentions()).isEqualTo(1);
     }
 }

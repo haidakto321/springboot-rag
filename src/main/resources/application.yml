@@ -43,9 +43,11 @@ app:
     maxLength: 512
   graph:
     enabled: true
-    edges: structural      # structural | semantic | both  (semantic arrives in Phase 2)
+    edges: both            # structural | semantic | both
     neighbor-hops: 1
     candidates: 50
+    extract-model: ""      # blank = reuse app.chat.model
+    min-mentions: 1
 
 management:
   endpoints:

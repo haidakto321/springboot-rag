@@ -3,15 +3,21 @@ package com.example.springbootrag.service;
 import com.example.springbootrag.chunk.Chunk;
 import com.example.springbootrag.chunk.MarkdownChunker;
 import com.example.springbootrag.chunk.WordWindowChunker;
+import com.example.springbootrag.config.GraphProperties;
 import com.example.springbootrag.embedding.EmbeddingProvider;
+import com.example.springbootrag.graph.EntityExtractor;
+import com.example.springbootrag.graph.ExtractedGraph;
 import com.example.springbootrag.graph.WikiLinkParser;
 import com.example.springbootrag.repository.DocEdgeRepository;
+import com.example.springbootrag.repository.EntityRepository;
 import com.example.springbootrag.repository.PgVectorRepository;
 import com.example.springbootrag.repository.QdrantRepository;
 import org.springframework.stereotype.Service;
 
 import java.time.Instant;
+import java.util.HashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.concurrent.ExecutionException;
 
 @Service
@@ -22,6 +28,9 @@ public class IngestService {
     private final QdrantRepository qdrant;
     private final ProjectService projectService;
     private final DocEdgeRepository docEdges;
+    private final EntityExtractor entityExtractor;
+    private final EntityRepository entityRepo;
+    private final GraphProperties graphProps;
     private final WordWindowChunker wordWindow = new WordWindowChunker(120, 20);
     private final MarkdownChunker markdown = new MarkdownChunker(300, new WordWindowChunker(120, 20));
     private final WikiLinkParser linkParser = new WikiLinkParser();
@@ -30,12 +39,18 @@ public class IngestService {
                          PgVectorRepository pgVector,
                          QdrantRepository qdrant,
                          ProjectService projectService,
-                         DocEdgeRepository docEdges) {
+                         DocEdgeRepository docEdges,
+                         EntityExtractor entityExtractor,
+                         EntityRepository entityRepo,
+                         GraphProperties graphProps) {
         this.embeddings = embeddings;
         this.pgVector = pgVector;
         this.qdrant = qdrant;
         this.projectService = projectService;
         this.docEdges = docEdges;
+        this.entityExtractor = entityExtractor;
+        this.entityRepo = entityRepo;
+        this.graphProps = graphProps;
     }
 
     // ---- Legacy wrappers (resolve default project) ----------------------------------------
@@ -105,6 +120,9 @@ public class IngestService {
             } catch (ExecutionException | InterruptedException e) {
                 throw new IllegalStateException("Qdrant upsert failed", e);
             }
+            if (semanticEnabled()) {
+                extractAndPersist(projectId, id, chunk.text());
+            }
         }
         return chunks.size();
     }
@@ -117,5 +135,29 @@ public class IngestService {
             throw new IllegalStateException("Qdrant delete failed", e);
         }
         docEdges.deleteBySrcDoc(projectId, docId);
+        entityRepo.gcOrphanEntities(projectId);
+    }
+
+    private boolean semanticEnabled() {
+        String e = graphProps.getEdges();
+        return "semantic".equalsIgnoreCase(e) || "both".equalsIgnoreCase(e);
+    }
+
+    /** Best-effort: EntityExtractor swallows model/parse failures internally and returns an empty graph. */
+    private void extractAndPersist(long projectId, long chunkId, String text) {
+        ExtractedGraph g = entityExtractor.extract(text);
+        Map<String, Long> ids = new HashMap<>();
+        for (ExtractedGraph.Entity e : g.entities()) {
+            long eid = entityRepo.upsertEntity(projectId, e.name(), e.type());
+            entityRepo.linkChunk(chunkId, eid);
+            ids.put(e.name().trim().toLowerCase(), eid);
+        }
+        for (ExtractedGraph.Relation r : g.relations()) {
+            Long s = ids.get(r.src().trim().toLowerCase());
+            Long d = ids.get(r.dst().trim().toLowerCase());
+            if (s != null && d != null) {
+                entityRepo.insertEdge(projectId, s, d, r.rel());
+            }
+        }
     }
 }
