@@ -91,3 +91,36 @@ BEGIN
 EXCEPTION WHEN duplicate_object THEN NULL;
 END
 ';
+
+-- ---- GraphRAG semantic layer (Phase 2) ----
+
+CREATE TABLE IF NOT EXISTS entity (
+    id            BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+    project_id    BIGINT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+    name_norm     TEXT NOT NULL,
+    name_display  TEXT NOT NULL,
+    type          VARCHAR(64),
+    mention_count INT NOT NULL DEFAULT 0,
+    created_at    TIMESTAMP DEFAULT now(),
+    UNIQUE (project_id, name_norm)
+);
+
+CREATE TABLE IF NOT EXISTS chunk_entity (
+    chunk_id  BIGINT NOT NULL REFERENCES chunks(id) ON DELETE CASCADE,
+    entity_id BIGINT NOT NULL REFERENCES entity(id) ON DELETE CASCADE,
+    PRIMARY KEY (chunk_id, entity_id)
+);
+
+CREATE TABLE IF NOT EXISTS entity_edge (
+    id         BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+    project_id BIGINT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+    src_entity BIGINT NOT NULL REFERENCES entity(id) ON DELETE CASCADE,
+    dst_entity BIGINT NOT NULL REFERENCES entity(id) ON DELETE CASCADE,
+    relation   VARCHAR(128) NOT NULL,
+    weight     DOUBLE PRECISION NOT NULL DEFAULT 1.0,
+    UNIQUE (project_id, src_entity, dst_entity, relation)
+);
+
+CREATE INDEX IF NOT EXISTS idx_chunk_entity_entity ON chunk_entity (entity_id);
+CREATE INDEX IF NOT EXISTS idx_entity_edge_src ON entity_edge (project_id, src_entity);
+CREATE INDEX IF NOT EXISTS idx_entity_name ON entity (project_id, name_norm);
