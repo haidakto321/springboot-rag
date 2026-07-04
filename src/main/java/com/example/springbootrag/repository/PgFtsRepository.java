@@ -36,7 +36,7 @@ public class PgFtsRepository {
         if (DocFilter.active(docIds)) args.addAll(docIds);
         args.add(topK);
         return jdbc.query(
-                "SELECT id, doc_id, chunk_index, content, source_file, heading_path, " +
+                "SELECT id, doc_id, chunk_index, content, source_file, heading_path, updated_at, " +
                         "       ts_rank(tsv, websearch_to_tsquery('english', ?)) AS rank " +
                         "FROM chunks " +
                         "WHERE tsv @@ websearch_to_tsquery('english', ?)" + projectClause + docClause + " " +
@@ -48,7 +48,8 @@ public class PgFtsRepository {
                         rs.getString("content"),
                         rs.getString("source_file"),
                         rs.getString("heading_path"),
-                        rs.getDouble("rank")),
+                        rs.getDouble("rank"),
+                        PgVectorRepository.toInstant(rs.getTimestamp("updated_at"))),
                 args.toArray());
     }
 }

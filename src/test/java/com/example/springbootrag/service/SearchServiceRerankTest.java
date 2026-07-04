@@ -21,7 +21,7 @@ import static org.mockito.Mockito.when;
 class SearchServiceRerankTest {
 
     private SearchHit hit(long id) {
-        return new SearchHit(id, "doc", (int) id, "c" + id, null, null, 0.0);
+        return new SearchHit(id, "doc", (int) id, "c" + id, null, null, 0.0, null);
     }
 
     @Test

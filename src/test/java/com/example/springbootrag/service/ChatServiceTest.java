@@ -60,8 +60,8 @@ class ChatServiceTest {
     void followupRetrievesWithCondensedQueryButGeneratesFromOriginal() {
         // On a follow-up, retrieval uses the condensed query; generation keeps the original question.
         when(searchService.search(eq("rerank"), eq("condensed standalone query"), anyInt(), anyList(), any())).thenReturn(List.of(
-                new SearchHit(1, "doc-a", 0, "chunk one text", "a.md", "# A > ## S", 0.9),
-                new SearchHit(2, "doc-b", 3, "chunk two text", "b.md", null, 0.7)));
+                new SearchHit(1, "doc-a", 0, "chunk one text", "a.md", "# A > ## S", 0.9, null),
+                new SearchHit(2, "doc-b", 3, "chunk two text", "b.md", null, 0.7, null)));
 
         List<String> tokens = new ArrayList<>();
         List<AskResponse.Source> sources = service.chatStream(List.of(
@@ -90,7 +90,7 @@ class ChatServiceTest {
     @Test
     void firstTurnSkipsCondensation() {
         when(searchService.search(eq("rerank"), eq("how does chunking work?"), anyInt(), anyList(), any()))
-                .thenReturn(List.of(new SearchHit(1, "d", 0, "c", null, null, 0.5)));
+                .thenReturn(List.of(new SearchHit(1, "d", 0, "c", null, null, 0.5, null)));
 
         service.chatStream(List.of(new ChatMessage("user", "how does chunking work?")), List.of(), List.of(), t -> {});
 
@@ -102,7 +102,7 @@ class ChatServiceTest {
     void condensationFailureFallsBackToRawQuery() {
         chat.throwOnChat = true;
         when(searchService.search(eq("rerank"), eq("what about overlap?"), anyInt(), anyList(), any()))
-                .thenReturn(List.of(new SearchHit(1, "d", 0, "c", null, null, 0.5)));
+                .thenReturn(List.of(new SearchHit(1, "d", 0, "c", null, null, 0.5, null)));
 
         List<String> tokens = new ArrayList<>();
         service.chatStream(List.of(
@@ -117,7 +117,7 @@ class ChatServiceTest {
     @Test
     void trimsHistoryToLastTenMessages() {
         when(searchService.search(anyString(), anyString(), anyInt(), anyList(), any()))
-                .thenReturn(List.of(new SearchHit(1, "d", 0, "c", null, null, 0.5)));
+                .thenReturn(List.of(new SearchHit(1, "d", 0, "c", null, null, 0.5, null)));
 
         // 12 messages; last is a user turn.
         List<ChatMessage> history = new ArrayList<>(IntStream.range(0, 11)
@@ -148,7 +148,7 @@ class ChatServiceTest {
     @Test
     void forwardsDocIdScopeToRetrieval() {
         when(searchService.search(anyString(), anyString(), anyInt(), anyList(), any()))
-                .thenReturn(List.of(new SearchHit(1, "doc-a", 0, "c", null, null, 0.5)));
+                .thenReturn(List.of(new SearchHit(1, "doc-a", 0, "c", null, null, 0.5, null)));
 
         service.chatStream(List.of(new ChatMessage("user", "q")), List.of(), List.of("doc-a", "doc-b"), t -> {});
 

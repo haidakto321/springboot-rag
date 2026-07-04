@@ -72,7 +72,7 @@ public class IngestService {
         for (Chunk chunk : chunks) {
             float[] vec = embeddings.embed(chunk.text());
             long id = pgVector.insert(projectId, docId, chunk.position(), chunk.text(),
-                    sourceFile, chunk.headingPath(), vec);
+                    sourceFile, chunk.headingPath(), vec, null);
             try {
                 qdrant.upsert(id, projectId, docId, chunk.position(), chunk.text(),
                         sourceFile, chunk.headingPath(), vec);

@@ -20,12 +20,14 @@ public class PgVectorRepository {
 
     /** Inserts one chunk under the given project and returns its generated id. */
     public long insert(long projectId, String docId, int chunkIndex, String content,
-                       String sourceFile, String headingPath, float[] embedding) {
+                       String sourceFile, String headingPath, float[] embedding, java.time.Instant updatedAt) {
         return jdbc.queryForObject(
-                "INSERT INTO chunks (project_id, doc_id, chunk_index, content, source_file, heading_path, embedding) " +
-                        "VALUES (?, ?, ?, ?, ?, ?, ?::vector) RETURNING id",
+                "INSERT INTO chunks (project_id, doc_id, chunk_index, content, source_file, heading_path, embedding, updated_at) " +
+                        "VALUES (?, ?, ?, ?, ?, ?, ?::vector, ?) RETURNING id",
                 Long.class,
-                projectId, docId, chunkIndex, content, sourceFile, headingPath, toVectorLiteral(embedding));
+                projectId, docId, chunkIndex, content, sourceFile, headingPath,
+                toVectorLiteral(embedding),
+                updatedAt == null ? null : java.sql.Timestamp.from(updatedAt));
     }
 
     /**
@@ -49,7 +51,7 @@ public class PgVectorRepository {
         }
         args.add(topK);
         return jdbc.query(
-                "SELECT id, doc_id, chunk_index, content, source_file, heading_path, " +
+                "SELECT id, doc_id, chunk_index, content, source_file, heading_path, updated_at, " +
                 "       embedding <=> ?::vector AS distance FROM chunks" + where +
                 " ORDER BY distance ASC LIMIT ?",
                 (rs, n) -> new SearchHit(
@@ -59,7 +61,8 @@ public class PgVectorRepository {
                         rs.getString("content"),
                         rs.getString("source_file"),
                         rs.getString("heading_path"),
-                        1.0 - rs.getDouble("distance")),
+                        1.0 - rs.getDouble("distance"),
+                        toInstant(rs.getTimestamp("updated_at"))),
                 args.toArray());
     }
 
@@ -99,5 +102,9 @@ public class PgVectorRepository {
             sb.append(v[i]);
         }
         return sb.append(']').toString();
+    }
+
+    static java.time.Instant toInstant(java.sql.Timestamp ts) {
+        return ts == null ? null : ts.toInstant();
     }
 }

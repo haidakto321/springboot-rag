@@ -150,7 +150,8 @@ public class QdrantRepository {
                     payload.get("content").getStringValue(),
                     payload.containsKey("source_file") ? payload.get("source_file").getStringValue() : null,
                     payload.containsKey("heading_path") ? payload.get("heading_path").getStringValue() : null,
-                    p.getScore()));
+                    p.getScore(),
+                    null));
         }
         return hits;
     }
