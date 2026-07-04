@@ -3,8 +3,10 @@ package com.example.springbootrag.service;
 import com.example.springbootrag.config.GraphProperties;
 import com.example.springbootrag.config.RerankProperties;
 import com.example.springbootrag.embedding.EmbeddingProvider;
+import com.example.springbootrag.graph.EntityExtractor;
 import com.example.springbootrag.model.SearchHit;
 import com.example.springbootrag.repository.DocEdgeRepository;
+import com.example.springbootrag.repository.EntityRepository;
 import com.example.springbootrag.repository.PgFtsRepository;
 import com.example.springbootrag.repository.PgVectorRepository;
 import com.example.springbootrag.repository.QdrantRepository;
@@ -32,6 +34,8 @@ class SearchServiceGraphTest {
         PgVectorRepository vec = mock(PgVectorRepository.class);
         QdrantRepository qdrant = mock(QdrantRepository.class);
         DocEdgeRepository edges = mock(DocEdgeRepository.class);
+        EntityExtractor entityExtractor = mock(EntityExtractor.class);
+        EntityRepository entityRepo = mock(EntityRepository.class);
 
         // hybrid seed = one hit in doc A
         when(fts.search(anyString(), anyInt(), anyList(), anyList()))
@@ -48,7 +52,7 @@ class SearchServiceGraphTest {
         RerankProperties rp = new RerankProperties();
 
         SearchService svc = new SearchService(embed, fts, vec, qdrant,
-                new IdentityReranker(), rp, edges, gp);
+                new IdentityReranker(), rp, edges, gp, entityExtractor, entityRepo);
 
         List<SearchHit> out = svc.search("graph", "q", 10, List.of(1L), List.of());
         assertThat(out).extracting(SearchHit::docId).contains("A", "B");
@@ -63,6 +67,8 @@ class SearchServiceGraphTest {
         PgVectorRepository vec = mock(PgVectorRepository.class);
         QdrantRepository qdrant = mock(QdrantRepository.class);
         DocEdgeRepository edges = mock(DocEdgeRepository.class);
+        EntityExtractor entityExtractor = mock(EntityExtractor.class);
+        EntityRepository entityRepo = mock(EntityRepository.class);
 
         Instant oldest = Instant.parse("2024-01-01T00:00:00Z");
         Instant middle = Instant.parse("2024-03-01T00:00:00Z");
@@ -89,7 +95,7 @@ class SearchServiceGraphTest {
         RerankProperties rp = new RerankProperties();
 
         SearchService svc = new SearchService(embed, fts, vec, qdrant,
-                new IdentityReranker(), rp, edges, gp);
+                new IdentityReranker(), rp, edges, gp, entityExtractor, entityRepo);
 
         List<SearchHit> out = svc.search("graph", "q", 10, List.of(1L), List.of());
 
@@ -119,6 +125,8 @@ class SearchServiceGraphTest {
         PgVectorRepository vec = mock(PgVectorRepository.class);
         QdrantRepository qdrant = mock(QdrantRepository.class);
         DocEdgeRepository edges = mock(DocEdgeRepository.class);
+        EntityExtractor entityExtractor = mock(EntityExtractor.class);
+        EntityRepository entityRepo = mock(EntityRepository.class);
 
         Instant older = Instant.parse("2024-01-01T00:00:00Z");
         Instant newer = Instant.parse("2024-06-01T00:00:00Z");
@@ -140,7 +148,7 @@ class SearchServiceGraphTest {
         RerankProperties rp = new RerankProperties();
 
         SearchService svc = new SearchService(embed, fts, vec, qdrant,
-                new IdentityReranker(), rp, edges, gp);
+                new IdentityReranker(), rp, edges, gp, entityExtractor, entityRepo);
 
         List<SearchHit> out = svc.search("graph", "q", 10, List.of(1L), List.of());
 

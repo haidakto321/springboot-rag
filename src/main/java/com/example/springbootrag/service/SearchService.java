@@ -4,9 +4,12 @@ import com.example.springbootrag.config.GraphProperties;
 import com.example.springbootrag.config.RerankProperties;
 import com.example.springbootrag.embedding.EmbeddingProvider;
 import com.example.springbootrag.fusion.RrfFusion;
+import com.example.springbootrag.graph.EntityExtractor;
+import com.example.springbootrag.graph.ExtractedGraph;
 import com.example.springbootrag.model.SearchHit;
 import com.example.springbootrag.rerank.Reranker;
 import com.example.springbootrag.repository.DocEdgeRepository;
+import com.example.springbootrag.repository.EntityRepository;
 import com.example.springbootrag.repository.PgFtsRepository;
 import com.example.springbootrag.repository.PgVectorRepository;
 import com.example.springbootrag.repository.QdrantRepository;
@@ -28,6 +31,8 @@ public class SearchService {
     private final RerankProperties rerankProps;
     private final DocEdgeRepository docEdges;
     private final GraphProperties graphProps;
+    private final EntityExtractor entityExtractor;
+    private final EntityRepository entityRepo;
     private final RrfFusion rrf = new RrfFusion(60);
 
     public SearchService(EmbeddingProvider embeddings,
@@ -37,7 +42,9 @@ public class SearchService {
                          Reranker reranker,
                          RerankProperties rerankProps,
                          DocEdgeRepository docEdges,
-                         GraphProperties graphProps) {
+                         GraphProperties graphProps,
+                         EntityExtractor entityExtractor,
+                         EntityRepository entityRepo) {
         this.embeddings = embeddings;
         this.fts = fts;
         this.pgVector = pgVector;
@@ -46,6 +53,8 @@ public class SearchService {
         this.rerankProps = rerankProps;
         this.docEdges = docEdges;
         this.graphProps = graphProps;
+        this.entityExtractor = entityExtractor;
+        this.entityRepo = entityRepo;
     }
 
     private static final int MAX_TOP_K = 100;
@@ -137,21 +146,41 @@ public class SearchService {
             return seed;   // fallback: nothing to expand from
         }
         long projectId = projectIds.isEmpty() ? 0L : projectIds.get(0);
-        List<String> seedDocs = seed.stream().map(SearchHit::docId).distinct().toList();
-        List<String> neighborDocs = graphProps.isEnabled()
-                ? docEdges.neighbors(projectId, seedDocs) : List.of();
 
-        // Union seed chunks with neighbor-doc chunks, dedup by chunk id.
+        // Union seed chunks with structural neighbor-doc chunks and semantic entity-linked
+        // chunks, dedup by chunk id.
         java.util.LinkedHashMap<Long, SearchHit> byId = new java.util.LinkedHashMap<>();
         for (SearchHit h : seed) byId.put(h.id(), h);
-        if (!neighborDocs.isEmpty()) {
-            for (SearchHit h : pgVector.chunksByDocIds(projectId, neighborDocs)) {
-                byId.putIfAbsent(h.id(), h);
+
+        if (structuralOn()) {
+            List<String> seedDocs = seed.stream().map(SearchHit::docId).distinct().toList();
+            List<String> neighborDocs = docEdges.neighbors(projectId, seedDocs);
+            if (!neighborDocs.isEmpty()) {
+                for (SearchHit h : pgVector.chunksByDocIds(projectId, neighborDocs)) {
+                    byId.putIfAbsent(h.id(), h);
+                }
             }
         }
+
+        if (semanticOn()) {
+            ExtractedGraph qg = entityExtractor.extract(query);
+            List<String> qNames = qg.entities().stream()
+                    .map(ExtractedGraph.Entity::name).toList();
+            List<Long> matched = entityRepo.matchEntityIds(projectId, qNames, graphProps.getMinMentions());
+            if (!matched.isEmpty()) {
+                List<Long> expanded = new java.util.ArrayList<>(matched);
+                expanded.addAll(entityRepo.neighborEntityIds(projectId, matched));
+                List<Long> chunkIds = entityRepo.chunkIdsForEntities(expanded);
+                for (SearchHit h : pgVector.chunksByIds(chunkIds)) {
+                    byId.putIfAbsent(h.id(), h);
+                }
+            }
+        }
+
         // Preserve union insertion order (seed hits first in hybrid/RRF order, then
-        // neighbor-doc chunks) going into the reranker - relevance ordering must come
-        // first so IdentityReranker (the default) does not degrade to recency ordering.
+        // structural neighbor-doc chunks, then semantic entity-linked chunks) going into
+        // the reranker - relevance ordering must come first so IdentityReranker (the
+        // default) does not degrade to recency ordering.
         List<SearchHit> candidates = new java.util.ArrayList<>(byId.values());
         List<SearchHit> ranked = new java.util.ArrayList<>(reranker.rerank(query, candidates, topK));
         // Recency tiebreak ONLY: sort by rerank score desc, then (for true score ties)
@@ -169,6 +198,20 @@ public class SearchService {
         } catch (ExecutionException | InterruptedException e) {
             throw new IllegalStateException("Qdrant search failed", e);
         }
+    }
+
+    /** True when the graph feature is on and edges is "structural" or "both". */
+    private boolean structuralOn() {
+        if (!graphProps.isEnabled()) return false;
+        String e = graphProps.getEdges();
+        return "structural".equalsIgnoreCase(e) || "both".equalsIgnoreCase(e);
+    }
+
+    /** True when the graph feature is on and edges is "semantic" or "both". */
+    private boolean semanticOn() {
+        if (!graphProps.isEnabled()) return false;
+        String e = graphProps.getEdges();
+        return "semantic".equalsIgnoreCase(e) || "both".equalsIgnoreCase(e);
     }
 
     private static void validateTopK(int topK) {

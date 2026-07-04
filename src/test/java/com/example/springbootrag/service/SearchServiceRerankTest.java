@@ -3,9 +3,11 @@ package com.example.springbootrag.service;
 import com.example.springbootrag.config.GraphProperties;
 import com.example.springbootrag.config.RerankProperties;
 import com.example.springbootrag.embedding.EmbeddingProvider;
+import com.example.springbootrag.graph.EntityExtractor;
 import com.example.springbootrag.model.SearchHit;
 import com.example.springbootrag.rerank.FakeReranker;
 import com.example.springbootrag.repository.DocEdgeRepository;
+import com.example.springbootrag.repository.EntityRepository;
 import com.example.springbootrag.repository.PgFtsRepository;
 import com.example.springbootrag.repository.PgVectorRepository;
 import com.example.springbootrag.repository.QdrantRepository;
@@ -33,6 +35,8 @@ class SearchServiceRerankTest {
         PgVectorRepository pgVector = mock(PgVectorRepository.class);
         QdrantRepository qdrant = mock(QdrantRepository.class);
         DocEdgeRepository edges = mock(DocEdgeRepository.class);
+        EntityExtractor entityExtractor = mock(EntityExtractor.class);
+        EntityRepository entityRepo = mock(EntityRepository.class);
 
         when(embeddings.embed("q")).thenReturn(new float[]{0.1f});
         // Same list from both arms so hybrid order is deterministic: 1,2,3
@@ -43,7 +47,7 @@ class SearchServiceRerankTest {
         props.setCandidates(50);
 
         SearchService service = new SearchService(embeddings, fts, pgVector, qdrant,
-                new FakeReranker(), props, edges, new GraphProperties());
+                new FakeReranker(), props, edges, new GraphProperties(), entityExtractor, entityRepo);
 
         List<SearchHit> out = service.search("rerank", "q", 3);
 
