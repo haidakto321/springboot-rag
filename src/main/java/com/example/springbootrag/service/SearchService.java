@@ -149,12 +149,17 @@ public class SearchService {
                 byId.putIfAbsent(h.id(), h);
             }
         }
+        // Preserve union insertion order (seed hits first in hybrid/RRF order, then
+        // neighbor-doc chunks) going into the reranker - relevance ordering must come
+        // first so IdentityReranker (the default) does not degrade to recency ordering.
         List<SearchHit> candidates = new java.util.ArrayList<>(byId.values());
-        // Recency tiebreak: newer updated_at first, nulls last (stable, non-destructive).
-        candidates.sort(java.util.Comparator.comparing(
-                SearchHit::updatedAt,
-                java.util.Comparator.nullsLast(java.util.Comparator.reverseOrder())));
-        return reranker.rerank(query, candidates, topK);
+        List<SearchHit> ranked = new java.util.ArrayList<>(reranker.rerank(query, candidates, topK));
+        // Recency tiebreak ONLY: sort by rerank score desc, then (for true score ties)
+        // by updatedAt desc, nulls last. Stable sort keeps non-tied items in place since
+        // the reranker output is already score-ordered - recency never overrides relevance.
+        ranked.sort(java.util.Comparator.comparingDouble(SearchHit::score).reversed()
+                .thenComparing(SearchHit::updatedAt, java.util.Comparator.nullsLast(java.util.Comparator.reverseOrder())));
+        return ranked;
     }
 
     private List<SearchHit> qdrantSearch(float[] queryEmbedding, int topK,

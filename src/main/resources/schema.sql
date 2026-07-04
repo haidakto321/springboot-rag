@@ -82,7 +82,6 @@ CREATE TABLE IF NOT EXISTS doc_edge (
     UNIQUE (project_id, src_doc, dst_doc, kind)
 );
 
-CREATE INDEX IF NOT EXISTS idx_doc_edge_src ON doc_edge (project_id, src_doc);
 CREATE INDEX IF NOT EXISTS idx_doc_edge_dst ON doc_edge (project_id, dst_doc);
 
 DO '
