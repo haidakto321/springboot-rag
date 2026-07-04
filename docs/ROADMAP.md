@@ -55,9 +55,23 @@ Merged "streaming answers" + "conversational follow-up".
   no backend).
 - **Empty-state hint** ✅ - "no results" suggests switching mode (keyword <-> semantic).
 
+### Multi-project workspaces  ✅ done (2026-07-04)
+- Every document belongs to a **project**. Projects optionally share a `group_name` label
+  (emergent groups - no separate groups table, just a string column on the project row).
+- On startup: a **Default** project is seeded; all existing chunks are backfilled to it (zero-downtime migration).
+- New REST surface: `POST/GET /projects`, `PATCH/DELETE /projects/{id}`, `GET /groups`, plus
+  project-scoped document routes (`POST/GET /projects/{id}/documents`, `DELETE`, chunk listing).
+- `/search`, `/compare`, `/ask`, and `/chat/stream` accept `projectId` to scope retrieval to one
+  project; `group=true` widens retrieval to all projects sharing the active project's group name.
+- Legacy flat endpoints (`/documents`, `/search`, `/ask`, `/compare`) continue to work, targeting
+  the Default project - no breaking change.
+- UI: sidebar project switcher (grouped by `group_name`), manage-projects modal
+  (create/rename/delete/set-group), and a "Search whole group" toggle on Search & Ask and Compare.
+
 ## Everything on this roadmap is now built.
 Possible future directions (not scheduled): server-side session persistence, token-budget
-history trimming, streaming the compare screen, and a real feedback backend.
+history trimming, streaming the compare screen, a real feedback backend, and cross-project
+search analytics.
 
 ## Notes
 - Keep everything plain HTML/CSS/JS (no framework), matching the current static frontend.

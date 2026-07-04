@@ -18,6 +18,7 @@ Contents:
 10. Filtering by document
 11. Evaluation (how you know it works)
 12. Operational gotchas
+13. Project scoping and emergent groups
 
 ---
 
@@ -338,6 +339,60 @@ yes/no "is this grounded?". Cheap, repeatable, good as a smoke test (here: 18/18
   `<mark>`. Never interpolate raw model/user/content strings into innerHTML.
 - **Stream without thrashing the DOM:** keep a handle to the streaming bubble's text node and
   append per token, rather than re-rendering the whole thread on every token.
+
+---
+
+## 13. Project scoping and emergent groups
+
+### Emergent group label vs full entity table
+
+When designing a hierarchy - documents belong to projects, projects belong to groups - the instinct
+is to add a `groups` table and a join table. Hold that instinct until you know what a "group" IS.
+
+If a group carries no data of its own (no owner, no settings, no timestamps), a `groups` table is
+just an indirection layer with no payoff. Here a group is simply "all projects that share the same
+label string." A `group_name VARCHAR` column on `projects` is the complete representation: every
+query that needs groups uses `WHERE group_name = ?` or a `SELECT id FROM projects WHERE group_name = ?`
+subquery. Zero extra tables, zero joins, zero migration when a label changes.
+
+When SHOULD you promote the label to a full entity? When the group needs its own attributes
+(creation date, owner, quota), when you need referential integrity (restrict project creation to
+pre-approved groups), or when groups develop their own lifecycle (archived, pending-approval). Until
+any of those requirements exist, the label IS the entity.
+
+**Rule of thumb:** if every query about the "entity" reduces to filtering on a string column, it is
+a label - not yet an entity.
+
+### Two filters composed in-query
+
+Section 10 covers the "filter inside the query" principle for documents. Project scoping adds a
+second filter. Both must go into the query before retrieval - post-processing after fetching top-k
+would shrink your result set from a polluted pool, not from a correctly bounded one.
+
+**Postgres** - AND both IN clauses together:
+```sql
+WHERE project_id IN (:projectIds)
+  AND doc_id     IN (:docIds)       -- omit entirely when all docs are selected
+  AND <fts / vector search condition>
+```
+When no doc filter is active, drop the `doc_id` line entirely; `IN ()` with an empty list returns no
+rows (a common gotcha - check for empty before building the clause).
+
+**Qdrant** - wrap both conditions in a `must` (AND); keep the per-doc ids in a nested `should` (OR):
+```
+Filter.must:
+  - project_id match.any: [1, 2, 3]
+  - should:
+      - doc_id match.value: "readme.md"
+      - doc_id match.value: "guide.md"
+```
+The outer `must` ANDs the project and doc conditions; the inner `should` ORs the individual doc ids.
+Drop the `should` block entirely when there is no doc filter - an empty `should` is not "no filter,"
+it evaluates to false and returns zero hits.
+
+**Group scoping** adds one pre-step: resolve the group name to project ids
+(`SELECT id FROM projects WHERE group_name = ?`), then pass that list to the IN clause above. The
+retrieval query itself is unchanged - the caller just sends more ids.
 
 ---
 

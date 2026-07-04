@@ -23,8 +23,8 @@ Swagger UI: http://localhost:8085/swagger-ui.html
 
 ## Endpoints
 - `POST /ingest` - ingest a document `{ "docId": "...", "text": "..." }`
-- `GET /search?q=...&type=fts|pgvector|qdrant|hybrid|rerank&topK=10`
-- `GET /compare?q=...&topK=10` - all backends side by side (scores + timing), including the `rerank` column
+- `GET /search?q=...&type=fts|pgvector|qdrant|hybrid|rerank&topK=10` - optional `projectId=<id>` or `group=true` to scope results
+- `GET /compare?q=...&topK=10` - all backends side by side (scores + timing), including the `rerank` column; accepts optional `projectId` / `group=true`
 - `DELETE /docs/{docId}`
 - `GET /actuator/health`
 
@@ -48,7 +48,27 @@ native PyTorch libraries (hundreds of MB) via DJL, then runs locally/offline aft
 
 UI at http://localhost:8085/ lets you import .md files, search with the backend dropdown, and ask questions. The backend runs RAG retrieval (hybrid, FTS, pgvector, or qdrant) and answers via a local chat model.
 
-**Endpoints:**
+### Projects & groups
+
+Every document belongs to a **project**. A project is a named container; projects may optionally share a `group_name` label - there is no separate groups table, just a string column on the project row. On startup a **Default** project is seeded and all existing chunks are backfilled to it.
+
+**Project management endpoints:**
+- `POST /projects` - create `{ "name": "...", "groupName": "..." }`
+- `GET /projects` - list all projects
+- `PATCH /projects/{id}` - rename or change group
+- `DELETE /projects/{id}` - delete project and its documents
+- `GET /groups` - list distinct group names
+
+**Project-scoped document endpoints:**
+- `POST /projects/{id}/documents` - upload a .md file into the project
+- `GET /projects/{id}/documents` - list documents in the project
+- `DELETE /projects/{id}/documents/{docId}` - remove a document from the project
+- `GET /projects/{id}/documents/{docId}/chunks` - list chunks for a document
+
+**Scoping search / ask / compare / chat:**
+Add `projectId=<id>` to any of `/search`, `/ask`, or `/compare` to scope retrieval to one project. Pass `group=true` to widen retrieval to every project sharing the active project's `group_name`. The `/chat/stream` request body accepts the same `projectId` and `group` fields. The UI sidebar project switcher and "Search whole group" toggle drive these params automatically.
+
+**Legacy flat API (all target the Default project):**
 - `POST /documents` - multipart form upload (*.md file, max 2 MB, UTF-8). Chunks the file by heading, stores chunks in Postgres + embeddings.
 - `GET /documents` - list all imported documents and their chunk counts.
 - `DELETE /documents/{docId}` - delete all chunks for a document.
