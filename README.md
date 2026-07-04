@@ -4,6 +4,111 @@ Self-study sandbox comparing **Postgres FTS**, **pgvector**, **Qdrant**, and **h
 search in Java. See `docs/2026-06-13-springboot-rag-design.md` for the design and
 `docs/plans/2026-06-13-springboot-rag.md` for the build plan.
 
+## Architecture
+
+Spring Boot app fronts three retrieval backends and a local Ollama for embeddings + chat.
+A document is chunked once, embedded once, and written to **both** Postgres (pgvector) and
+Qdrant so the same corpus can be searched five ways and compared side by side.
+
+```mermaid
+---
+config:
+  theme: base
+  flowchart:
+    curve: stepAfter
+  themeVariables:
+    lineColor: '#64748b'
+---
+flowchart LR
+    UI["<b>Browser UI</b><br/>import · search · ask · chat"]
+
+    subgraph APP["Spring Boot :8085"]
+        direction TB
+        CTRL["<b>Controllers</b><br/>REST endpoints"]
+        ING["<b>IngestService</b><br/>chunk · embed · dual-write"]
+        SRCH["<b>SearchService</b><br/>5 backends"]
+        RAG["<b>Ask / Chat</b><br/>retrieve → generate"]
+        RRF["<b>Fusion + Rerank</b><br/>RRF · cross-encoder"]
+    end
+
+    subgraph DATA["Stores + Model"]
+        direction TB
+        PG[("<b>Postgres</b><br/>FTS + pgvector")]
+        QD[("<b>Qdrant</b><br/>vector search")]
+        OLL["<b>Ollama :11434</b><br/>embed + chat"]
+    end
+
+    UI --> CTRL
+    CTRL --> ING & SRCH & RAG
+    RAG --> SRCH
+    SRCH --> RRF
+
+    ING --> PG & QD
+    ING -.embed.-> OLL
+    SRCH --> PG & QD
+    SRCH -.embed.-> OLL
+    RAG -.chat.-> OLL
+
+    classDef grey stroke:#64748b,fill:#f1f5f9,stroke-width:2px,color:#1e293b
+    classDef blue stroke:#3b82f6,fill:#eff6ff,stroke-width:2px,color:#1e3a8a
+    classDef purple stroke:#8b5cf6,fill:#f5f3ff,stroke-width:2px,color:#4c1d95
+    classDef teal stroke:#14b8a6,fill:#f0fdfa,stroke-width:2px,color:#134e4a
+
+    class UI grey
+    class CTRL,ING,SRCH,RAG blue
+    class RRF purple
+    class PG,QD blue
+    class OLL teal
+
+    style APP fill:#f8fafc,stroke:#cbd5e1,color:#334155
+    style DATA fill:#f8fafc,stroke:#cbd5e1,color:#334155
+```
+
+### Query flow (`/ask`, `/chat` - hybrid + rerank RAG)
+
+```mermaid
+---
+config:
+  theme: base
+  themeVariables:
+    lineColor: '#64748b'
+    actorBkg: '#eff6ff'
+    actorBorder: '#3b82f6'
+    actorTextColor: '#1e293b'
+    signalColor: '#64748b'
+    signalTextColor: '#1e293b'
+    noteBkgColor: '#fff7ed'
+    noteTextColor: '#7c2d12'
+    labelBoxBkgColor: '#f5f3ff'
+    labelBoxBorderColor: '#8b5cf6'
+    labelTextColor: '#4c1d95'
+---
+sequenceDiagram
+    participant U as Browser
+    participant A as Ask/ChatService
+    participant S as SearchService
+    participant O as Ollama
+    participant P as Postgres
+
+    U->>A: question (+ projectId / group)
+    A->>S: search(type=rerank, topK)
+    S->>O: embed(query)
+    O-->>S: query vector
+    par hybrid candidates
+        S->>P: FTS (keyword)
+        S->>P: pgvector (ANN)
+    end
+    S->>S: RRF fuse -> cross-encoder rerank -> trim topK
+    S-->>A: ranked chunks
+    A->>O: chat(system + numbered context + question)
+    O-->>A: answer with [n] citations
+    A-->>U: answer + source chunks
+```
+
+> Note: `/search?type=qdrant` and `/compare` route the vector search to **Qdrant**; `hybrid`
+> and `rerank` fuse Postgres FTS + pgvector. Qdrant is written on every ingest so all five
+> backends stay in sync over the same corpus.
+
 ## Prerequisites
 - Java 21+ (JDK 25 works)
 - Docker + Docker Compose
