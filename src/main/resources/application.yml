@@ -41,6 +41,11 @@ app:
     model: BAAI/bge-reranker-base
     candidates: 50        # hybrid candidates fed to the reranker before trimming to topK
     maxLength: 512
+  graph:
+    enabled: true
+    edges: structural      # structural | semantic | both  (semantic arrives in Phase 2)
+    neighbor-hops: 1
+    candidates: 50
 
 management:
   endpoints:
