@@ -387,6 +387,31 @@ Filter.must:
       - doc_id match.value: "guide.md"
 ```
 The outer `must` ANDs the project and doc conditions; the inner `should` ORs the individual doc ids.
+
+### Cascade delete across two stores is NOT automatic
+
+The same chunk lives in two places here: a Postgres `chunks` row and a Qdrant point. A Postgres
+foreign key `ON DELETE CASCADE` from `chunks.project_id` makes "delete a project" wipe its
+Postgres rows for free - which is exactly the trap. The FK cascade is so satisfying that it is
+easy to believe the delete is *done*, and forget that Qdrant knows nothing about Postgres foreign
+keys. The vectors sit there orphaned forever.
+
+This actually happened on this feature: `deleteByProject(...)` was written on the Qdrant repo but
+never wired into `ProjectService.delete`, so deleting a project silently left every embedding
+resident in Qdrant. Per-task review missed it (each task looked correct in isolation); the
+whole-branch review caught it by asking "does delete cascade to BOTH stores?".
+
+Two lessons:
+1. **When state is mirrored across stores, every write path (insert, update, DELETE) must touch
+   every store.** A cascade/trigger in one store covers only that store. Grep for the sibling
+   store's delete on any delete path.
+2. **Order the deletes so the fallible one runs first.** Delete the Qdrant points *before* the
+   Postgres cascade - if Qdrant fails, you abort with Postgres still intact and can retry, rather
+   than losing the rows and orphaning the vectors.
+
+**Rule of thumb:** an `ON DELETE CASCADE` only proves the store it lives in is clean. Anything
+outside that database - a second store, a cache, a search index, an object store - needs its own
+explicit delete on the same code path.
 Drop the `should` block entirely when there is no doc filter - an empty `should` is not "no filter,"
 it evaluates to false and returns zero hits.
 
