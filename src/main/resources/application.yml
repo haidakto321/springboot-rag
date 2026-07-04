@@ -27,7 +27,7 @@ app:
     model: nomic-embed-text
     dimension: 768
   chat:
-    model: qwen3:8b
+    model: qwen3:4b
     context-chunks: 5
     condense-followups: true   # rewrite chat follow-ups into a standalone search query before retrieving
   ollama:
