@@ -1,10 +1,12 @@
 package com.example.springbootrag.service;
 
+import com.example.springbootrag.config.GraphProperties;
 import com.example.springbootrag.config.RerankProperties;
 import com.example.springbootrag.embedding.EmbeddingProvider;
 import com.example.springbootrag.fusion.RrfFusion;
 import com.example.springbootrag.model.SearchHit;
 import com.example.springbootrag.rerank.Reranker;
+import com.example.springbootrag.repository.DocEdgeRepository;
 import com.example.springbootrag.repository.PgFtsRepository;
 import com.example.springbootrag.repository.PgVectorRepository;
 import com.example.springbootrag.repository.QdrantRepository;
@@ -24,6 +26,8 @@ public class SearchService {
     private final QdrantRepository qdrant;
     private final Reranker reranker;
     private final RerankProperties rerankProps;
+    private final DocEdgeRepository docEdges;
+    private final GraphProperties graphProps;
     private final RrfFusion rrf = new RrfFusion(60);
 
     public SearchService(EmbeddingProvider embeddings,
@@ -31,13 +35,17 @@ public class SearchService {
                          PgVectorRepository pgVector,
                          QdrantRepository qdrant,
                          Reranker reranker,
-                         RerankProperties rerankProps) {
+                         RerankProperties rerankProps,
+                         DocEdgeRepository docEdges,
+                         GraphProperties graphProps) {
         this.embeddings = embeddings;
         this.fts = fts;
         this.pgVector = pgVector;
         this.qdrant = qdrant;
         this.reranker = reranker;
         this.rerankProps = rerankProps;
+        this.docEdges = docEdges;
+        this.graphProps = graphProps;
     }
 
     private static final int MAX_TOP_K = 100;
@@ -76,6 +84,7 @@ public class SearchService {
             case "qdrant" -> qdrantSearch(embeddings.embed(query), topK, projectIds, docIds);
             case "hybrid" -> hybrid(query, embeddings.embed(query), topK, projectIds, docIds);
             case "rerank" -> rerank(query, embeddings.embed(query), topK, projectIds, docIds);
+            case "graph" -> graph(query, embeddings.embed(query), topK, projectIds, docIds);
             default -> throw new IllegalArgumentException("unknown type: " + type);
         };
     }
@@ -95,6 +104,7 @@ public class SearchService {
         out.put("qdrant", timed(() -> qdrantSearch(qvec, topK, projectIds, docIds)));
         out.put("hybrid", timed(() -> hybrid(query, qvec, topK, projectIds, docIds)));
         out.put("rerank", timed(() -> rerank(query, qvec, topK, projectIds, docIds)));
+        out.put("graph", timed(() -> graph(query, qvec, topK, projectIds, docIds)));
         return out;
     }
 
@@ -117,6 +127,33 @@ public class SearchService {
     private List<SearchHit> rerank(String query, float[] queryEmbedding, int topK,
                                    List<Long> projectIds, List<String> docIds) {
         List<SearchHit> candidates = hybrid(query, queryEmbedding, rerankProps.getCandidates(), projectIds, docIds);
+        return reranker.rerank(query, candidates, topK);
+    }
+
+    private List<SearchHit> graph(String query, float[] queryEmbedding, int topK,
+                                  List<Long> projectIds, List<String> docIds) {
+        List<SearchHit> seed = hybrid(query, queryEmbedding, graphProps.getCandidates(), projectIds, docIds);
+        if (seed.isEmpty()) {
+            return seed;   // fallback: nothing to expand from
+        }
+        long projectId = projectIds.isEmpty() ? 0L : projectIds.get(0);
+        List<String> seedDocs = seed.stream().map(SearchHit::docId).distinct().toList();
+        List<String> neighborDocs = graphProps.isEnabled()
+                ? docEdges.neighbors(projectId, seedDocs) : List.of();
+
+        // Union seed chunks with neighbor-doc chunks, dedup by chunk id.
+        java.util.LinkedHashMap<Long, SearchHit> byId = new java.util.LinkedHashMap<>();
+        for (SearchHit h : seed) byId.put(h.id(), h);
+        if (!neighborDocs.isEmpty()) {
+            for (SearchHit h : pgVector.chunksByDocIds(projectId, neighborDocs)) {
+                byId.putIfAbsent(h.id(), h);
+            }
+        }
+        List<SearchHit> candidates = new java.util.ArrayList<>(byId.values());
+        // Recency tiebreak: newer updated_at first, nulls last (stable, non-destructive).
+        candidates.sort(java.util.Comparator.comparing(
+                SearchHit::updatedAt,
+                java.util.Comparator.nullsLast(java.util.Comparator.reverseOrder())));
         return reranker.rerank(query, candidates, topK);
     }
 

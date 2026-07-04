@@ -109,7 +109,7 @@ class SearchIntegrationTest {
 
         // compare returns all backends with timing (rerank added via the default IdentityReranker)
         var cmp = searchService.compare("pressure", 5);
-        assertThat(cmp.keySet()).containsExactly("fts", "pgvector", "qdrant", "hybrid", "rerank");
+        assertThat(cmp.keySet()).containsExactly("fts", "pgvector", "qdrant", "hybrid", "rerank", "graph");
         assertThat(cmp.get("fts").elapsedMs()).isGreaterThanOrEqualTo(0);
     }
 

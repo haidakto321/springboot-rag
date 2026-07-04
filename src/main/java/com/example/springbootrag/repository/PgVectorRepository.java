@@ -66,6 +66,25 @@ public class PgVectorRepository {
                 args.toArray());
     }
 
+    /** All chunks for the given docIds in a project, as SearchHits (score 0; rerank rescoring follows). */
+    public List<SearchHit> chunksByDocIds(long projectId, List<String> docIds) {
+        if (docIds == null || docIds.isEmpty()) {
+            return List.of();
+        }
+        String placeholders = String.join(",", java.util.Collections.nCopies(docIds.size(), "?"));
+        List<Object> args = new ArrayList<>();
+        args.add(projectId);
+        args.addAll(docIds);
+        return jdbc.query(
+                "SELECT id, doc_id, chunk_index, content, source_file, heading_path, updated_at " +
+                "FROM chunks WHERE project_id = ? AND doc_id IN (" + placeholders + ")",
+                (rs, n) -> new SearchHit(
+                        rs.getLong("id"), rs.getString("doc_id"), rs.getInt("chunk_index"),
+                        rs.getString("content"), rs.getString("source_file"), rs.getString("heading_path"),
+                        0.0, toInstant(rs.getTimestamp("updated_at"))),
+                args.toArray());
+    }
+
     public void deleteByDocId(long projectId, String docId) {
         jdbc.update("DELETE FROM chunks WHERE project_id = ? AND doc_id = ?", projectId, docId);
     }
