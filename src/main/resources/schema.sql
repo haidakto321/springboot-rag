@@ -67,3 +67,28 @@ END;
 CREATE OR REPLACE TRIGGER trg_chunks_default_project
     BEFORE INSERT ON chunks
     FOR EACH ROW EXECUTE FUNCTION fn_chunks_default_project();
+
+-- ---- GraphRAG structural graph (Phase 1) ----
+
+ALTER TABLE chunks ADD COLUMN IF NOT EXISTS updated_at TIMESTAMPTZ;
+
+CREATE TABLE IF NOT EXISTS doc_edge (
+    id         BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+    project_id BIGINT NOT NULL,
+    src_doc    VARCHAR(255) NOT NULL,
+    dst_doc    VARCHAR(255) NOT NULL,
+    kind       VARCHAR(32)  NOT NULL,   -- 'link' | 'hierarchy'
+    created_at TIMESTAMP DEFAULT now(),
+    UNIQUE (project_id, src_doc, dst_doc, kind)
+);
+
+CREATE INDEX IF NOT EXISTS idx_doc_edge_src ON doc_edge (project_id, src_doc);
+CREATE INDEX IF NOT EXISTS idx_doc_edge_dst ON doc_edge (project_id, dst_doc);
+
+DO '
+BEGIN
+    ALTER TABLE doc_edge ADD CONSTRAINT fk_doc_edge_project
+        FOREIGN KEY (project_id) REFERENCES projects(id) ON DELETE CASCADE;
+EXCEPTION WHEN duplicate_object THEN NULL;
+END
+';
