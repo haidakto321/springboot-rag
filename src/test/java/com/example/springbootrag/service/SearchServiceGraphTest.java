@@ -64,20 +64,26 @@ class SearchServiceGraphTest {
         QdrantRepository qdrant = mock(QdrantRepository.class);
         DocEdgeRepository edges = mock(DocEdgeRepository.class);
 
-        Instant older = Instant.parse("2024-01-01T00:00:00Z");
-        Instant newer = Instant.parse("2024-06-01T00:00:00Z");
+        Instant oldest = Instant.parse("2024-01-01T00:00:00Z");
+        Instant middle = Instant.parse("2024-03-01T00:00:00Z");
+        Instant newest = Instant.parse("2024-06-01T00:00:00Z");
 
-        // seed = single hit in doc S
-        SearchHit seedHit = new SearchHit(1, "S", 0, "seed", "S.md", null, 0.9, older);
+        // seed = single hit in doc S (irrelevant to the assertions below)
+        SearchHit seedHit = new SearchHit(1, "S", 0, "seed", "S.md", null, 0.05, oldest);
         when(fts.search(anyString(), anyInt(), anyList(), anyList())).thenReturn(List.of(seedHit));
         when(vec.search(any(float[].class), anyInt(), anyList(), anyList())).thenReturn(List.of(seedHit));
 
-        // S links to two neighbor docs whose chunks carry an EQUAL rerank score - a true tie.
-        when(edges.neighbors(anyLong(), eq(List.of("S")))).thenReturn(List.of("OLD", "NEW"));
-        SearchHit oldTieHit = new SearchHit(2, "OLD", 0, "old but equal score", "OLD.md", null, 0.5, older);
-        SearchHit newTieHit = new SearchHit(3, "NEW", 0, "new and equal score", "NEW.md", null, 0.5, newer);
-        when(vec.chunksByDocIds(anyLong(), eq(List.of("OLD", "NEW"))))
-                .thenReturn(List.of(oldTieHit, newTieHit));
+        // S links to three neighbor docs:
+        //  - HIGH: high rerank score but OLDER updatedAt than TIE_B - a pure-recency primary
+        //    sort would rank HIGH behind TIE_B despite HIGH being far more relevant.
+        //  - TIE_A / TIE_B: a genuine equal (low) rerank score - recency must break this tie,
+        //    with TIE_B (newer) sorting before TIE_A (older).
+        when(edges.neighbors(anyLong(), eq(List.of("S")))).thenReturn(List.of("HIGH", "TIE_A", "TIE_B"));
+        SearchHit highHit = new SearchHit(2, "HIGH", 0, "high relevance, older", "HIGH.md", null, 0.9, middle);
+        SearchHit tieAHit = new SearchHit(3, "TIE_A", 0, "low relevance, oldest", "TIE_A.md", null, 0.1, oldest);
+        SearchHit tieBHit = new SearchHit(4, "TIE_B", 0, "low relevance, newest", "TIE_B.md", null, 0.1, newest);
+        when(vec.chunksByDocIds(anyLong(), eq(List.of("HIGH", "TIE_A", "TIE_B"))))
+                .thenReturn(List.of(highHit, tieAHit, tieBHit));
 
         GraphProperties gp = new GraphProperties();
         RerankProperties rp = new RerankProperties();
@@ -87,9 +93,21 @@ class SearchServiceGraphTest {
 
         List<SearchHit> out = svc.search("graph", "q", 10, List.of(1L), List.of());
 
-        int oldIdx = indexOfDoc(out, "OLD");
-        int newIdx = indexOfDoc(out, "NEW");
-        assertThat(newIdx).as("equal-score candidates: newer updatedAt should sort first").isLessThan(oldIdx);
+        int highIdx = indexOfDoc(out, "HIGH");
+        int tieAIdx = indexOfDoc(out, "TIE_A");
+        int tieBIdx = indexOfDoc(out, "TIE_B");
+
+        // Relevance dominates: HIGH must outrank both TIE candidates even though HIGH is
+        // older than TIE_B. Under a pure-recency-primary sort (the old bug), TIE_B (newest
+        // overall) would be placed ahead of HIGH despite its far lower score - so this
+        // assertion fails under the old behavior and passes under the new one.
+        assertThat(highIdx)
+                .as("higher rerank score must outrank both equal-score ties, even though HIGH is older than TIE_B")
+                .isLessThan(tieAIdx)
+                .isLessThan(tieBIdx);
+
+        // Among the genuine score tie, recency breaks it: TIE_B (newer) sorts before TIE_A (older).
+        assertThat(tieBIdx).as("equal-score candidates: newer updatedAt should sort first").isLessThan(tieAIdx);
     }
 
     @Test
