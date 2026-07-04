@@ -15,6 +15,8 @@ import org.springframework.test.context.DynamicPropertySource;
 import org.testcontainers.containers.PostgreSQLContainer;
 import org.testcontainers.junit.jupiter.Container;
 import org.testcontainers.junit.jupiter.Testcontainers;
+import org.testcontainers.qdrant.QdrantContainer;
+import org.testcontainers.utility.DockerImageName;
 
 import java.time.Instant;
 import java.util.List;
@@ -27,11 +29,17 @@ class GraphIngestIntegrationTest {
     @Container
     static PostgreSQLContainer<?> pg = new PostgreSQLContainer<>("pgvector/pgvector:pg16");
 
+    @Container
+    static QdrantContainer qdrant =
+            new QdrantContainer(DockerImageName.parse("qdrant/qdrant:v1.9.0"));
+
     @DynamicPropertySource
     static void props(DynamicPropertyRegistry r) {
         r.add("spring.datasource.url", pg::getJdbcUrl);
         r.add("spring.datasource.username", pg::getUsername);
         r.add("spring.datasource.password", pg::getPassword);
+        r.add("app.qdrant.host", qdrant::getHost);
+        r.add("app.qdrant.port", qdrant::getGrpcPort);
     }
 
     /** Constant fake embedding: this test exercises graph edge/cascade plumbing, not similarity. */
