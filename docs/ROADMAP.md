@@ -68,10 +68,34 @@ Merged "streaming answers" + "conversational follow-up".
 - UI: sidebar project switcher (grouped by `group_name`), manage-projects modal
   (create/rename/delete/set-group), and a "Search whole group" toggle on Search & Ask and Compare.
 
-## Everything on this roadmap is now built.
+## Planned (not yet built)
+
+### Per-chunk relevance feedback - eval only (Option A)  ⬜ planned
+Goal: collect human relevance labels on individual retrieved chunks so we can MEASURE retrieval /
+reranker quality against real usage - NOT to change ranking live (no fine-tuning, no live boost).
+The existing whole-answer 👍/👎 (localStorage-only) stays; this adds a per-source signal with a backend.
+
+- **Signal:** a thumb on each source/citation chip in Search results and in the Ask answer's chips.
+  One click logs `{ query, projectId, docId, chunkIndex, rating: up|down, ts }`.
+- **Backend:** `POST /feedback` -> new `chunk_feedback` table (Postgres). Simple insert; no auth
+  (single-user dev sandbox, same posture as the rest). Add a `GET /feedback` (or a small eval
+  reader) to dump labels for analysis.
+- **Use:** offline eval. Feed the labels as `(query, chunkId, relevant)` pairs to check whether the
+  reranker ranks thumbs-up chunks above thumbs-down (precision@k on human labels) - complements the
+  golden-set eval (`golden.yaml`, `golden-wiki.yaml`). This is the cheap, honest win.
+- **Explicitly OUT of scope for A:** no query-time score nudge, no cross-encoder fine-tuning. Those
+  are a later "Option B" (blend `final = w1*reranker + w2*feedback`) - deferred; risks cold-start on
+  unseen queries and overfitting to a few clicks. Revisit only after enough labels accrue.
+- **Why now-ish:** the reranker (`bge-reranker`) is a fixed content model - it never learns from
+  clicks on its own. Per-chunk labels are the only way to know if it actually helps on THIS corpus,
+  and the wiki import (428 docs) finally gives a realistic corpus to measure on.
+- UI note: keep it low-clutter - a small thumb per chip, not a big widget. See LEARNINGS §on
+  feedback vs reranking for the reasoning.
+
+## Everything else on this roadmap is built.
 Possible future directions (not scheduled): server-side session persistence, token-budget
-history trimming, streaming the compare screen, a real feedback backend, and cross-project
-search analytics.
+history trimming, streaming the compare screen, Option B live-feedback boost / reranker
+fine-tuning, and cross-project search analytics.
 
 ## Notes
 - Keep everything plain HTML/CSS/JS (no framework), matching the current static frontend.
