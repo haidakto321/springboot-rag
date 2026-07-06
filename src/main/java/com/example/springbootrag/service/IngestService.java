@@ -31,6 +31,11 @@ public class IngestService {
     private final EntityExtractor entityExtractor;
     private final EntityRepository entityRepo;
     private final GraphProperties graphProps;
+    // Hard ceiling per chunk so an atomic table/code block can never exceed the embedding
+    // model's context window (nomic-embed-text runs at ~2048 tokens under Ollama). Dense
+    // tables (IDs, numbers, pipes) tokenize near 1 char/token, so 2000 chars stays under
+    // the 2048-token limit even in the worst case.
+    private static final int MAX_CHUNK_CHARS = 2000;
     private final WordWindowChunker wordWindow = new WordWindowChunker(120, 20);
     private final MarkdownChunker markdown = new MarkdownChunker(300, new WordWindowChunker(120, 20));
     private final WikiLinkParser linkParser = new WikiLinkParser();
@@ -109,6 +114,7 @@ public class IngestService {
         if (docId == null || docId.isBlank()) {
             throw new IllegalArgumentException("docId is required");
         }
+        chunks = capToBudget(chunks);
         delete(projectId, docId);
         for (Chunk chunk : chunks) {
             float[] vec = embeddings.embed(chunk.text());
@@ -136,6 +142,51 @@ public class IngestService {
         }
         docEdges.deleteBySrcDoc(projectId, docId);
         entityRepo.gcOrphanEntities(projectId);
+    }
+
+    /**
+     * Safety net: no chunk may exceed the embedding model's context window. The MarkdownChunker
+     * keeps code blocks and pipe tables atomic (may be huge); a single over-budget chunk makes
+     * the embedding call fail ("input length exceeds the context length"). Any chunk over
+     * {@code MAX_CHUNK_CHARS} is split at whitespace (hard-cut for a single giant token) and the
+     * whole list is renumbered so chunk indexes stay contiguous.
+     */
+    static List<Chunk> capToBudget(List<Chunk> chunks) {
+        boolean anyOver = false;
+        for (Chunk c : chunks) {
+            if (c.text().length() > MAX_CHUNK_CHARS) { anyOver = true; break; }
+        }
+        if (!anyOver) return chunks;
+        List<Chunk> out = new java.util.ArrayList<>();
+        int pos = 0;
+        for (Chunk c : chunks) {
+            if (c.text().length() <= MAX_CHUNK_CHARS) {
+                out.add(new Chunk(c.text(), c.headingPath(), pos++));
+            } else {
+                for (String piece : splitToBudget(c.text(), MAX_CHUNK_CHARS)) {
+                    out.add(new Chunk(piece, c.headingPath(), pos++));
+                }
+            }
+        }
+        return out;
+    }
+
+    /** Splits text into <= max-char pieces, preferring a newline/space boundary near the cap. */
+    private static List<String> splitToBudget(String text, int max) {
+        List<String> pieces = new java.util.ArrayList<>();
+        int i = 0, n = text.length();
+        while (i < n) {
+            int end = Math.min(i + max, n);
+            if (end < n) {
+                int nl = text.lastIndexOf('\n', end);
+                int sp = (nl > i) ? nl : text.lastIndexOf(' ', end);
+                if (sp > i) end = sp;   // break on whitespace; else hard-cut a giant token
+            }
+            pieces.add(text.substring(i, end));
+            i = end;
+            while (i < n && Character.isWhitespace(text.charAt(i))) i++;  // skip boundary whitespace
+        }
+        return pieces;
     }
 
     private boolean semanticEnabled() {

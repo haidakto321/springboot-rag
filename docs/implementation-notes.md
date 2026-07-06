@@ -346,3 +346,38 @@ async dispatch asserts 3 `progress` frames + `start.total=3` + final `done.pages
 3 docs landed via `pgVector.listDocuments`; a direct `WikiImporter` callback test asserts
 `total==3` and `done` increments 1..3 (regression guard independent of streaming plumbing); a
 negative test asserts a non-existent path -> HTTP 400. Full suite green (100 tests, 3 skipped).
+
+## 2026-07-06 - Real wiki import: hardening from live run (449-page Azure/Confluence clone)
+
+First real bulk import surfaced three issues; all fixed:
+
+1. **Empty pages** - wiki stubs (title-only or blank) were ingested as empty chunks. Fix:
+   `WikiImporter` skips blank/whitespace-only files (`isBlankFile`) before counting/ingesting.
+   The `.ps1` converter likewise drops empty markitdown output. 449 files -> 429 non-empty.
+
+2. **Oversized chunk vs embedding context** - MarkdownChunker keeps tables/code atomic; a big
+   Confluence table exceeds nomic-embed-text's context ("input length exceeds the context
+   length" 500 from Ollama). Fix: `IngestService.capToBudget` hard-caps every chunk at
+   `MAX_CHUNK_CHARS`, splitting at whitespace (hard-cut for a single giant token) and
+   renumbering. First try 4000 chars still failed on dense requirement tables (IDs/numbers/pipes
+   tokenize near 1 char/token -> >2048 tokens); lowered to **2000 chars** = safe under the
+   2048-token limit worst-case. Prose chunks (maxWords=300 ~1800 chars) are unaffected; only
+   atomic tables split.
+
+3. **One bad page aborted the whole import** - the stream died mid-run. Fix: `WikiImporter`
+   wraps each page in try/catch, rolls back partial chunks (`ingest.delete`), and reports via a
+   new `ProgressListener.onError` default method. The endpoint emits a `{"type":"skip",...}`
+   frame per failure and a final `{"type":"done","pagesImported":N,"pagesFailed":M,"total":T}`.
+   Result: 429/429 imported, 0 failed after the 2000-char cap.
+
+**Converter script bug (`scripts/convert-to-md.ps1`)**: `-Include` is silently ignored when
+combined with `-LiteralPath`, so the first run walked every file (converted `.order`/PNG icons
+into junk `.md`). Fixed to filter on real `.Extension` and exclude `.attachments`/`.git`/`.images`.
+Note: the wiki's pdf/docx all live under `.attachments/` (excluded), so nothing was converted -
+those attachment docs would need an explicit opt-in to import.
+
+**Known edge (not fixed):** `docIdOf` uses only the filename, so two pages with the same
+filename in different folders collide (one overwrites the other). Live import: 429 files ->
+428 docs = 1 collision. Acceptable for now; a path-qualified docId would fix it.
+
+Live result: project "docmaster" = 428 docs, 7,536 chunks.

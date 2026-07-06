@@ -85,12 +85,17 @@ class WikiImportControllerIntegrationTest {
     @Autowired PgVectorRepository pgVector;
     @Autowired ProjectRepository projectRepository;
 
-    /** Builds a non-git temp dir with 3 .md pages, one linking another. Importer falls back to mtime. */
+    /**
+     * Builds a non-git temp dir with 3 real .md pages (one linking another) plus an empty page
+     * and a whitespace-only page - both must be skipped by the importer. Importer falls back to mtime.
+     */
     private Path buildWiki() throws Exception {
         Path dir = Files.createTempDirectory("wiki-import-test");
         Files.writeString(dir.resolve("A.md"), "# Page A\n\nLinks to [B](/B).", StandardCharsets.UTF_8);
         Files.writeString(dir.resolve("B.md"), "# Page B\n\nSome content.", StandardCharsets.UTF_8);
         Files.writeString(dir.resolve("C.md"), "# Page C\n\nMore content.", StandardCharsets.UTF_8);
+        Files.writeString(dir.resolve("Empty.md"), "", StandardCharsets.UTF_8);          // skipped
+        Files.writeString(dir.resolve("Blank.md"), "   \n\t\n", StandardCharsets.UTF_8); // skipped
         return dir;
     }
 
@@ -120,6 +125,7 @@ class WikiImportControllerIntegrationTest {
             JsonNode done = frames.get(frames.size() - 1);
             assertThat(done.get("type").asText()).isEqualTo("done");
             assertThat(done.get("pagesImported").asInt()).isEqualTo(3);
+            assertThat(done.get("pagesFailed").asInt()).isEqualTo(0);
 
             // Docs actually landed.
             assertThat(pgVector.listDocuments(projectId)).hasSize(3);

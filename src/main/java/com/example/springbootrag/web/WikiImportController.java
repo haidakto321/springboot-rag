@@ -56,22 +56,37 @@ public class WikiImportController {
             throw new IllegalArgumentException("path does not exist or is not a directory");
         }
         return out -> {
+            boolean[] started = {false};
+            int[] total = {0};
+            int[] failed = {0};
             try {
-                boolean[] started = {false};
-                int total = wikiImporter.importDir(projectId, wikiRoot, (done, count, doc) -> {
-                    if (!started[0]) {
-                        writeFrame(out, Map.of("type", "start", "total", count));
-                        started[0] = true;
+                int imported = wikiImporter.importDir(projectId, wikiRoot, new WikiImporter.ProgressListener() {
+                    private void ensureStarted(int count) {
+                        total[0] = count;
+                        if (!started[0]) {
+                            writeFrame(out, Map.of("type", "start", "total", count));
+                            started[0] = true;
+                        }
                     }
-                    writeFrame(out, Map.of("type", "progress", "done", done, "total", count, "doc", doc));
+                    @Override public void onPage(int done, int count, String doc) {
+                        ensureStarted(count);
+                        writeFrame(out, Map.of("type", "progress", "done", done, "total", count, "doc", doc));
+                    }
+                    @Override public void onError(int done, int count, String doc, Exception e) {
+                        ensureStarted(count);
+                        failed[0]++;
+                        writeFrame(out, Map.of("type", "skip", "done", done, "total", count, "doc", doc,
+                                "message", e.getMessage() == null ? e.getClass().getSimpleName() : e.getMessage()));
+                    }
                 });
                 if (!started[0]) {
                     // no pages found: still emit a start frame so the client sees the total.
-                    writeFrame(out, Map.of("type", "start", "total", total));
+                    writeFrame(out, Map.of("type", "start", "total", total[0]));
                 }
-                writeFrame(out, Map.of("type", "done", "pagesImported", total));
+                writeFrame(out, Map.of("type", "done",
+                        "pagesImported", imported, "pagesFailed", failed[0], "total", total[0]));
             } catch (Exception e) {
-                // Response is already committed (200), so report the failure as a frame.
+                // Fatal error (not a per-page skip): response already committed (200), report as a frame.
                 writeFrameQuietly(out, Map.of("type", "error",
                         "message", e.getMessage() == null ? e.getClass().getSimpleName() : e.getMessage()));
             }

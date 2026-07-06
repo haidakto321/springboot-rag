@@ -25,10 +25,14 @@ public class WikiImporter {
         this.docEdges = docEdges;
     }
 
-    /** Called after each page is ingested so callers can report live progress. */
+    /** Called during import so callers can report live progress. */
     @FunctionalInterface
     public interface ProgressListener {
+        /** After a page is successfully ingested. {@code done} is the running 1..total index. */
         void onPage(int done, int total, String docId);
+
+        /** When a page fails to ingest and is skipped. Default: ignore. */
+        default void onError(int done, int total, String docId, Exception e) {}
     }
 
     /** Backward-compatible overload with no progress reporting. */
@@ -49,20 +53,30 @@ public class WikiImporter {
                     .filter(p -> p.toString().endsWith(".md"))
                     .filter(p -> !isUnderGitDir(p))
                     .filter(p -> !p.toString().contains(".attachments"))
+                    .filter(p -> !isBlankFile(p))   // skip empty pages (wiki stubs, empty conversions)
                     .toList();
             int total = pages.size();
+            int index = 0;
             for (Path page : pages) {
-                String text = Files.readString(page, StandardCharsets.UTF_8);
+                index++;
                 String docId = docIdOf(page);
-                Instant updated = gitDate(wikiRoot, wikiRoot.relativize(page).toString());
-                ingest.ingestMarkdown(projectId, docId, page.getFileName().toString(), text, updated);
-                // hierarchy edge: parent folder page -> this page
-                Path parent = page.getParent();
-                if (parent != null && !parent.equals(wikiRoot)) {
-                    docEdges.insertHierarchy(projectId, docIdOf(parent), docId);
+                try {
+                    String text = Files.readString(page, StandardCharsets.UTF_8);
+                    Instant updated = gitDate(wikiRoot, wikiRoot.relativize(page).toString());
+                    ingest.ingestMarkdown(projectId, docId, page.getFileName().toString(), text, updated);
+                    // hierarchy edge: parent folder page -> this page
+                    Path parent = page.getParent();
+                    if (parent != null && !parent.equals(wikiRoot)) {
+                        docEdges.insertHierarchy(projectId, docIdOf(parent), docId);
+                    }
+                    count++;
+                    listener.onPage(index, total, docId);
+                } catch (Exception e) {
+                    // One bad page must not abort a bulk import; skip it and report.
+                    // Roll back any partial chunks written before the failure.
+                    try { ingest.delete(projectId, docId); } catch (Exception ignored) {}
+                    listener.onError(index, total, docId, e);
                 }
-                count++;
-                listener.onPage(count, total, docId);
             }
         }
         return count;
@@ -71,6 +85,15 @@ public class WikiImporter {
     /** True if any path segment of {@code p} is a {@code .git} directory. */
     private static boolean isUnderGitDir(Path p) {
         return p.toString().contains(java.io.File.separator + ".git" + java.io.File.separator);
+    }
+
+    /** True if the file is empty or whitespace-only. Read errors are left for the ingest path to surface. */
+    private static boolean isBlankFile(Path p) {
+        try {
+            return Files.readString(p, StandardCharsets.UTF_8).isBlank();
+        } catch (Exception e) {
+            return false;
+        }
     }
 
     /* Last path segment, sanitized, like DocumentController/WikiLinkParser. */
