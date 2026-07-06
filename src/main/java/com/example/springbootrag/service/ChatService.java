@@ -45,10 +45,20 @@ public class ChatService {
      * @param projectIds optional project scope (empty = all projects)
      * @param docIds optional document scope (empty = all documents)
      */
+    /** Backward-compatible overload: no reasoning channel, thinking disabled. */
     public List<AskResponse.Source> chatStream(List<ChatMessage> history,
                                                List<Long> projectIds,
                                                List<String> docIds,
                                                Consumer<String> onToken) {
+        return chatStream(history, projectIds, docIds, false, onToken, r -> {});
+    }
+
+    public List<AskResponse.Source> chatStream(List<ChatMessage> history,
+                                               List<Long> projectIds,
+                                               List<String> docIds,
+                                               boolean think,
+                                               Consumer<String> onToken,
+                                               Consumer<String> onReasoning) {
         if (history == null || history.isEmpty()) {
             throw new IllegalArgumentException("messages are required");
         }
@@ -82,7 +92,7 @@ public class ChatService {
         List<ChatMessage> modelMessages = new ArrayList<>(trimmed.subList(0, trimmed.size() - 1));
         modelMessages.add(new ChatMessage("user", AskService.buildUserPrompt(last.content(), hits)));
 
-        chat.chatStream(AskService.SYSTEM_PROMPT, modelMessages, onToken);
+        chat.chatStream(AskService.SYSTEM_PROMPT, modelMessages, think, onToken, onReasoning);
 
         List<AskResponse.Source> sources = new ArrayList<>();
         for (int i = 0; i < hits.size(); i++) {

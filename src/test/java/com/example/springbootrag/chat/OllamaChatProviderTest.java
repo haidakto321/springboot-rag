@@ -133,6 +133,66 @@ class OllamaChatProviderTest {
     }
 
     @Test
+    void streamRoutesReasoningToReasoningChannelAndSetsThinkTrue() throws Exception {
+        server.enqueue(new MockResponse()
+                .setHeader("Content-Type", "application/x-ndjson")
+                .setBody("""
+                        {"message":{"role":"assistant","content":"<think>let me "},"done":false}
+                        {"message":{"role":"assistant","content":"reason</think>The real "},"done":false}
+                        {"message":{"role":"assistant","content":"answer."},"done":true}
+                        """));
+
+        List<String> answer = new ArrayList<>();
+        List<String> reasoning = new ArrayList<>();
+        provider.chatStream("s", List.of(new ChatProvider.ChatMessage("user", "u")),
+                true, answer::add, reasoning::add);
+
+        assertThat(String.join("", answer)).isEqualTo("The real answer.");
+        assertThat(String.join("", reasoning)).isEqualTo("let me reason");
+        assertThat(server.takeRequest().getBody().readUtf8()).contains("\"think\":true");
+    }
+
+    @Test
+    void streamRoutesThinkingFieldToReasoning() throws Exception {
+        // Modern Ollama returns reasoning in a separate "thinking" field, content empty meanwhile.
+        server.enqueue(new MockResponse()
+                .setHeader("Content-Type", "application/x-ndjson")
+                .setBody("""
+                        {"message":{"role":"assistant","content":"","thinking":"Let me "},"done":false}
+                        {"message":{"role":"assistant","content":"","thinking":"think."},"done":false}
+                        {"message":{"role":"assistant","content":"Answer "},"done":false}
+                        {"message":{"role":"assistant","content":"here."},"done":true}
+                        """));
+
+        List<String> answer = new ArrayList<>();
+        List<String> reasoning = new ArrayList<>();
+        provider.chatStream("s", List.of(new ChatProvider.ChatMessage("user", "u")),
+                true, answer::add, reasoning::add);
+
+        assertThat(String.join("", answer)).isEqualTo("Answer here.");
+        assertThat(String.join("", reasoning)).isEqualTo("Let me think.");
+    }
+
+    @Test
+    void streamCapturesDanglingThinkCloseAsReasoning() throws Exception {
+        // Some small models leak chain-of-thought with a closing </think> but no opening tag.
+        server.enqueue(new MockResponse()
+                .setHeader("Content-Type", "application/x-ndjson")
+                .setBody("""
+                        {"message":{"role":"assistant","content":"reasoning with no open tag</think>"},"done":false}
+                        {"message":{"role":"assistant","content":"Clean answer."},"done":true}
+                        """));
+
+        List<String> answer = new ArrayList<>();
+        List<String> reasoning = new ArrayList<>();
+        provider.chatStream("s", List.of(new ChatProvider.ChatMessage("user", "u")),
+                true, answer::add, reasoning::add);
+
+        assertThat(String.join("", answer)).isEqualTo("Clean answer.");
+        assertThat(String.join("", reasoning)).isEqualTo("reasoning with no open tag");
+    }
+
+    @Test
     void streamStopsAtDoneAndIgnoresUnknownFields() throws Exception {
         server.enqueue(new MockResponse()
                 .setHeader("Content-Type", "application/x-ndjson")

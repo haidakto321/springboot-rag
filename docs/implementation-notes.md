@@ -381,3 +381,36 @@ filename in different folders collide (one overwrites the other). Live import: 4
 428 docs = 1 collision. Acceptable for now; a path-qualified docId would fix it.
 
 Live result: project "docmaster" = 428 docs, 7,536 chunks.
+
+## 2026-07-06 - "Show AI thinking" toggle + reasoning-leak fix
+
+qwen3:4b was leaking its chain-of-thought into ask answers (raw reasoning + a stray `</think>`
+shown before the answer). Root cause: `think:false`/`/no_think` does NOT stop qwen3 reasoning -
+it just makes it dump into `message.content` instead of the clean `message.thinking` field. The
+old streaming `ThinkFilter` only stripped a well-formed `<think>...</think>`, so a tag-less dump
+leaked.
+
+Fix + feature (Copilot-style collapsible reasoning):
+- **Always send Ollama `think:true`** on the streaming path. The model reasons either way (same
+  cost), and `think:true` routes reasoning to the separate `thinking` field so `content` is
+  always a clean answer - the leak is gone regardless of the UI toggle.
+- New `ChatProvider.chatStream(system, messages, boolean think, onToken, onReasoning)` overload;
+  the old 3-arg delegates (think=false, no-op reasoning). `ChatService.chatStream` and the
+  `/chat/stream` endpoint gained the `think` flag (in `ChatRequest`) and a reasoning channel that
+  emits `{"type":"reasoning","text":...}` frames.
+- The `think` flag only controls **forwarding**: on -> reasoning frames stream to the client;
+  off -> reasoning dropped server-side (`reasoningSink` no-op), answer still clean.
+- `ThinkFilter` now has two sinks (answer/reasoning) and also defensively captures a dangling
+  `</think>` with no opening tag (older leak shape), routing it to reasoning instead of the answer.
+- Ollama returns reasoning in `message.thinking` (content empty meanwhile); `Message` record
+  gained that field and the stream loop forwards it.
+- Frontend: a "Show AI thinking" checkbox on the ask screen sends `think`; reasoning streams live
+  into a collapsible "💭 Thoughts" box (expanded while thinking, auto-collapses when the answer
+  starts, re-openable via the toggle). Persists after streaming via `renderThread`.
+
+Note: the non-streaming `chat()` path (used by follow-up query condensing) still sends
+`think:false` + `stripThink`; a tag-less leak there is possible but only affects an internal
+query rewrite, not user-facing text. Left as-is.
+
+Verified live: think=false -> 0 reasoning frames, clean answer, no leak; think=true -> reasoning
+streamed to its own channel, answer still clean. Full suite green (105 tests).

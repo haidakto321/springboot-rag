@@ -62,19 +62,29 @@ public class OllamaChatProvider implements ChatProvider {
 
     @Override
     public void chatStream(String systemPrompt, List<ChatMessage> messages, Consumer<String> onToken) {
+        chatStream(systemPrompt, messages, false, onToken, r -> {});
+    }
+
+    @Override
+    public void chatStream(String systemPrompt, List<ChatMessage> messages, boolean think,
+                           Consumer<String> onToken, Consumer<String> onReasoning) {
         List<Map<String, String>> ollamaMessages = new ArrayList<>();
-        ollamaMessages.add(Map.of("role", "system", "content", systemPrompt + "\n" + NO_THINK));
+        ollamaMessages.add(Map.of("role", "system", "content", systemPrompt));
         for (ChatMessage m : messages) {
             ollamaMessages.add(Map.of("role", m.role(), "content", m.content()));
         }
-        ThinkFilter filter = new ThinkFilter(onToken);
+        // Always ask Ollama to think: a reasoning model (qwen3) reasons regardless, and think:true
+        // routes that reasoning to a separate 'thinking' field so it never leaks into the answer
+        // content. The caller's `think` flag only decides whether we FORWARD it to onReasoning.
+        Consumer<String> reasoningSink = think ? onReasoning : r -> {};
+        ThinkFilter filter = new ThinkFilter(onToken, reasoningSink);
         try {
             client.post()
                     .uri("/api/chat")
                     .body(Map.of(
                             "model", props.getModel(),
                             "stream", true,
-                            "think", false,
+                            "think", true,
                             "messages", ollamaMessages))
                     .exchange((request, response) -> {
                         if (response.getStatusCode().isError()) {
@@ -87,8 +97,18 @@ public class OllamaChatProvider implements ChatProvider {
                             while ((line = reader.readLine()) != null) {
                                 if (line.isBlank()) continue;
                                 StreamChunk chunk = mapper.readValue(line, StreamChunk.class);
-                                if (chunk.message() != null && chunk.message().content() != null) {
-                                    filter.accept(chunk.message().content());
+                                if (chunk.message() != null) {
+                                    // Modern Ollama returns reasoning in a separate 'thinking' field
+                                    // (content is empty while thinking). Forward it as reasoning.
+                                    String thinking = chunk.message().thinking();
+                                    if (thinking != null && !thinking.isEmpty()) {
+                                        reasoningSink.accept(thinking);
+                                    }
+                                    // content carries the answer; ThinkFilter also defensively strips
+                                    // any inline <think> tags a model might still leak into content.
+                                    if (chunk.message().content() != null) {
+                                        filter.accept(chunk.message().content());
+                                    }
                                 }
                                 if (chunk.done()) break;
                             }
@@ -110,15 +130,24 @@ public class OllamaChatProvider implements ChatProvider {
     }
 
     /**
-     * Streaming filter that suppresses text inside &lt;think&gt;...&lt;/think&gt; and forwards the rest.
-     * Buffers a few characters so a tag split across token boundaries is still detected.
+     * Streaming filter that separates a &lt;think&gt;...&lt;/think&gt; reasoning block from the answer:
+     * reasoning deltas go to {@code reasoningOut}, everything else to {@code answerOut}. Buffers a
+     * few characters so a tag split across token boundaries is still detected. Also captures a
+     * DANGLING &lt;/think&gt; with no opening tag (some small models leak chain-of-thought that way)
+     * by routing the text before it to reasoning instead of leaking it into the answer.
      */
     static final class ThinkFilter {
-        private final Consumer<String> out;
+        private final Consumer<String> answerOut;
+        private final Consumer<String> reasoningOut;
         private final StringBuilder buf = new StringBuilder();
         private boolean inThink = false;
+        // Hold back enough tail (while mid-stream) to detect either tag split across token boundaries.
+        private static final int TAIL = Math.max(THINK_OPEN.length(), THINK_CLOSE.length()) - 1;
 
-        ThinkFilter(Consumer<String> out) { this.out = out; }
+        ThinkFilter(Consumer<String> answerOut, Consumer<String> reasoningOut) {
+            this.answerOut = answerOut;
+            this.reasoningOut = reasoningOut;
+        }
 
         void accept(String piece) {
             buf.append(piece);
@@ -127,8 +156,8 @@ public class OllamaChatProvider implements ChatProvider {
 
         void flush() {
             process(true);
-            if (!inThink && buf.length() > 0) {
-                out.accept(buf.toString());
+            if (buf.length() > 0) {
+                (inThink ? reasoningOut : answerOut).accept(buf.toString());
                 buf.setLength(0);
             }
         }
@@ -138,26 +167,32 @@ public class OllamaChatProvider implements ChatProvider {
                 if (inThink) {
                     int close = buf.indexOf(THINK_CLOSE);
                     if (close < 0) {
-                        // still inside the think block: drop it, keep only a small tail for a split tag
-                        if (!atEnd && buf.length() > THINK_CLOSE.length()) {
-                            buf.delete(0, buf.length() - THINK_CLOSE.length());
-                        }
+                        // still inside the think block: forward it as reasoning, keep a small tail
+                        int keep = atEnd ? 0 : Math.min(buf.length(), TAIL);
+                        int emit = buf.length() - keep;
+                        if (emit > 0) { reasoningOut.accept(buf.substring(0, emit)); buf.delete(0, emit); }
                         return;
                     }
+                    if (close > 0) reasoningOut.accept(buf.substring(0, close));
                     buf.delete(0, close + THINK_CLOSE.length());
                     inThink = false;
                 } else {
                     int open = buf.indexOf(THINK_OPEN);
+                    int close = buf.indexOf(THINK_CLOSE);
+                    // Dangling </think> before any <think>: preceding text is leaked reasoning.
+                    if (close >= 0 && (open < 0 || close < open)) {
+                        if (close > 0) reasoningOut.accept(buf.substring(0, close));
+                        buf.delete(0, close + THINK_CLOSE.length());
+                        continue;
+                    }
                     if (open < 0) {
-                        // emit safe content, holding back a possible partial opening tag at the tail
-                        int safe = atEnd ? buf.length() : Math.max(0, buf.length() - (THINK_OPEN.length() - 1));
-                        if (safe > 0) {
-                            out.accept(buf.substring(0, safe));
-                            buf.delete(0, safe);
-                        }
+                        // emit answer, holding back a tail that could be the start of either tag
+                        int keep = atEnd ? 0 : Math.min(buf.length(), TAIL);
+                        int emit = buf.length() - keep;
+                        if (emit > 0) { answerOut.accept(buf.substring(0, emit)); buf.delete(0, emit); }
                         return;
                     }
-                    if (open > 0) out.accept(buf.substring(0, open));
+                    if (open > 0) answerOut.accept(buf.substring(0, open));
                     buf.delete(0, open + THINK_OPEN.length());
                     inThink = true;
                 }
@@ -167,5 +202,5 @@ public class OllamaChatProvider implements ChatProvider {
 
     private record ChatResponse(Message message) {}
     private record StreamChunk(Message message, boolean done) {}
-    private record Message(String role, String content) {}
+    private record Message(String role, String content, String thinking) {}
 }

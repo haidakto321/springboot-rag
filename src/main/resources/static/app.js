@@ -767,6 +767,11 @@ function renderThread() {
         const bubble = document.createElement('div');
         bubble.className = 'bubble';
 
+        // Assistant reasoning (if any) sits above the answer, collapsed behind a toggle.
+        if (m.role === 'assistant' && m.reasoning) {
+            bubble.appendChild(buildThoughts(m.reasoning, false));
+        }
+
         const text = document.createElement('div');
         text.className = 'bubble-text' + (m.error ? ' error' : '') + (m.streaming ? ' streaming' : '');
         text.textContent = m.content || '';
@@ -873,7 +878,7 @@ $('#chat-form').addEventListener('submit', async (e) => {
         const res = await fetch('/chat/stream', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ messages: payload, docIds: scopeDocIds(), projectId: Number(activeProjectId), group: groupSearchEnabled }),
+            body: JSON.stringify({ messages: payload, docIds: scopeDocIds(), projectId: Number(activeProjectId), group: groupSearchEnabled, think: $('#think-toggle')?.checked || false }),
         });
 
         if (!res.ok || !res.body) {
@@ -888,6 +893,9 @@ $('#chat-form').addEventListener('submit', async (e) => {
 
         const reader = res.body.getReader();
         const decoder = new TextDecoder();
+        const bubble = streamEl.parentElement;   // live handle for the reasoning box
+        let reasoningBody = null;
+        let answerStarted = false;
         let buf = '';
         while (true) {
             const { done, value } = await reader.read();
@@ -900,7 +908,15 @@ $('#chat-form').addEventListener('submit', async (e) => {
                 if (!line) continue;
                 let frame;
                 try { frame = JSON.parse(line); } catch (_) { continue; }
-                if (frame.type === 'token') {
+                if (frame.type === 'reasoning') {
+                    assistant.reasoning = (assistant.reasoning || '') + frame.text;
+                    if (!reasoningBody) reasoningBody = mountThoughts(bubble, true); // expanded while thinking
+                    reasoningBody.textContent = assistant.reasoning;
+                    scrollThreadBottom();
+                } else if (frame.type === 'token') {
+                    // Answer starts -> collapse the thinking box (keep it available behind the toggle).
+                    if (!answerStarted && reasoningBody) collapseThoughts(bubble);
+                    answerStarted = true;
                     assistant.content += frame.text;
                     streamEl.textContent = assistant.content;
                     scrollThreadBottom();
@@ -949,6 +965,35 @@ function recordFeedback(m, rating, upBtn, downBtn) {
         localStorage.setItem('kb-feedback', JSON.stringify(log.slice(-100)));
     } catch (_) {}
     if (m.feedback) toast(m.feedback === 'up' ? 'Marked helpful' : 'Marked not helpful');
+}
+
+// ---------- AI thinking (collapsible reasoning box) ----------
+// Builds a collapsible "Thoughts" box; returns the element (its <pre> body is on el._body).
+function buildThoughts(text, expanded) {
+    const box = document.createElement('div');
+    box.className = 'thoughts' + (expanded ? ' open' : '');
+    const toggle = document.createElement('button');
+    toggle.type = 'button';
+    toggle.className = 'thoughts-toggle';
+    toggle.innerHTML = '<span class="caret">▸</span> 💭 Thoughts';
+    toggle.onclick = () => box.classList.toggle('open');
+    const body = document.createElement('pre');
+    body.className = 'thoughts-body';
+    body.textContent = text || '';
+    box.appendChild(toggle);
+    box.appendChild(body);
+    box._body = body;
+    return box;
+}
+// Ensures a live thoughts box is the first child of a streaming bubble; returns its <pre> body.
+function mountThoughts(bubble, expanded) {
+    let box = bubble.querySelector('.thoughts');
+    if (!box) { box = buildThoughts('', expanded); bubble.insertBefore(box, bubble.firstChild); }
+    return box._body;
+}
+function collapseThoughts(bubble) {
+    const box = bubble.querySelector('.thoughts');
+    if (box) box.classList.remove('open');
 }
 
 // ---------- Compare ----------

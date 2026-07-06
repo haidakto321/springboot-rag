@@ -47,8 +47,9 @@ public class ChatController {
         return out -> {
             try {
                 List<AskResponse.Source> sources =
-                        chatService.chatStream(req.messages(), scope, req.docIds(),
-                                token -> writeFrame(out, Map.of("type", "token", "text", token)));
+                        chatService.chatStream(req.messages(), scope, req.docIds(), req.think(),
+                                token -> writeFrame(out, Map.of("type", "token", "text", token)),
+                                reasoning -> writeFrame(out, Map.of("type", "reasoning", "text", reasoning)));
                 writeFrame(out, Map.of("type", "sources", "sources", sources));
                 writeFrame(out, Map.of("type", "done"));
             } catch (Exception e) {

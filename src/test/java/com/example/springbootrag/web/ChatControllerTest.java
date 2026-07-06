@@ -42,8 +42,8 @@ class ChatControllerTest {
     @Test
     @SuppressWarnings("unchecked")
     void streamsTokenSourcesAndDoneFrames() throws Exception {
-        when(chatService.chatStream(anyList(), anyList(), any(), any())).thenAnswer(inv -> {
-            Consumer<String> onToken = inv.getArgument(3);
+        when(chatService.chatStream(anyList(), anyList(), any(), anyBoolean(), any(), any())).thenAnswer(inv -> {
+            Consumer<String> onToken = inv.getArgument(4);
             onToken.accept("Hi");
             onToken.accept("!");
             return List.of(new AskResponse.Source(1, "doc-a", "# H", 0.9, "chunk text", 4));
@@ -64,7 +64,7 @@ class ChatControllerTest {
                 .contains("\"type\":\"sources\"").contains("doc-a")
                 .contains("\"type\":\"done\"");
 
-        verify(chatService).chatStream(anyList(), eq(List.of(1L)), any(), any());
+        verify(chatService).chatStream(anyList(), eq(List.of(1L)), any(), anyBoolean(), any(), any());
     }
 
     @Test

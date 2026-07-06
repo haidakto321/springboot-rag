@@ -9,5 +9,7 @@ import java.util.List;
  * {@code docIds} optionally scopes retrieval to a subset of documents (null/empty = all).
  * {@code projectId} optionally scopes retrieval to a specific project (null = default project).
  * {@code group} when true, expands scope to all projects in the same group as {@code projectId}.
+ * {@code think} when true, asks the model to reason first and streams that reasoning separately.
  */
-public record ChatRequest(List<ChatMessage> messages, List<String> docIds, Long projectId, boolean group) {}
+public record ChatRequest(List<ChatMessage> messages, List<String> docIds, Long projectId,
+                          boolean group, boolean think) {}
