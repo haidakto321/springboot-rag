@@ -312,17 +312,48 @@ yes/no "is this grounded?". Cheap, repeatable, good as a smoke test (here: 18/18
 - **Testcontainers + Docker 29:** pin the client `api.version=1.44` and Qdrant image `v1.9.0`;
   newer Docker Engines otherwise break the test client. Bites on WSL and native Ubuntu alike
   (both ship Engine 29.x).
-- **Reasoning models leak their thinking.** qwen3 (and similar) emit a `<think>...</think>`
-  chain-of-thought before the answer. Left on, it pollutes answers and breaks the judge's parsing
-  (qwen2.5:7b judged 14/18, qwen3 with thinking off judged 18/18). Disabling it is not one switch:
-  - the Ollama API `think:false` param works only on **new enough** Ollama builds;
-  - qwen3 also honors a `/no_think` **soft-switch** appended to the prompt (template-level);
-  - **older Ollama or smaller models (qwen3:4b) ignore both and stream the whole reasoning** -
-    slow, and the raw thoughts show up as the "answer".
-  So we do all three: send `think:false`, append `/no_think`, AND **strip `<think>...</think>`
-  defensively** from the stream (a small stateful filter that suppresses text between the tags,
-  buffering a few chars so a tag split across token boundaries is still caught). Belt, suspenders,
-  and a second belt - never trust a single model-behavior flag.
+- **Reasoning models leak their thinking - and `think:false` does NOT stop it.** qwen3 (and
+  similar) reason before answering. The instinct is to turn reasoning OFF (`think:false` +
+  `/no_think` + strip `<think>...</think>`). That is a trap on small models: **qwen3:4b reasons
+  anyway** and, with thinking "off", just dumps the raw chain-of-thought into `message.content`
+  WITHOUT the `<think>` tags - so a tag-stripping filter never catches it and the reasoning shows
+  up as the answer. Turning it off does not save time either; the model still reasons, it only
+  changes where the text lands.
+  - **The fix: always ask the model to think (`think:true`) and read reasoning from the separate
+    `message.thinking` field.** Modern Ollama returns reasoning there (content is empty while it
+    thinks), so `content` stays a clean answer no matter what. Whether you SHOW the reasoning is
+    then a pure UI choice - forward the `thinking` deltas to the client, or drop them.
+  - Keep the `<think>...</think>` stream filter too, but only as a **defensive** net for a
+    dangling `</think>` a model might still emit inline. Route what it catches to the reasoning
+    channel, not the answer.
+  - Lesson: don't fight a reasoning model's nature with an off-switch it ignores. Give the
+    reasoning a clean home (its own field/channel) and the answer stays uncontaminated for free.
+- **Every chunk must fit the embedding model's context window.** A structure-aware chunker keeps
+  code blocks and pipe tables ATOMIC (splitting them would destroy meaning) - but a big
+  Confluence-exported table can then be one huge chunk that exceeds the embedder's context, and
+  the embed call fails with `input length exceeds the context length` (a 500 from Ollama). Add a
+  hard character cap as a final safety net BEFORE embedding: any chunk over the cap is split at
+  whitespace (hard-cut for a single giant token), and the list renumbered. Size the cap by TOKENS,
+  not by comfort: dense tables (IDs, numbers, pipes) tokenize near 1 char/token, so for a
+  2048-token embedder ~2000 chars is safe but 4000 is not (learned the hard way - 4000 still failed
+  on requirement tables). The atomic-block rule is right; it just needs a ceiling.
+- **Bulk import must be resilient per item.** A 400-page import that aborts on page 15 because one
+  chunk was un-embeddable wastes everything before it. Wrap each document in try/catch: on failure,
+  roll back its partial rows and CONTINUE, reporting a skip. Stream `pagesImported`/`pagesFailed`
+  so the operator sees what got dropped instead of a silent half-import. One poison page must not
+  poison the batch.
+- **Filename-only doc ids collide across folders.** Deriving a doc id from just the filename
+  (`Foo.md` -> `Foo`) means two pages named `Foo.md` in different folders map to the same id and
+  the second silently overwrites the first (428 docs imported from 429 files = 1 lost page). If the
+  source has a folder hierarchy, qualify the id with the path.
+- **Empty pages are noise.** Wiki exports are full of stub pages (title only, or blank). Skip
+  blank/whitespace-only files at ingest - an empty chunk is a useless vector that only dilutes
+  retrieval.
+- **PDF/Office in, Markdown out - as a pre-step, not in the app.** To ingest PDFs/docx/pptx, convert
+  them to Markdown FIRST with a separate tool (e.g. Microsoft's markitdown) and feed the `.md` to
+  the existing pipeline. Keep the converter (usually Python) OUT of the Java service - a script that
+  writes `.md` next to each source keeps concerns split and lets you eyeball the output before
+  importing. Don't couple a clean text pipeline to a foreign toolchain on every deploy.
 - **Embed once per request:** an embedding call is a network round-trip. `/compare` embeds the
   query a SINGLE time and shares the vector across pgvector/qdrant/hybrid so timings reflect
   search cost, not three model calls. Don't re-embed the same text.
@@ -418,6 +449,40 @@ it evaluates to false and returns zero hits.
 **Group scoping** adds one pre-step: resolve the group name to project ids
 (`SELECT id FROM projects WHERE group_name = ?`), then pass that list to the IN clause above. The
 retrieval query itself is unchanged - the caller just sends more ids.
+
+---
+
+## 14. GraphRAG in practice (what actually moved the needle - and what didn't)
+
+GraphRAG = seed with normal retrieval (hybrid), then EXPAND along a graph of the corpus (pages
+linked to pages, or chunks sharing an entity), then rerank the enlarged pool. The pitch: surface
+"forgotten" knowledge that keyword/vector search misses. Two edge sources, very different cost:
+
+- **Structural edges** (page links + folder hierarchy) - free. Parse them at ingest, no LLM.
+- **Semantic edges** (entities extracted per chunk, pages bridged by a shared entity) - one LLM
+  call PER CHUNK at ingest. On a 7,500-chunk corpus that is thousands of calls. Opt-in only.
+
+**Honest finding from a real 428-page wiki: structural GraphRAG returned an IDENTICAL top-10 to
+plain hybrid on every query tried.** Two reasons, both worth internalizing:
+
+1. **If the answer page contains the query's words, hybrid already finds it** - graph expansion
+   adds neighbors but the reranker keeps the direct hit on top. The graph changed nothing.
+2. **A real graph "win" requires a vocabulary mismatch**: the answer must live in a page whose OWN
+   text does NOT contain the query terms, but which is a NEIGHBOR of a page that does. Only then
+   does expansion pull in something retrieval alone would miss. These cases are HARD to write on
+   purpose - the natural question re-uses the target page's words, which hands the win back to
+   hybrid.
+
+Lessons:
+- **Don't assume a fancier retriever helps - measure it.** Build a golden set with the graph
+  backend and hybrid side by side; keep a "graph-advantage" question only if hybrid actually misses
+  it AND graph catches it. Most of ours collapsed into plain coverage.
+- **Structural edges are nearly free, so ship them** - worst case they tie hybrid, and they cost
+  nothing at query time. The semantic entity layer is where the "forgotten feature bridged by a
+  shared entity" story lives, but it is a real ingest-cost decision, not a default.
+- **The reranker matters as much as the graph.** With an identity (no-op) reranker, expansion just
+  appends low-scoring neighbors that never rise. A real cross-encoder reranker is what lets a
+  genuinely relevant neighbor overtake the seed - without it, GraphRAG has no teeth.
 
 ---
 
