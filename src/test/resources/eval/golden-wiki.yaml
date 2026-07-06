@@ -1,0 +1,80 @@
+# Golden retrieval set for the imported Azure/Confluence wiki (project "docmaster").
+# Separate from golden.yaml (which tests the project's OWN docs) - this one measures recall
+# on the real 428-page wiki corpus AND whether the graph backend beats hybrid.
+#
+# expectedDocId = wiki page filename minus .md, chars outside [a-zA-Z0-9._-] replaced by '-'
+# (same rule as golden.yaml / WikiImporter.docIdOf). expectedHeadingPath: null = any chunk of
+# the doc counts as a hit.
+#
+# NOTE: questions are derived from private wiki content - keep this file out of any public export.
+
+# =====================================================================================
+# SECTION A - COVERAGE (verified). Answer sits in the named page's own text. Any backend
+# (fts/pgvector/hybrid/graph) should find these; this is the baseline recall on real data.
+# =====================================================================================
+
+- question: "Which two electronic-invoice formats are used for Germany?"
+  expectedDocId: "E-invoicing"
+  expectedHeadingPath: null
+
+- question: "From when is e-invoicing mandatory in Germany?"
+  expectedDocId: "E-invoicing"
+  expectedHeadingPath: null
+
+- question: "Which German forum is referenced for electronic-invoicing standards?"
+  expectedDocId: "E-invoicing"
+  expectedHeadingPath: null
+
+- question: "Which obsolete Java namespace is still used for the groupId and package names?"
+  expectedDocId: "Development-debt"
+  expectedHeadingPath: null
+
+- question: "What documentation approach is endorsed for keeping docs near their source and maintainable?"
+  expectedDocId: "Development-debt"
+  expectedHeadingPath: null
+
+- question: "What is the purpose of the System Context diagram in the platform architecture?"
+  expectedDocId: "System-Architecture-Overview"
+  expectedHeadingPath: null
+
+- question: "Why does retrieval-augmented generation need source highlighting?"
+  expectedDocId: "SOTA-RAG-relevant-source-highlighting"
+  expectedHeadingPath: null
+
+- question: "Who is responsible for updating the list of extraordinary access grants?"
+  expectedDocId: "Extraordinary-Access-Grants"
+  expectedHeadingPath: null
+
+- question: "What rating scale does the team skill matrix use to score knowledge levels?"
+  expectedDocId: "Skill-Matrix"
+  expectedHeadingPath: null
+
+# These two started life as Section-B graph-advantage candidates but were VALIDATED and
+# turned out to be plain coverage - hybrid already finds each target (ranks 1 and 9) and the
+# graph backend returned an IDENTICAL top-10. They are kept here as coverage.
+- question: "Which ad-hoc administrator permissions across the platform are easy to forget and should be reviewed periodically?"
+  expectedDocId: "Extraordinary-Access-Grants"
+  expectedHeadingPath: null
+
+- question: "Which known shortcomings of the Job API and Data API are still open for the invoice services?"
+  expectedDocId: "Development-debt"
+  expectedHeadingPath: null
+
+# =====================================================================================
+# SECTION B - GRAPH-ADVANTAGE (none validated yet). See docs note below.
+#
+# Finding (2026-07-06): on this corpus with the DEFAULT structural edges + identity reranker,
+# graph == hybrid on every query tried - neighbour expansion did not change the top-10. A real
+# graph-advantage question needs BOTH:
+#   1. the answer to live in a page whose OWN text does NOT contain the query's distinctive
+#      words (otherwise hybrid matches it directly - as happened to the validated ones above), and
+#   2. that page to be a doc_edge neighbour (or shared-entity neighbour) of a page that DOES
+#      match the query.
+# Authoring #1 blindly is hard - the natural question re-uses the target page's vocabulary.
+# Two ways forward:
+#   - Turn on the semantic layer (app.graph.edges=both) and re-import so entity bridges exist,
+#     then look for orphan pages reachable only via a shared entity; or
+#   - Mine the link graph for a page A that matches a topic and a neighbour B that answers a
+#     sub-question in different words, and phrase the query in A's words.
+# Add validated entries here once found (same format).
+# =====================================================================================
