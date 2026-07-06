@@ -25,12 +25,24 @@ public class WikiImporter {
         this.docEdges = docEdges;
     }
 
+    /** Called after each page is ingested so callers can report live progress. */
+    @FunctionalInterface
+    public interface ProgressListener {
+        void onPage(int done, int total, String docId);
+    }
+
+    /** Backward-compatible overload with no progress reporting. */
+    public int importDir(long projectId, Path wikiRoot) throws Exception {
+        return importDir(projectId, wikiRoot, (done, total, docId) -> {});
+    }
+
     /**
      * Walks {@code wikiRoot} for {@code *.md} pages (skipping {@code .git} and {@code .attachments}),
      * ingests each page with a git-derived {@code updatedAt}, and writes a folder-hierarchy edge
      * from the parent folder's page to each child page. Returns the number of pages imported.
+     * Invokes {@code listener} after each page with the running done/total counts and the doc id.
      */
-    public int importDir(long projectId, Path wikiRoot) throws Exception {
+    public int importDir(long projectId, Path wikiRoot, ProgressListener listener) throws Exception {
         int count = 0;
         try (Stream<Path> paths = Files.walk(wikiRoot)) {
             List<Path> pages = paths
@@ -38,6 +50,7 @@ public class WikiImporter {
                     .filter(p -> !isUnderGitDir(p))
                     .filter(p -> !p.toString().contains(".attachments"))
                     .toList();
+            int total = pages.size();
             for (Path page : pages) {
                 String text = Files.readString(page, StandardCharsets.UTF_8);
                 String docId = docIdOf(page);
@@ -49,6 +62,7 @@ public class WikiImporter {
                     docEdges.insertHierarchy(projectId, docIdOf(parent), docId);
                 }
                 count++;
+                listener.onPage(count, total, docId);
             }
         }
         return count;

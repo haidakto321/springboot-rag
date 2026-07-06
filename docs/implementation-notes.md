@@ -312,3 +312,37 @@ Retrieval metrics and faithfulness smoke test:
 ### Tests verified green
 - Full `./mvnw -q test` passes: 18 units + 1 integration test covering knowledge-base end-to-end (document import, chunk retrieval, chat answer, eval metrics).
 - Eval tests optional/gated: `./mvnw test "-Dgroups=eval" "-DexcludedGroups="` runs retrieval evals; `./mvnw test "-Dgroups=eval-judge" "-DexcludedGroups="` runs faithfulness evals (both need Docker + Ollama).
+
+## 2026-07-06 - REST wiki-import endpoint with live progress
+
+Added `POST /projects/{projectId}/import-wiki` so a whole Azure-wiki clone imports with one
+call, STREAMING live progress instead of blocking silently. Mirrors `ChatController`: NDJSON
+frames over `StreamingResponseBody` (`application/x-ndjson`), one flush each:
+- `{"type":"start","total":N}` once (N = page count, known before the loop).
+- `{"type":"progress","done":k,"total":N,"doc":...}` after each page ingested.
+- `{"type":"done","pagesImported":N}` on normal completion.
+- `{"type":"error","message":...}` if the import throws mid-stream (response already 200).
+
+`WikiImporter` got a `ProgressListener` functional interface + an `importDir(projectId, root,
+listener)` overload; the old 2-arg `importDir` delegates with a no-op listener, so
+`WikiImporterManualTest` still compiles (backward compatible). `total` is `pages.size()`,
+reported from the first callback.
+
+Validation runs BEFORE the stream (fail-fast -> clean 400 via `GlobalExceptionHandler`, not a
+mid-stream error frame): project must exist, `path` non-blank, and `Files.isDirectory(path)`.
+
+Import uses the configured `app.graph.edges` (default `structural` = no LLM). No `edges`
+override param on the endpoint. The existing `spring.mvc.async.request-timeout: 600000` (10 min)
+covers long imports.
+
+**SECURITY:** this endpoint reads an arbitrary server-side directory path supplied by the
+caller. Acceptable ONLY for a localhost single-user dev sandbox with no auth - it is a
+dev/operator tool, not a public API. If this app is ever exposed remotely, gate it (config flag
+or jail imports under a fixed base dir) - otherwise it is a directory-traversal / arbitrary-read
+lever.
+
+Tests (`WikiImportControllerIntegrationTest`, `app.graph.edges=structural`, no Ollama): MockMvc
+async dispatch asserts 3 `progress` frames + `start.total=3` + final `done.pagesImported=3` and
+3 docs landed via `pgVector.listDocuments`; a direct `WikiImporter` callback test asserts
+`total==3` and `done` increments 1..3 (regression guard independent of streaming plumbing); a
+negative test asserts a non-existent path -> HTTP 400. Full suite green (100 tests, 3 skipped).
