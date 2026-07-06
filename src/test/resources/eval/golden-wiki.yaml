@@ -76,5 +76,10 @@
 #     then look for orphan pages reachable only via a shared entity; or
 #   - Mine the link graph for a page A that matches a topic and a neighbour B that answers a
 #     sub-question in different words, and phrase the query in A's words.
+# Update (2026-07-06): tried the first path (edges=both re-import to build entity bridges) and it
+# is BLOCKED on this dev box - qwen3:4b extraction runs on CPU (4 GB GPU too small) at ~11.5 tok/s,
+# and think:false is ignored so each chunk costs 2-4+ min of chain-of-thought. Full/subset re-import
+# is not runnable here (details in docs/LEARNINGS.md, section 14). Section B stays empty until the
+# semantic layer is populated on capable hardware (or via a tiny GPU-resident extraction model).
 # Add validated entries here once found (same format).
 # =====================================================================================

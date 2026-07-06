@@ -484,6 +484,22 @@ Lessons:
   appends low-scoring neighbors that never rise. A real cross-encoder reranker is what lets a
   genuinely relevant neighbor overtake the seed - without it, GraphRAG has no teeth.
 
+**Feasibility check (2026-07-06): the semantic entity layer is hardware-bound, not just "opt-in".**
+Tried to populate the entity tables (`edges=both`) by re-importing the wiki. Measured on the dev
+box (RTX 3050 Laptop, 4 GB VRAM) and it does not fit:
+- qwen3:4b (~3.2 GB) will not co-reside with nomic-embed in 4 GB, so Ollama runs the chat model on
+  **CPU** - measured **~11.5 tok/s**.
+- `think:false` is ignored (see the reasoning-leak note above), so every extraction call first emits
+  1.5-3k tokens of chain-of-thought before the JSON. At 11.5 tok/s that is **2-4+ minutes PER CHUNK**.
+- Full 7,536-chunk corpus at that rate = weeks. Even a 26-page subfolder (~hundreds of chunks) = many
+  hours. A single test import produced **0 entities in 4 minutes** (still grinding chunk #1).
+- Takeaway: `edges=both` needs a small extraction model that fits the GPU (e.g. a ~1.5-2 B model
+  alongside nomic) OR a bigger GPU. On a 4 GB laptop it is not runnable at corpus scale. The
+  reserved `app.graph.extract-model` knob (currently unwired - extraction reuses `app.chat.model`)
+  is exactly the lever to add: point extraction at a tiny fast model, leave chat on qwen3:4b.
+- Consequence: golden-wiki.yaml **Section B (graph-advantage) stays empty** - it cannot be hunted
+  until the semantic layer is actually populated on capable hardware.
+
 ---
 
 ## Where to go next
