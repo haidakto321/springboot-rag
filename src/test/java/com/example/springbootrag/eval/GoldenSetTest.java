@@ -17,7 +17,7 @@ class GoldenSetTest {
     void loadsTheDefaultSelfCorpusSet() {
         List<GoldenEntry> entries = GoldenSet.load();
 
-        assertThat(entries).isNotEmpty();
+        assertThat(entries).hasSizeGreaterThanOrEqualTo(10);
         assertThat(entries).allSatisfy(e -> {
             assertThat(e.question()).isNotBlank();
             assertThat(e.expectedDocId()).isNotBlank();
