@@ -1,5 +1,6 @@
 package com.example.springbootrag.eval;
 
+import com.example.springbootrag.model.SearchHit;
 import com.example.springbootrag.repository.ProjectRepository;
 import com.example.springbootrag.service.SearchService;
 import com.example.springbootrag.web.dto.ProjectSummary;
@@ -11,7 +12,10 @@ import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.dao.DataAccessException;
 import org.springframework.test.context.TestPropertySource;
 
+import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.List;
+import java.util.Locale;
 import java.util.Optional;
 
 import static org.assertj.core.api.Assertions.assertThat;
@@ -55,6 +59,71 @@ class WikiRetrievalEvalTest {
                         + "%d questions, topK=%d%n",
                 project.name(), project.id(), project.docCount(), project.chunkCount(),
                 golden.size(), TOP_K);
+
+        List<BackendRun> runs = runAll(golden, project.id());
+
+        printAggregate(runs, golden.size());
+
+        // A run that quietly returns nothing must fail, not print a table of zeros.
+        assertThat(runs).hasSize(BACKENDS.size());
+        assertThat(runs).allSatisfy(run -> assertThat(run.hits()).hasSize(golden.size()));
+        assertThat(runs.stream().anyMatch(run -> Arrays.stream(run.ranks()).anyMatch(r -> r > 0)))
+                .as("every backend missed every question - wrong project scope or empty corpus?")
+                .isTrue();
+    }
+
+    /** One backend's full sweep: hits per question, plus the rank of the expected doc. */
+    record BackendRun(String backend, List<List<SearchHit>> hits, int[] ranks) {}
+
+    /** Runs every golden question through every backend once, scoped to the corpus project. */
+    private List<BackendRun> runAll(List<GoldenEntry> golden, long projectId) {
+        List<BackendRun> runs = new ArrayList<>();
+        for (String backend : BACKENDS) {
+            List<List<SearchHit>> hits = new ArrayList<>();
+            int[] ranks = new int[golden.size()];
+            for (int i = 0; i < golden.size(); i++) {
+                GoldenEntry entry = golden.get(i);
+                List<SearchHit> result = searchService.search(
+                        backend, entry.question(), TOP_K, List.of(projectId), List.of());
+                hits.add(result);
+                ranks[i] = rankOfExpected(result, entry);
+            }
+            runs.add(new BackendRun(backend, hits, ranks));
+        }
+        return runs;
+    }
+
+    /**
+     * 1-based rank of the expected document, 0 when absent from the top K.
+     * Same rule as RetrievalEvalTest: docId must match and, when the golden entry pins a heading
+     * path, the hit's heading path must start with it.
+     */
+    private static int rankOfExpected(List<SearchHit> hits, GoldenEntry e) {
+        for (int i = 0; i < hits.size(); i++) {
+            SearchHit h = hits.get(i);
+            boolean docMatch = h.docId().equals(e.expectedDocId());
+            boolean headingMatch = e.expectedHeadingPath() == null
+                    || (h.headingPath() != null && h.headingPath().startsWith(e.expectedHeadingPath()));
+            if (docMatch && headingMatch) {
+                return i + 1;
+            }
+        }
+        return 0;
+    }
+
+    /** recall@5 is counted inside the first 5 of the TOP_K fetched, matching RetrievalEvalTest. */
+    private static void printAggregate(List<BackendRun> runs, int questionCount) {
+        System.out.printf("%n%-10s %10s %10s %10s%n", "backend", "recall@5", "MRR", "hit@1");
+        for (BackendRun run : runs) {
+            double recall5 = 0, mrr = 0, hit1 = 0;
+            for (int rank : run.ranks()) {
+                if (rank >= 1 && rank <= 5) recall5++;
+                if (rank >= 1) mrr += 1.0 / rank;
+                if (rank == 1) hit1++;
+            }
+            System.out.printf(Locale.ROOT, "%-10s %10.3f %10.3f %10.3f%n",
+                    run.backend(), recall5 / questionCount, mrr / questionCount, hit1 / questionCount);
+        }
     }
 
     /**
