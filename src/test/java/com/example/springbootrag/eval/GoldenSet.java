@@ -8,12 +8,20 @@ import java.util.Map;
 
 public final class GoldenSet {
 
+    private static final String DEFAULT_RESOURCE = "/eval/golden.yaml";
+
     private GoldenSet() {}
 
+    /** The self-corpus golden set (this project's own docs). */
     public static List<GoldenEntry> load() {
-        try (InputStream in = GoldenSet.class.getResourceAsStream("/eval/golden.yaml")) {
+        return load(DEFAULT_RESOURCE);
+    }
+
+    /** Loads any golden set from the test classpath, e.g. "/eval/golden-wiki.yaml". */
+    public static List<GoldenEntry> load(String resource) {
+        try (InputStream in = GoldenSet.class.getResourceAsStream(resource)) {
             if (in == null) {
-                throw new IllegalStateException("eval/golden.yaml not found on test classpath");
+                throw new IllegalStateException(resource + " not found on the test classpath");
             }
             List<Map<String, String>> raw = new Yaml().load(in);
             return raw.stream()
@@ -23,7 +31,7 @@ public final class GoldenSet {
                             m.get("expectedHeadingPath")))
                     .toList();
         } catch (Exception e) {
-            throw new IllegalStateException("could not load golden set", e);
+            throw new IllegalStateException("could not load golden set " + resource, e);
         }
     }
 }
