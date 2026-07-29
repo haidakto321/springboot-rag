@@ -132,20 +132,23 @@ class WikiRetrievalEvalTest {
         System.out.printf("%nrank of expected doc per question (0 = miss)%n");
         System.out.printf("%-46s", "question");
         for (BackendRun run : runs) {
-            System.out.printf(" %7s", run.backend());
+            System.out.printf(" %8s", run.backend());
         }
         System.out.println();
 
         for (int i = 0; i < golden.size(); i++) {
             System.out.printf("%-46s", truncate(golden.get(i).question(), 44));
             for (BackendRun run : runs) {
-                System.out.printf(" %7d", run.ranks()[i]);
+                System.out.printf(" %8d", run.ranks()[i]);
             }
             System.out.println();
         }
     }
 
     private static String truncate(String s, int max) {
+        if (max <= 3) {
+            return s.substring(0, Math.max(0, Math.min(max, s.length())));
+        }
         return s.length() <= max ? s : s.substring(0, max - 3) + "...";
     }
 
