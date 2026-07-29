@@ -414,3 +414,74 @@ query rewrite, not user-facing text. Left as-is.
 
 Verified live: think=false -> 0 reasoning frames, clean answer, no leak; think=true -> reasoning
 streamed to its own channel, answer still clean. Full suite green (105 tests).
+
+## 2026-07-29 - Wiki retrieval eval harness (`WikiRetrievalEvalTest`)
+
+Wired `golden-wiki.yaml` (11 questions, previously unrunnable) into a real test. `GoldenSet.load()`
+gained a resource-path overload (`load(String)`; the existing no-arg `load()` is untouched and
+still used by `RetrievalEvalTest`). `WikiRetrievalEvalTest` is tagged `eval-wiki`, added to the
+pom's existing `${excludedGroups}` default (same mechanism as `eval`/`eval-judge`, no new plumbing
+needed), and run with `./mvnw test "-Dgroups=eval-wiki" "-DexcludedGroups="`.
+
+### Live stack instead of Testcontainers - why re-import was rejected
+`RetrievalEvalTest` builds its own throwaway Testcontainers corpus per run. That does not work for
+the wiki: the corpus is private (429 source files, cannot ship in the repo) and re-embedding 7,536
+chunks costs real wall-clock time - not viable on every test run. `WikiRetrievalEvalTest` instead
+declares no Testcontainers at all: Spring boots against `application.yml` and queries whatever is
+ALREADY imported in the live local stack (Postgres + Qdrant + Ollama already running on the dev
+box), resolving the project by NAME (`docmaster`, override with `-Deval.wiki.project=<name>`)
+rather than a hardcoded id.
+
+### Skip-not-fail precondition rule
+A fresh clone of this repo can never have the private wiki corpus, so a missing project must never
+be a hard failure - that would be permanent and meaningless for anyone who is not this dev box.
+`requireCorpus()` uses `Assumptions.assumeTrue(...)` (project exists, has chunks > 0) and
+`Assumptions.abort(...)` (Postgres unreachable) so the test SKIPS rather than fails when a
+precondition is absent. Only once the corpus and stack are both confirmed present does the test
+proceed to assert anything.
+
+### Read-only by construction
+`WikiRetrievalEvalTest` injects only `SearchService`, `ProjectRepository`, and `Reranker` (the last
+one solely to print which reranker implementation is active) - never `IngestService`. It also
+carries `@TestPropertySource(properties = "spring.sql.init.mode=never")` so Spring does not re-run
+`schema.sql` against the live database. No code path in this class can write or delete a row.
+
+### Surefire and `-D` propagation - the planned pom fallback was never needed
+The plan anticipated a `pom.xml` `<systemPropertyVariables>` fallback in case Surefire's forked JVM
+did not see `-Deval.wiki.project` / `-Deval.rerank` / `-Dgroups` / `-DexcludedGroups`. Not needed:
+**`-D` system properties DO propagate into the forked Surefire JVM as-is.** Confirmed two ways:
+`-Dgroups=eval-wiki "-DexcludedGroups="` correctly selected and ran only `WikiRetrievalEvalTest`,
+and `-Deval.rerank=djl` reached the `@DynamicPropertySource` override and switched in the real
+`DjlReranker` bean (see the defect note below) - both without touching `pom.xml`.
+
+### Measured numbers (`docmaster` project, 428 docs / 7,536 chunks, 11 golden questions, topK=10)
+- **fts**: recall@5=0.182 MRR=0.182 hit@1=0.182 - 2 of 11 questions hit (both at rank 1), 9 misses.
+- **pgvector / qdrant / hybrid / rerank / graph**: identical - recall@5=0.909 MRR=0.919
+  hit@1=0.909. 10 of 11 questions land at rank 1; the 11th (open shortcomings of the Job API and
+  Data API) ranks 9th on every one of these five backends, never missed outright.
+- **graph vs hybrid**: expected-doc rank differs on 0 of 11 questions; the full ordered top-10
+  `(docId, chunkIndex)` list is identical on 11 of 11. Interpretation and the corpus-dependence of
+  the hybrid-vs-vector result: `docs/LEARNINGS.md` §11 and §14.
+
+### Known defect (pre-existing, not caused by this work): `DjlReranker.loadModel()` cannot load
+`-Deval.rerank=djl` correctly switches the eval to the real cross-encoder bean - the eval prints
+`reranker=DjlReranker` in its header, proving the flag, the `@DynamicPropertySource` override, and
+`RerankConfig`'s bean selection all work end to end. The very next step fails:
+`DjlReranker.loadModel()` throws `IllegalStateException: Failed to load reranker model:
+BAAI/bge-reranker-base`, caused by `IllegalArgumentException: Invalid djl URL:
+djl://ai.djl.huggingface.pytorch/BAAI/bge-reranker-base`, thrown while DJL is still parsing and
+registering the model URL (`Criteria.Builder.optModelUrls` -> `DefaultModelZoo.parseLocation` ->
+`RepositoryFactoryImpl$DjlRepositoryFactory.newInstance`) - synchronously, in about 9 seconds,
+**before any HTTP request for model weights is attempted.** No download starts; this is not the
+"slow, many-minutes" scenario originally anticipated for a small-GPU box.
+
+Reproduced independently with this repo's own pre-existing, unmodified `DjlSpikeTest`
+(`RUN_DJL_SPIKE=true ./mvnw -Dtest=DjlSpikeTest test` -> identical exception in 1.6s), so this
+predates the eval harness and is not caused by it. Network reachability (`huggingface.co:443`,
+`mlrepo.djl.ai:443`) and DJL dependency versions were checked and ruled out as causes.
+
+**Consequence:** `app.rerank.provider=djl` is currently unusable on this machine, so the `rerank`
+backend has only ever run as the no-op `IdentityReranker`. The `LEARNINGS.md` §14 claim that a real
+cross-encoder is what gives graph expansion its teeth has therefore never actually been testable
+here - it is UNTESTED, not refuted. Fixing `DjlReranker.loadModel()`'s model-URL construction is
+separate work; `DjlReranker.java` was not touched by this task (out of scope, do-not-modify).

@@ -298,6 +298,34 @@ Sometimes you want to search inside *one* document, not the whole index.
 In this project hybrid scored recall@5 = 1.0, MRR = 0.94, hit@1 = 0.89; FTS alone = 0.22 recall -
 concrete proof hybrid earns its complexity.
 
+**Measured on the real 428-page wiki corpus** (`WikiRetrievalEvalTest`, 11 golden questions,
+topK=10, project `docmaster` = 428 docs / 7,536 chunks, default `IdentityReranker`,
+`app.graph.edges=structural`):
+
+| backend  | recall@5 | MRR   | hit@1 |
+|----------|----------|-------|-------|
+| fts      | 0.182    | 0.182 | 0.182 |
+| pgvector | 0.909    | 0.919 | 0.909 |
+| qdrant   | 0.909    | 0.919 | 0.909 |
+| hybrid   | 0.909    | 0.919 | 0.909 |
+| rerank   | 0.909    | 0.919 | 0.909 |
+| graph    | 0.909    | 0.919 | 0.909 |
+
+**New finding: hybrid does NOT beat plain vector search here** - pgvector, qdrant, hybrid, rerank,
+and graph tie exactly, the opposite of the self-corpus result just above, where hybrid clearly beat
+FTS. Why the two corpora disagree: the wiki questions are natural language ("Which German forum is
+referenced for electronic-invoicing standards?"), and the answer page usually already carries that
+same vocabulary, so semantic retrieval alone lands rank 1 on 10 of the 11 questions. FTS collapses
+to 0.182 (2 of 11) because a bare-word query ANDs its terms together, and a natural-language
+question rarely shares enough exact words with the answer page to satisfy that AND. The one
+question every non-FTS backend ranks 9th instead of 1st - open shortcomings of the Job API and Data
+API - is a precision miss, not a coverage miss; nobody drops it outside the top 10.
+
+> Lesson: "hybrid beats FTS" held on the self-corpus but is not a law - it is corpus-dependent.
+> When a corpus's natural-language questions already share vocabulary with their answer pages,
+> semantic search alone gets there first and hybrid has nothing left to add. Measure per corpus,
+> do not assume a retrieval-architecture win generalizes.
+
 **Answer quality** - is the generated answer faithful to the chunks (no hallucination)? Full human
 eval is slow, so use an **LLM-as-judge**: a second model reads the answer + sources and returns
 yes/no "is this grounded?". Cheap, repeatable, good as a smoke test (here: 18/18 faithful).
@@ -462,8 +490,13 @@ linked to pages, or chunks sharing an entity), then rerank the enlarged pool. Th
 - **Semantic edges** (entities extracted per chunk, pages bridged by a shared entity) - one LLM
   call PER CHUNK at ingest. On a 7,500-chunk corpus that is thousands of calls. Opt-in only.
 
-**Honest finding from a real 428-page wiki: structural GraphRAG returned an IDENTICAL top-10 to
-plain hybrid on every query tried.** Two reasons, both worth internalizing:
+**Measured finding (`WikiRetrievalEvalTest`, all 11 golden questions - not a handful checked by
+hand): expected-doc rank differs between graph and hybrid on 0 of 11 questions, and the full
+ordered top-10 `(docId, chunkIndex)` list is identical on 11 of 11.** This also reproduces, from
+code, the by-hand note `golden-wiki.yaml`'s own header comment already recorded for two of these
+questions (ranks 1 and 9). Under the default structural edges and identity reranker, structural
+GraphRAG is a complete no-op relative to hybrid on this corpus - not just "same document ranked,"
+the exact same ordered list, every time. Two reasons, both worth internalizing:
 
 1. **If the answer page contains the query's words, hybrid already finds it** - graph expansion
    adds neighbors but the reranker keeps the direct hit on top. The graph changed nothing.
@@ -480,9 +513,16 @@ Lessons:
 - **Structural edges are nearly free, so ship them** - worst case they tie hybrid, and they cost
   nothing at query time. The semantic entity layer is where the "forgotten feature bridged by a
   shared entity" story lives, but it is a real ingest-cost decision, not a default.
-- **The reranker matters as much as the graph.** With an identity (no-op) reranker, expansion just
-  appends low-scoring neighbors that never rise. A real cross-encoder reranker is what lets a
-  genuinely relevant neighbor overtake the seed - without it, GraphRAG has no teeth.
+- **The reranker matters as much as the graph - but this is a hypothesis, not a measured result.**
+  With an identity (no-op) reranker, expansion just appends low-scoring neighbors that never rise;
+  a real cross-encoder is what should let a genuinely relevant neighbor overtake the seed.
+  **Status: untested, not refuted.** `app.rerank.provider=djl` cannot currently load its model on
+  this machine - `DjlReranker.loadModel()` fails before any download starts, a pre-existing defect
+  unrelated to this eval work (recorded in `docs/implementation-notes.md`) - so the `rerank`
+  backend has only ever run as `IdentityReranker`, and this claim has never actually been
+  exercised. The `-Deval.rerank=djl` flag itself IS verified end to end (the eval prints
+  `reranker=DjlReranker` before the model load fails), so re-running this exact comparison is one
+  command away once the model-loading defect is fixed.
 
 **Feasibility check (2026-07-06): the semantic entity layer is hardware-bound, not just "opt-in".**
 Tried to populate the entity tables (`edges=both`) by re-importing the wiki. Measured on the dev

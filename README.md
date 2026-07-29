@@ -224,6 +224,15 @@ ollama serve          # runs on localhost:11434
 ./mvnw test "-Dgroups=eval-judge" "-DexcludedGroups="  # faithfulness smoke report (LLM judge, yes/no per answer)
 ```
 
+Wiki corpus eval (real 428-page corpus, live stack - NOT Testcontainers):
+```bash
+./mvnw test "-Dgroups=eval-wiki" "-DexcludedGroups="
+```
+Prereqs: Postgres + Qdrant up, Ollama with nomic-embed-text, and the wiki already imported into
+a project named "docmaster" (override with `-Deval.wiki.project=<name>`). The test is read-only
+and skips itself when the corpus is absent. Add `-Deval.rerank=djl` to run with the real
+cross-encoder instead of the no-op reranker.
+
 ## Run in WSL2 (no Docker Desktop)
 
 For machines where policy forbids Docker Desktop: run the WHOLE stack inside Ubuntu WSL2
