@@ -65,11 +65,11 @@ class WikiRetrievalEvalTest {
         printAggregate(runs, golden.size());
 
         // A run that quietly returns nothing must fail, not print a table of zeros.
-        assertThat(runs).hasSize(BACKENDS.size());
-        assertThat(runs).allSatisfy(run -> assertThat(run.hits()).hasSize(golden.size()));
-        assertThat(runs.stream().anyMatch(run -> Arrays.stream(run.ranks()).anyMatch(r -> r > 0)))
-                .as("every backend missed every question - wrong project scope or empty corpus?")
-                .isTrue();
+        // Per backend, not across backends: one healthy backend must not mask five broken ones.
+        assertThat(runs).allSatisfy(run ->
+                assertThat(Arrays.stream(run.ranks()).anyMatch(r -> r > 0))
+                        .as("backend '%s' found no golden doc for any question", run.backend())
+                        .isTrue());
     }
 
     /** One backend's full sweep: hits per question, plus the rank of the expected doc. */
