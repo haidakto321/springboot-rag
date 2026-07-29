@@ -2,6 +2,7 @@ package com.example.springbootrag.eval;
 
 import com.example.springbootrag.model.SearchHit;
 import com.example.springbootrag.repository.ProjectRepository;
+import com.example.springbootrag.rerank.Reranker;
 import com.example.springbootrag.service.SearchService;
 import com.example.springbootrag.web.dto.ProjectSummary;
 import org.junit.jupiter.api.Assumptions;
@@ -10,6 +11,8 @@ import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.dao.DataAccessException;
+import org.springframework.test.context.DynamicPropertyRegistry;
+import org.springframework.test.context.DynamicPropertySource;
 import org.springframework.test.context.TestPropertySource;
 
 import java.util.ArrayList;
@@ -28,8 +31,9 @@ import static org.assertj.core.api.Assertions.assertThat;
  * Spring uses application.yml and queries the LIVE local stack, reading whatever is already
  * imported.
  *
- * <p>READ-ONLY BY CONSTRUCTION: only SearchService and ProjectRepository are injected, so there is
- * no code path here that can write or delete. Do NOT add IngestService to this class.
+ * <p>READ-ONLY BY CONSTRUCTION: only SearchService, ProjectRepository, and Reranker (injected
+ * solely to print which implementation is active) are used, so there is no code path here that
+ * can write or delete. Do NOT add IngestService to this class.
  *
  * <p>Prereqs: Postgres 5432 + Qdrant 6334 up, Ollama 11434 with nomic-embed-text pulled, and the
  * wiki already imported into a project named "docmaster" (override with -Deval.wiki.project=NAME).
@@ -49,6 +53,17 @@ class WikiRetrievalEvalTest {
     @Autowired SearchService searchService;
     @Autowired ProjectRepository projects;
 
+    /**
+     * Optional cross-encoder run: -Deval.rerank=djl maps onto app.rerank.provider.
+     * Blank (the default) leaves the no-op IdentityReranker in place.
+     */
+    @DynamicPropertySource
+    static void rerankOverride(DynamicPropertyRegistry registry) {
+        registry.add("app.rerank.provider", () -> System.getProperty("eval.rerank", ""));
+    }
+
+    @Autowired Reranker reranker;
+
     @Test
     void wikiRetrievalReport() {
         ProjectSummary project = requireCorpus();
@@ -59,6 +74,7 @@ class WikiRetrievalEvalTest {
                         + "%d questions, topK=%d%n",
                 project.name(), project.id(), project.docCount(), project.chunkCount(),
                 golden.size(), TOP_K);
+        System.out.printf("reranker=%s%n", reranker.getClass().getSimpleName());
 
         List<BackendRun> runs = runAll(golden, project.id());
 
