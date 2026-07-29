@@ -64,6 +64,7 @@ class WikiRetrievalEvalTest {
 
         printAggregate(runs, golden.size());
         printMatrix(golden, runs);
+        printGraphVsHybrid(golden, runs);
 
         // A run that quietly returns nothing must fail, not print a table of zeros.
         // Per backend, not across backends: one healthy backend must not mask five broken ones.
@@ -143,6 +144,48 @@ class WikiRetrievalEvalTest {
             }
             System.out.println();
         }
+    }
+
+    /** Identity of a result list: the ordered (docId, chunkIndex) pairs. */
+    private static List<String> keys(List<SearchHit> hits) {
+        return hits.stream().map(h -> h.docId() + "#" + h.chunkIndex()).toList();
+    }
+
+    /**
+     * Re-tests the LEARNINGS section 14 finding over the whole golden set instead of by hand.
+     * Reports both comparisons and names every question where either one differs.
+     */
+    private static void printGraphVsHybrid(List<GoldenEntry> golden, List<BackendRun> runs) {
+        BackendRun hybrid = runs.stream()
+                .filter(r -> r.backend().equals("hybrid")).findFirst().orElseThrow();
+        BackendRun graph = runs.stream()
+                .filter(r -> r.backend().equals("graph")).findFirst().orElseThrow();
+
+        int rankDiffers = 0;
+        int identicalTop10 = 0;
+        List<String> notes = new ArrayList<>();
+
+        for (int i = 0; i < golden.size(); i++) {
+            boolean sameOrder = keys(hybrid.hits().get(i)).equals(keys(graph.hits().get(i)));
+            if (sameOrder) {
+                identicalTop10++;
+            }
+            String question = truncate(golden.get(i).question(), 60);
+            if (hybrid.ranks()[i] != graph.ranks()[i]) {
+                rankDiffers++;
+                notes.add(String.format("  %s: hybrid=rank %d, graph=rank %d%s",
+                        question, hybrid.ranks()[i], graph.ranks()[i],
+                        sameOrder ? "" : "  (top-10 order differs)"));
+            } else if (!sameOrder) {
+                notes.add(String.format("  %s: same rank %d, but top-10 order differs",
+                        question, hybrid.ranks()[i]));
+            }
+        }
+
+        System.out.printf("%ngraph vs hybrid: expected-doc rank differs on %d of %d; "
+                        + "full top-10 identical on %d of %d%n",
+                rankDiffers, golden.size(), identicalTop10, golden.size());
+        notes.forEach(System.out::println);
     }
 
     private static String truncate(String s, int max) {
