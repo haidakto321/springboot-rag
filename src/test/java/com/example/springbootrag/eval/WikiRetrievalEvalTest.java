@@ -63,6 +63,7 @@ class WikiRetrievalEvalTest {
         List<BackendRun> runs = runAll(golden, project.id());
 
         printAggregate(runs, golden.size());
+        printMatrix(golden, runs);
 
         // A run that quietly returns nothing must fail, not print a table of zeros.
         // Per backend, not across backends: one healthy backend must not mask five broken ones.
@@ -124,6 +125,28 @@ class WikiRetrievalEvalTest {
             System.out.printf(Locale.ROOT, "%-10s %10.3f %10.3f %10.3f%n",
                     run.backend(), recall5 / questionCount, mrr / questionCount, hit1 / questionCount);
         }
+    }
+
+    /** One row per question, one column per backend, showing the rank of the expected doc. */
+    private static void printMatrix(List<GoldenEntry> golden, List<BackendRun> runs) {
+        System.out.printf("%nrank of expected doc per question (0 = miss)%n");
+        System.out.printf("%-46s", "question");
+        for (BackendRun run : runs) {
+            System.out.printf(" %7s", run.backend());
+        }
+        System.out.println();
+
+        for (int i = 0; i < golden.size(); i++) {
+            System.out.printf("%-46s", truncate(golden.get(i).question(), 44));
+            for (BackendRun run : runs) {
+                System.out.printf(" %7d", run.ranks()[i]);
+            }
+            System.out.println();
+        }
+    }
+
+    private static String truncate(String s, int max) {
+        return s.length() <= max ? s : s.substring(0, max - 3) + "...";
     }
 
     /**
