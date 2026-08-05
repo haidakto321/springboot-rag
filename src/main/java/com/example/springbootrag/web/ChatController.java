@@ -55,11 +55,16 @@ public class ChatController {
         SearchContext ctx = currentUser.context();
         return out -> {
             try {
-                List<AskResponse.Source> sources =
+                ChatService.StreamOutcome outcome =
                         chatService.chatStream(ctx, req.messages(), scope, req.docIds(), req.think(),
                                 token -> writeFrame(out, Map.of("type", "token", "text", token)),
                                 reasoning -> writeFrame(out, Map.of("type", "reasoning", "text", reasoning)));
-                writeFrame(out, Map.of("type", "sources", "sources", sources));
+                writeFrame(out, Map.of("type", "sources", "sources", outcome.sources()));
+                // The tokens are already on the wire, so a failed grounding check can only be
+                // reported, not applied. The UI turns this into a warning on the answer.
+                if (!outcome.verdict().allowed()) {
+                    writeFrame(out, Map.of("type", "guard", "reason", outcome.verdict().reason()));
+                }
                 writeFrame(out, Map.of("type", "done"));
             } catch (Exception e) {
                 // Response is already committed (200), so report the failure as a frame.

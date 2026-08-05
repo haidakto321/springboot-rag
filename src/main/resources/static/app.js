@@ -593,6 +593,10 @@ function uploadFile(file) {
         if (xhr.status >= 200 && xhr.status < 300) {
             const body = JSON.parse(xhr.responseText);
             toast(`Imported ${file.name} · ${body.chunksStored ?? '?'} chunks`);
+            // Ingest-time smell test: this document tries to talk to the model.
+            if (body.warnings && body.warnings.length) {
+                toast(`${file.name}: possible prompt injection - ${body.warnings[0]}`, 'error');
+            }
             localStorage.setItem('kb-last-import', 'Today');
             refreshDocs();
         } else {
@@ -889,6 +893,16 @@ function renderThread() {
         text.textContent = m.content || '';
         bubble.appendChild(text);
 
+        // Grounding warning sits directly under the answer text, before the citations.
+        if (m.role === 'assistant' && !m.streaming && m.guard) {
+            const warn = document.createElement('div');
+            warn.className = 'guard-warning';
+            warn.textContent = m.guard === 'ungrounded'
+                ? 'This answer cited no source. Treat it as unverified - it may come from the model, or from instructions hidden in a document.'
+                : 'This answer cited a source that was not retrieved. Treat it as unverified.';
+            bubble.appendChild(warn);
+        }
+
         if (m.sources && m.sources.length) {
             const chips = document.createElement('div');
             chips.className = 'chips';
@@ -1039,6 +1053,9 @@ $('#chat-form').addEventListener('submit', async (e) => {
                     scrollThreadBottom();
                 } else if (frame.type === 'sources') {
                     assistant.sources = frame.sources;
+                } else if (frame.type === 'guard') {
+                    // Tokens are already rendered; the server can only tell us they were not grounded.
+                    assistant.guard = frame.reason;
                 } else if (frame.type === 'error') {
                     assistant.content = (assistant.content ? assistant.content + '\n' : '') + `[error: ${frame.message}]`;
                     assistant.error = true;

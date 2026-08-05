@@ -32,8 +32,8 @@ app:
       - username: alice
         password: alice
         groups: [public, hr]
-      - username: bob
-        password: bob
+      - username: haiks
+        password: 123123
         groups: [public, eng]
   embedding:
     provider: ollama

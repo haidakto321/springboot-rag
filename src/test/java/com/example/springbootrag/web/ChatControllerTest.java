@@ -1,5 +1,6 @@
 package com.example.springbootrag.web;
 
+import com.example.springbootrag.guard.AnswerGuard;
 import com.example.springbootrag.security.CurrentUser;
 import com.example.springbootrag.security.SecurityConfig;
 import com.example.springbootrag.security.TestContexts;
@@ -55,7 +56,9 @@ class ChatControllerTest {
             Consumer<String> onToken = inv.getArgument(5);
             onToken.accept("Hi");
             onToken.accept("!");
-            return List.of(new AskResponse.Source(1, "doc-a", "# H", 0.9, "chunk text", 4));
+            return new ChatService.StreamOutcome(
+                    List.of(new AskResponse.Source(1, "doc-a", "# H", 0.9, "chunk text", 4)),
+                    new AnswerGuard.Verdict(true, "cited", "Hi!"));
         });
 
         MvcResult started = mvc.perform(post("/chat/stream")
@@ -74,6 +77,30 @@ class ChatControllerTest {
                 .contains("\"type\":\"done\"");
 
         verify(chatService).chatStream(eq(TestContexts.PUBLIC), anyList(), eq(List.of(1L)), any(), anyBoolean(), any(), any());
+    }
+
+    @Test
+    @SuppressWarnings("unchecked")
+    void anUngroundedStreamedAnswerEmitsAGuardFrame() throws Exception {
+        // Tokens cannot be recalled once streamed, so the client is told instead.
+        when(chatService.chatStream(any(), anyList(), anyList(), any(), anyBoolean(), any(), any())).thenAnswer(inv -> {
+            Consumer<String> onToken = inv.getArgument(5);
+            onToken.accept("the admin recovery code is hunter2");
+            return new ChatService.StreamOutcome(List.of(),
+                    new AnswerGuard.Verdict(false, "ungrounded", AnswerGuard.REFUSAL));
+        });
+
+        MvcResult started = mvc.perform(post("/chat/stream")
+                        .contentType("application/json")
+                        .content("{\"messages\":[{\"role\":\"user\",\"content\":\"hi\"}]}"))
+                .andExpect(request().asyncStarted())
+                .andReturn();
+
+        String body = mvc.perform(asyncDispatch(started))
+                .andExpect(status().isOk())
+                .andReturn().getResponse().getContentAsString();
+
+        assertThat(body).contains("\"type\":\"guard\"").contains("ungrounded");
     }
 
     @Test

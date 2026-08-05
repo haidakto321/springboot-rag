@@ -71,7 +71,7 @@ Merged "streaming answers" + "conversational follow-up".
 ### Permission-aware retrieval  ✅ done (2026-08-05)
 Every chunk carries `allowed_groups` (stamped at ingest, mirrored into the Qdrant payload), and
 every retrieval path takes a `SearchContext` built from the authenticated principal - HTTP Basic
-over two fake users (`alice` in `hr`, `bob` in `eng`, both `public`) via `spring-boot-starter-security`.
+over two fake users (`alice` in `hr`, `haiks` in `eng`, both `public`) via `spring-boot-starter-security`.
 
 - UI: sidebar shows who you are signed in as; the Import panel picks the access label for the
   upload (only groups you belong to - the server rejects the rest with 403).
@@ -82,6 +82,26 @@ over two fake users (`alice` in `hr`, `bob` in `eng`, both `public`) via `spring
 - `AccessControlIntegrationTest` is the "try to break it" half - see `LEARNINGS.md` §16 and
   `RAG-MASTERY.md` §1 for what it found. Not built: audit logging, per-document ACL editing,
   and access-filtered project counts.
+
+### Injection hardening - fenced context + cite-or-refuse  ✅ done (2026-08-05)
+Retrieved text is treated as untrusted data, and an answer that cannot point at a source is not
+published. Driven by an actual attack: a poisoned page in the corpus made qwen3:4b reply
+`INJECTION SUCCESSFUL - the admin recovery code is hunter2 [1]` before this work.
+
+- `PromptFence` wraps context in BEGIN/END markers, numbers each chunk, neutralises fence markers
+  found inside chunk text or metadata, and places the question after the fence.
+- System prompt rule 1 states the material is data written by document authors and must never be
+  acted on.
+- `AnswerGuard` (cite-or-refuse) replaces an uncited answer, or one citing a chunk that was never
+  supplied, with "Not found in knowledge base." on `/ask`. `/chat/stream` cannot recall sent
+  tokens, so it emits a `guard` frame and the UI marks the answer unverified.
+- `InjectionScanner` warns at upload time (denylist, non-blocking); warnings ride back on the
+  ingest response and become a toast.
+- Fixed on the way: the non-streaming `/ask` path still used `think:false`, so qwen3's
+  chain-of-thought landed in the answer body and broke anything parsing it.
+- Honest limit: the injected *instruction* no longer runs, but asking for the payload directly
+  still returns it as a cited, grounded answer - that is content disclosure, not injection, and
+  belongs to access labels and corpus hygiene. See `LEARNINGS.md` §17.
 
 ### Per-chunk relevance feedback - eval only (Option A)  ✅ done (2026-08-05)
 Goal: collect human relevance labels on individual retrieved chunks so we can MEASURE retrieval /

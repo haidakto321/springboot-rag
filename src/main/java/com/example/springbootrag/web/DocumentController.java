@@ -1,5 +1,6 @@
 package com.example.springbootrag.web;
 
+import com.example.springbootrag.guard.InjectionScanner;
 import com.example.springbootrag.model.DocumentSummary;
 import com.example.springbootrag.repository.PgVectorRepository;
 import com.example.springbootrag.security.CurrentUser;
@@ -7,6 +8,8 @@ import com.example.springbootrag.service.IngestService;
 import com.example.springbootrag.service.ProjectService;
 import com.example.springbootrag.web.dto.ChunkView;
 import com.example.springbootrag.web.dto.IngestResponse;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.http.MediaType;
 import org.springframework.web.bind.annotation.*;
 import org.springframework.web.multipart.MultipartFile;
@@ -20,6 +23,8 @@ import java.util.List;
 
 @RestController
 public class DocumentController {
+
+    private static final Logger log = LoggerFactory.getLogger(DocumentController.class);
 
     private static final long MAX_BYTES = 2 * 1024 * 1024;
 
@@ -47,7 +52,7 @@ public class DocumentController {
         UploadResult u = parseUpload(file);
         int stored = ingestService.ingestMarkdown(projectService.defaultProjectId(),
                 u.docId(), u.sourceFile(), u.text(), null, groups);
-        return new IngestResponse(u.docId(), stored);
+        return new IngestResponse(u.docId(), stored, scanForInjection(u));
     }
 
     @GetMapping("/documents")
@@ -80,7 +85,7 @@ public class DocumentController {
         currentUser.requireOwnGroups(groups);
         UploadResult u = parseUpload(file);
         int stored = ingestService.ingestMarkdown(projectId, u.docId(), u.sourceFile(), u.text(), null, groups);
-        return new IngestResponse(u.docId(), stored);
+        return new IngestResponse(u.docId(), stored, scanForInjection(u));
     }
 
     @GetMapping("/projects/{projectId}/documents")
@@ -119,6 +124,19 @@ public class DocumentController {
     }
 
     private record UploadResult(String docId, String sourceFile, String text) {}
+
+    /**
+     * Warn, do not block. The scan is a denylist and will both miss careful attacks and fire on
+     * legitimate pages about prompt injection, so refusing the upload would be wrong - but the
+     * moment of upload is the one moment a human is looking at this document.
+     */
+    private List<String> scanForInjection(UploadResult u) {
+        List<String> warnings = InjectionScanner.scan(u.text());
+        if (!warnings.isEmpty()) {
+            log.warn("document '{}' contains prompt-injection patterns: {}", u.docId(), warnings);
+        }
+        return warnings;
+    }
 
     /* Strict UTF-8 decode: malformed bytes are a client error, not replacement chars. */
     private static String decodeUtf8(MultipartFile file) {

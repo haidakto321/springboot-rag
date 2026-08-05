@@ -17,10 +17,10 @@ import java.util.function.Consumer;
 
 public class OllamaChatProvider implements ChatProvider {
 
-    // qwen3 and other reasoning models emit a <think>...</think> block. We ask Ollama to disable
-    // it (think:false + the /no_think soft-switch), and ALSO strip it defensively in case an older
-    // Ollama or model ignores the flag - otherwise the raw chain-of-thought leaks into the answer.
-    private static final String NO_THINK = "/no_think";
+    // qwen3 and other reasoning models emit a <think>...</think> block. Both paths now ask for
+    // think:true so the reasoning arrives in its own field; the tag stripping below stays as a
+    // defence for models or Ollama versions that leak it into content anyway. (The old
+    // think:false + "/no_think" soft-switch made this WORSE - see LEARNINGS section 12.)
     private static final String THINK_OPEN = "<think>";
     private static final String THINK_CLOSE = "</think>";
 
@@ -34,6 +34,13 @@ public class OllamaChatProvider implements ChatProvider {
         this.props = props;
     }
 
+    /**
+     * Non-streaming reply. Uses {@code think:true} for the same reason the streaming path does:
+     * a reasoning model reasons either way, and asking it NOT to only moves the chain-of-thought
+     * into {@code content}, where it pollutes the answer and defeats any check that parses it
+     * (citations, refusal detection). With think:true the reasoning arrives in its own field and
+     * is dropped here.
+     */
     @Override
     public String chat(String systemPrompt, String userPrompt) {
         ChatResponse resp;
@@ -43,9 +50,9 @@ public class OllamaChatProvider implements ChatProvider {
                     .body(Map.of(
                             "model", props.getModel(),
                             "stream", false,
-                            "think", false,
+                            "think", true,
                             "messages", List.of(
-                                    Map.of("role", "system", "content", systemPrompt + "\n" + NO_THINK),
+                                    Map.of("role", "system", "content", systemPrompt),
                                     Map.of("role", "user", "content", userPrompt))))
                     .retrieve()
                     .body(ChatResponse.class);
@@ -121,9 +128,16 @@ public class OllamaChatProvider implements ChatProvider {
         filter.flush();
     }
 
-    /** Removes a complete or dangling &lt;think&gt; block from a full (non-streamed) reply. */
+    /**
+     * Removes a complete, dangling, or unterminated &lt;think&gt; block from a full (non-streamed)
+     * reply. The dangling case - a closing tag with no opening one - is what a small model
+     * produces when it leaks chain-of-thought straight into content; everything before that tag is
+     * reasoning, not answer.
+     */
     static String stripThink(String text) {
         String cleaned = text.replaceAll("(?s)" + THINK_OPEN + ".*?" + THINK_CLOSE, "");
+        int dangling = cleaned.indexOf(THINK_CLOSE);       // </think> with no opener: drop the lead-in
+        if (dangling >= 0) cleaned = cleaned.substring(dangling + THINK_CLOSE.length());
         int open = cleaned.indexOf(THINK_OPEN);            // unterminated think block (truncated output)
         if (open >= 0) cleaned = cleaned.substring(0, open);
         return cleaned.strip();

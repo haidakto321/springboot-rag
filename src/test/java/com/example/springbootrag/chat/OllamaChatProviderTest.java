@@ -51,7 +51,10 @@ class OllamaChatProviderTest {
         String body = req.getBody().readUtf8();
         assertThat(body).contains("\"model\":\"test-model\"");
         assertThat(body).contains("\"stream\":false");
-        assertThat(body).contains("\"think\":false");
+        // think:true even for the non-streaming call: reasoning must arrive in its own field
+        // instead of being dumped into content (LEARNINGS section 12).
+        assertThat(body).contains("\"think\":true");
+        assertThat(body).doesNotContain("/no_think");
         assertThat(body).contains("you are helpful");
         assertThat(body).contains("what is up?");
     }

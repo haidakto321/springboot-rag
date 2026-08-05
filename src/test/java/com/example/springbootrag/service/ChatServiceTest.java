@@ -69,7 +69,7 @@ class ChatServiceTest {
         List<AskResponse.Source> sources = service.chatStream(TestContexts.PUBLIC, List.of(
                 new ChatMessage("user", "how does chunking work?"),
                 new ChatMessage("assistant", "It splits on headings."),
-                new ChatMessage("user", "what about overlap?")), List.of(), List.of(), tokens::add);
+                new ChatMessage("user", "what about overlap?")), List.of(), List.of(), tokens::add).sources();
 
         assertThat(tokens).containsExactly("Hello", " there");
 
@@ -140,7 +140,7 @@ class ChatServiceTest {
 
         List<String> tokens = new ArrayList<>();
         List<AskResponse.Source> sources =
-                service.chatStream(TestContexts.PUBLIC, List.of(new ChatMessage("user", "anything?")), List.of(), List.of(), tokens::add);
+                service.chatStream(TestContexts.PUBLIC, List.of(new ChatMessage("user", "anything?")), List.of(), List.of(), tokens::add).sources();
 
         assertThat(String.join("", tokens)).contains("No relevant chunks");
         assertThat(sources).isEmpty();

@@ -3,7 +3,10 @@ package com.example.springbootrag.service;
 import com.example.springbootrag.chat.ChatProvider;
 import com.example.springbootrag.chat.ChatProvider.ChatMessage;
 import com.example.springbootrag.config.ChatProperties;
+import com.example.springbootrag.guard.AnswerGuard;
 import com.example.springbootrag.model.SearchHit;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import com.example.springbootrag.security.SearchContext;
 import com.example.springbootrag.web.dto.AskResponse;
 import org.springframework.stereotype.Service;
@@ -18,6 +21,8 @@ import java.util.function.Consumer;
  */
 @Service
 public class ChatService {
+
+    private static final Logger log = LoggerFactory.getLogger(ChatService.class);
 
     /** Max conversation turns forwarded to the model, newest kept. Guards context + cost. */
     static final int MAX_HISTORY = 10;
@@ -46,22 +51,33 @@ public class ChatService {
      * @param projectIds optional project scope (empty = all projects)
      * @param docIds optional document scope (empty = all documents)
      */
+    /**
+     * What the stream produced: the citations, plus the grounding verdict for the text that was
+     * already sent.
+     *
+     * <p>A streamed token cannot be recalled, so unlike {@code AskService} the chat path cannot
+     * replace a bad answer with a refusal - it can only tell the client that what it just rendered
+     * failed the check. That is a real limitation of streaming, not an oversight: buffering the
+     * whole answer to guard it first would trade away the reason streaming exists.
+     */
+    public record StreamOutcome(List<AskResponse.Source> sources, AnswerGuard.Verdict verdict) {}
+
     /** Convenience overload: no reasoning channel, thinking disabled. */
-    public List<AskResponse.Source> chatStream(SearchContext ctx,
-                                               List<ChatMessage> history,
-                                               List<Long> projectIds,
-                                               List<String> docIds,
-                                               Consumer<String> onToken) {
+    public StreamOutcome chatStream(SearchContext ctx,
+                                    List<ChatMessage> history,
+                                    List<Long> projectIds,
+                                    List<String> docIds,
+                                    Consumer<String> onToken) {
         return chatStream(ctx, history, projectIds, docIds, false, onToken, r -> {});
     }
 
-    public List<AskResponse.Source> chatStream(SearchContext ctx,
-                                               List<ChatMessage> history,
-                                               List<Long> projectIds,
-                                               List<String> docIds,
-                                               boolean think,
-                                               Consumer<String> onToken,
-                                               Consumer<String> onReasoning) {
+    public StreamOutcome chatStream(SearchContext ctx,
+                                    List<ChatMessage> history,
+                                    List<Long> projectIds,
+                                    List<String> docIds,
+                                    boolean think,
+                                    Consumer<String> onToken,
+                                    Consumer<String> onReasoning) {
         if (history == null || history.isEmpty()) {
             throw new IllegalArgumentException("messages are required");
         }
@@ -88,21 +104,32 @@ public class ChatService {
                 props.getContextChunks(), pScope, dScope);
         if (hits.isEmpty()) {
             onToken.accept("No relevant chunks found in the knowledge base.");
-            return List.of();
+            return new StreamOutcome(List.of(),
+                    new AnswerGuard.Verdict(true, "no-hits", AnswerGuard.REFUSAL));
         }
 
-        // Prior turns verbatim; the final user turn carries the numbered context + question.
+        // Prior turns verbatim; the final user turn carries the fenced context + question.
         List<ChatMessage> modelMessages = new ArrayList<>(trimmed.subList(0, trimmed.size() - 1));
         modelMessages.add(new ChatMessage("user", AskService.buildUserPrompt(last.content(), hits)));
 
-        chat.chatStream(AskService.SYSTEM_PROMPT, modelMessages, think, onToken, onReasoning);
+        // Tee the stream: the client gets tokens live, and a copy is kept so the finished answer
+        // can still be checked for grounding.
+        StringBuilder full = new StringBuilder();
+        chat.chatStream(AskService.SYSTEM_PROMPT, modelMessages, think,
+                token -> { full.append(token); onToken.accept(token); }, onReasoning);
+
+        AnswerGuard.Verdict verdict = AnswerGuard.check(full.toString(), hits.size());
+        if (!verdict.allowed()) {
+            log.warn("streamed answer failed the grounding guard ({}) - already sent to the client",
+                    verdict.reason());
+        }
 
         List<AskResponse.Source> sources = new ArrayList<>();
         for (int i = 0; i < hits.size(); i++) {
             SearchHit h = hits.get(i);
             sources.add(new AskResponse.Source(i + 1, h.docId(), h.headingPath(), h.score(), h.content(), h.chunkIndex()));
         }
-        return sources;
+        return new StreamOutcome(sources, verdict);
     }
 
     /**
