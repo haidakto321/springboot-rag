@@ -234,11 +234,13 @@ Config keys (e.g. `application.yml`):
 
 ---
 
-## 10. Relation to real project
+## 10. Relation to the day-job search feature
 
 The transferable parts - table design, FTS SQL, pgvector SQL, RRF fusion, the
-per-source repository split - port directly to real project's parked search feature
-(Approach B: custom `ade_chunk_embeddings` table with explicit `tid` + tenant-scoped
-finder, hybrid SQL, indexing hook in `AdeParseJobProcessor` SUCCESS). The only piece
-that does not transfer is local reranking (low impact for a ranked-list UI; use a
-hosted reranker later if needed).
+per-source repository split - port directly to a custom chunk-embeddings table with an
+explicit tenant column, a tenant-scoped finder, hybrid SQL, and an indexing hook fired
+when the document-parse job succeeds. The only piece that does not transfer is local
+reranking (low impact for a ranked-list UI; use a hosted reranker later if needed).
+
+> Internal table and class names from the day-job codebase are deliberately not written
+> down here - this repo is meant to be shareable on its own.

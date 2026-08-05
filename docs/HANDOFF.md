@@ -1,40 +1,101 @@
 # Handoff - read this first
 
-**If you are a future session (especially working on real project's search feature): start here.**
+**New machine, new teammate, or future you after a long gap: start here.** Everything needed to
+pick this repo up lives in the repo. Nothing important is stored only in a chat history or an
+assistant's memory.
 
-## What this project is (5 lines)
+## What this is
 
-`springboot-rag` is a standalone **self-study sandbox** (NOT production, NOT part of real project). It ingests text and searches it 4 ways - Postgres FTS, pgvector, Qdrant, hybrid (RRF) - so the techniques can be compared side by side via a `/compare` endpoint. Built in Java 21 / Spring Boot 3.5.6. The point was to learn the FTS-vs-vector-vs-hybrid tradeoffs in Java before building real project's parked search feature.
+`springboot-rag` is a **self-study sandbox** for retrieval-augmented generation in Java 21 /
+Spring Boot 3.5.6. It ingests markdown, indexes it in Postgres (FTS + pgvector) **and** Qdrant, and
+searches the same corpus six ways - `fts`, `pgvector`, `qdrant`, `hybrid` (RRF), `rerank`
+(cross-encoder), `graph` - so the techniques can be compared side by side on identical data via
+`/compare`.
+
+It has since grown past "compare four backends" into the parts that decide whether a RAG system is
+deployable: permission-aware retrieval, prompt-injection defence, per-request tracing, human
+relevance labels, and a retrieval regression gate. It is still a laboratory, not production.
 
 ## Read these, in order
 
-1. `docs/2026-06-13-springboot-rag-design.md` - design spec. **Section 10 "Relation to real project"** maps exactly which parts port over.
-2. `docs/implementation-notes.md` - the real knowledge: decisions, deviations, 3 live search lessons, the second code review, and the fixes applied. This is where the learning lives.
-3. `docs/plans/2026-06-13-springboot-rag.md` - full task-by-task build plan with complete code.
+| Document | What it gives you |
+|---|---|
+| `README.md` | Prerequisites, run commands, **login credentials**, endpoints, configuration |
+| `docs/ARCHITECTURE.md` | What actually happens on a request - diagrams of search, chat, ingest, plus the failure map and file map |
+| `docs/LEARNINGS.md` | Why each piece exists, with measured numbers. The most valuable file here |
+| `docs/RAG-MASTERY.md` | The gap list: what is still missing, scored honestly, with a drill for each |
+| `docs/ROADMAP.md` | Feature backlog, what is built and what is not |
+| `docs/implementation-notes.md` | Running log of decisions and deviations, newest at the bottom |
+| `docs/2026-06-13-springboot-rag-design.md` | Original design spec |
 
-## Key lessons learned (so you don't re-derive them)
+## First run on a new machine
 
-- **Exact codes/IDs (e.g. `INV-5575`) -> FTS wins, vectors fail.** Embeddings can't tell literal codes apart.
-- **Paraphrase/synonym (e.g. "unpaid bills past deadline" vs "overdue") -> vectors win, FTS returns empty.** Keyword search is blind to synonyms.
-- **Hybrid (RRF) only helps when BOTH arms return useful lists.** If one arm is empty, hybrid = the surviving arm.
-- **`plainto_tsquery` ANDs all terms** -> a mixed code+concept query matches zero chunks. Use **`websearch_to_tsquery`** instead (supports `OR`, `"phrase"`, `-negation`; bare words still AND). This is what makes hybrid actually blend on multi-topic queries.
-- **pgvector and Qdrant tie on quality** at small scale (same vectors, same HNSW+cosine). Choose between them by ops/scale, not ranking.
-- **FTS text-search config is per-language** (`'english'` hardcoded here). Vectors are language-agnostic - a real vector advantage if real project is multilingual.
-- **RRF is pure arithmetic**, no library: `score = sum of 1/(k+rank)`, k=60.
+```bash
+docker compose up -d          # postgres + qdrant
+ollama serve                  # plus: ollama pull nomic-embed-text && ollama pull qwen3:4b
+./mvnw spring-boot:run        # http://localhost:8085
+./mvnw test                   # full suite, needs Docker, does not need Ollama
+```
 
-## What ports to real project (per design s10)
+**The app requires a login.** Sandbox users are defined in `application.yml` under
+`app.security.users`: `alice` / `alice` (groups `public`, `hr`) and `haiks` / `123123` (groups
+`public`, `eng`). The browser prompts once; API calls need `-u alice:alice`. Every retrieval path
+filters by the caller's groups, so an unauthenticated call is a `401` and a caller with no groups
+sees nothing. Details in `README.md` and `docs/LEARNINGS.md` section 16.
 
-Table design, FTS SQL, pgvector SQL, RRF fusion, per-source repository split -> all port directly to real project's custom `ade_chunk_embeddings` approach (explicit `tid` + tenant-scoped finder, hybrid SQL, indexing hook in `AdeParseJobProcessor` SUCCESS). Local reranking does NOT transfer (use a hosted reranker if needed).
+## State that lives outside the repo
 
-## Scope decision still open for real project's feature
+Some things cannot be committed. If you are setting up elsewhere, these are what you will be
+missing:
 
-Customer intent was being clarified. The build differs sharply:
-- **Keyword search only** -> FTS + dedup-by-doc + pagination + `ts_headline` snippets. Postgres only; drop Qdrant/Ollama.
-- **Semantic search** -> add vectors + hybrid (this whole sandbox).
-- **RAG (prompt -> written answer)** -> hybrid retrieval + an LLM generation step (new piece; topK small 3-8) + a "say I don't know" guardrail.
+- **The 428-page wiki corpus** (project `docmaster`, 7,536 chunks). Private, never committed. The
+  wiki eval (`-Dgroups=eval-wiki`) **skips** when it is absent instead of failing, so a fresh clone
+  is not broken - it just cannot run that gate. `docs/ROADMAP.md` tracks the frozen-corpus fix.
+- **The local Postgres and Qdrant volumes.** `schema.sql` runs at startup and is idempotent, so a
+  new machine gets an empty but correct database. Re-import documents through the UI.
+- **Ollama models.** `nomic-embed-text` (embeddings, 768-dim) and a chat model - default
+  `app.chat.model=qwen3:4b`. A different embedding model means a **full re-index**: vectors from
+  different models are not comparable, and `schema.sql` pins `vector(768)`.
+- **Feedback labels and traces.** Both are local operational data (`chunk_feedback`, `rag_trace`).
+  A new machine starts with none; the feedback eval skips below 10 labels.
 
-Confirm which before building - it changes everything (topK philosophy, infra, whether an LLM is involved).
+## Lessons already paid for (do not re-derive)
 
-## Current state
+The full versions are in `docs/LEARNINGS.md`; this is the index.
 
-v1 built, 8 tests green (incl. Testcontainers integration), all 3 review findings fixed and verified live. See `implementation-notes.md` for the fix log.
+- **Exact codes (`INV-5575`) → FTS wins, vectors fail. Paraphrases → vectors win, FTS returns
+  nothing.** Hybrid covers both, but only when both arms return something (§4).
+- **`plainto_tsquery` ANDs every term**, so a mixed code + concept query matches nothing. Use
+  `websearch_to_tsquery` (§4).
+- **"Hybrid beats FTS" is not a law.** On the real wiki corpus, pgvector, qdrant, hybrid, rerank
+  and graph all tie at recall@5 0.909 - hybrid adds nothing there (§11).
+- **The cross-encoder made retrieval slightly worse** on that corpus (MRR 0.919 → 0.909) (§14).
+- **Structural GraphRAG returned an identical top-10 to plain hybrid on every query tried** (§14).
+- **`think:false` does not stop a reasoning model** - it dumps tag-less chain-of-thought into the
+  answer. Always send `think:true` and read the separate `thinking` field (§12).
+- **Retrieval filtering is a security control**, and Postgres and Qdrant have opposite empty-set
+  semantics: an empty SQL array overlap is false (fail closed), an empty Qdrant `should` clause
+  matches everything (fail open) (§16).
+- **Prompt rules are requests; only code is a control.** The system prompt told the model never to
+  reveal credentials in the material, and it did anyway (§17).
+- **Generation is 97% of request latency here** (210 s of 218 s), retrieval 0.04%. Optimise the
+  answer model, not the vector store (§18).
+
+## Current state (2026-08-05)
+
+- Branch `feat/graphrag`, ~46 commits ahead of `master`. Suite: **188 tests, 0 failures, 3 skipped**
+  (the 3 are manual DJL model-download tests).
+- RAG-MASTERY scorecard: rows 1, 3 and 6 at 2; rows 2, 4, 5 and 8 at 1; **row 7 (freshness and
+  re-sync) is the only 0 left**.
+- Known gaps worth knowing before you build on this: ingest is one-shot (no re-sync, no delete
+  propagation), the eval gate cannot run in CI because its corpus is private, `/search` and
+  `/compare` are not traced, and `app.rerank.maxLength` is dead config.
+
+## Convention notes
+
+- Build with `./mvnw`, never a system Maven.
+- The frontend is plain HTML/CSS/JS on purpose - no framework, no build step.
+- No new dependencies without a deliberate decision; `pom.xml` is small for a reason.
+- Every non-obvious decision goes in `docs/implementation-notes.md` at the time it is made.
+- Internal names from any day-job codebase stay out of this repo - it is meant to be shareable
+  on its own.

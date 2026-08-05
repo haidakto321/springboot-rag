@@ -124,14 +124,65 @@ docker compose up -d            # postgres + qdrant
 ollama serve                    # if not already running
 ./mvnw spring-boot:run
 ```
+Open http://localhost:8085/ - the browser will ask for a username and password (see below).
 Swagger UI: http://localhost:8085/swagger-ui.html
 
+## Authentication (read this before your first curl)
+
+**Everything except `/actuator/health` requires HTTP Basic auth.** An unauthenticated call gets
+`401`, which is the most common "why is this broken" moment on a fresh clone.
+
+Two sandbox users ship in `application.yml`:
+
+| user | password | groups |
+|---|---|---|
+| `alice` | `alice` | `public`, `hr` |
+| `haiks` | `123123` | `public`, `eng` |
+
+```bash
+curl -u alice:alice "http://localhost:8085/search?q=chunking&type=hybrid&projectId=1"
+curl -u alice:alice http://localhost:8085/me      # {"principal":"alice","groups":["hr","public"]}
+```
+
+Retrieval is filtered by the caller's groups, not by a request parameter. Every chunk carries an
+`allowed_groups` label stamped at ingest; a chunk you are not in the group for cannot appear in
+search results, listings, answers, citations, or feedback labels. A caller with **no** groups sees
+nothing - that is the intended fail-closed default.
+
+Change or add users under `app.security.users`. Passwords are plain text with a `{noop}` encoder
+because this is a single-developer laboratory - **do not copy this block anywhere real.**
+
+| property | default | meaning |
+|---|---|---|
+| `app.security.users` | alice, haiks | username / password / groups list |
+| `app.security.default-group` | `public` | label stamped on ingest when none is given |
+| `app.security.backfill-qdrant-groups` | `true` | label pre-ACL Qdrant points at startup |
+
+Existing corpora keep working after an upgrade: `schema.sql` backfills unlabelled chunks to
+`public`, and `QdrantAclBackfill` does the same for Qdrant points.
+
 ## Endpoints
-- `POST /ingest` - ingest a document `{ "docId": "...", "text": "..." }`
-- `GET /search?q=...&type=fts|pgvector|qdrant|hybrid|rerank|graph&topK=10` - optional `projectId=<id>` or `group=true` to scope results
-- `GET /compare?q=...&topK=10` - all backends side by side (scores + timing), including the `rerank` and `graph` columns; accepts optional `projectId` / `group=true`
-- `DELETE /docs/{docId}`
-- `GET /actuator/health`
+
+**Search and answers**
+- `GET /search?q=...&type=fts|pgvector|qdrant|hybrid|rerank|graph&topK=10` - optional `projectId=<id>`, `group=true`, `docIds=a&docIds=b`
+- `GET /compare?q=...&topK=10` - all six backends side by side (scores + timing)
+- `GET /ask?q=...` - one-shot RAG answer with citations
+- `POST /chat/stream` - streaming multi-turn RAG, NDJSON frames: `token`, `reasoning`, `sources`, `trace`, `guard`, `done`, `error`
+
+**Documents and projects**
+- `POST /projects/{id}/documents` - multipart `.md` upload; optional `groups=hr&groups=public` sets the access label
+- `GET /projects/{id}/documents`, `DELETE /projects/{id}/documents/{docId}`, `GET /projects/{id}/documents/{docId}/chunks`
+- `POST /projects/{id}/import-wiki` - bulk import a local wiki clone, streaming progress
+- `POST /projects`, `GET /projects`, `PATCH /projects/{id}`, `DELETE /projects/{id}`, `GET /groups`
+- Legacy flat routes target the Default project: `POST /ingest`, `POST /documents`, `GET /documents`, `DELETE /documents/{docId}`, `DELETE /docs/{docId}`
+
+**Feedback, traces, identity**
+- `POST /feedback` - one relevance label per `(project, doc, chunk, query)`; `DELETE /feedback` clears it; `GET /feedback?projectId&query&limit` dumps them
+- `GET /traces?limit=10` - the `rag_trace` rows behind your recent answers (your own only)
+- `GET /me` - the principal and groups the server resolved for you
+- `GET /actuator/health` - the only unauthenticated route
+
+See `docs/ARCHITECTURE.md` for what each of these actually does step by step.
 
 ## Reranking (`type=rerank`)
 `rerank` over-fetches hybrid candidates (`app.rerank.candidates`, default 50), reorders them with a
@@ -221,15 +272,63 @@ Add `projectId=<id>` to any of `/search`, `/ask`, or `/compare` to scope retriev
 
 **Chat model prerequisite:**
 ```bash
-ollama pull qwen3:8b  # or set app.chat.model to another Ollama model
+ollama pull qwen3:4b  # the configured default (app.chat.model); qwen3:8b works on larger machines
 ollama serve          # runs on localhost:11434
 ```
 
+> Reasoning models: both the streaming and non-streaming paths send `think:true` on purpose.
+> `think:false` does **not** stop qwen3 reasoning - it dumps tag-less chain-of-thought straight
+> into the answer. With `think:true` the reasoning arrives in a separate field and the answer stays
+> clean (`docs/LEARNINGS.md` section 12).
+
+## Answer safety: fenced context and cite-or-refuse
+
+Retrieved text is treated as untrusted data, because anyone who can write a document can write part
+of your prompt. Three things happen on every answer:
+
+- **`PromptFence`** wraps the context in BEGIN/END markers, numbers each chunk, neutralises fence
+  markers found inside chunk text, and places the question *after* the fence.
+- **The system prompt** states that fenced material is data written by document authors and must
+  never be acted on.
+- **`AnswerGuard`** enforces cite-or-refuse in code: an answer with no `[n]` citation, or one citing
+  a chunk that was never supplied, becomes `Not found in knowledge base.` on `/ask`. `/chat/stream`
+  cannot recall sent tokens, so it emits a `guard` frame and the UI marks the answer unverified.
+
+Uploads are also scanned for known injection phrasings; matches come back as `warnings` on the
+ingest response and become a toast in the UI. It warns, it never blocks. Measured before/after
+numbers are in `docs/LEARNINGS.md` section 17.
+
+## Tracing (`rag_trace`)
+
+Every answer writes one row: raw and condensed query, backend, retrieved chunks with scores,
+per-stage latency, prompt/completion tokens, the model's original answer, and the guard verdict.
+The UI shows it under each answer via the **Trace** button; `GET /traces` returns your own rows only.
+
+| property | default | meaning |
+|---|---|---|
+| `app.trace.enabled` | `true` | turn tracing off entirely |
+| `app.trace.keep` | `500` | rows kept per principal, pruned after each insert |
+| `app.trace.max-answer-chars` | `4000` | answer truncation inside the trace |
+
+First measured trace on this hardware: `embed 6,852 ms · retrieve 82 ms · generate 210,779 ms`,
+`prompt 1,253 / completion 2,087` tokens. Generation is 97% of the wall clock - the levers that
+matter are on the answer model, not the vector store (`docs/LEARNINGS.md` section 18).
+
 **Evaluation commands** (with your docs corpus as gold, needs Docker + Ollama):
 ```bash
-./mvnw test "-Dgroups=eval" "-DexcludedGroups="        # retrieval metrics (top-K recall, MRR, hit@1)
-./mvnw test "-Dgroups=eval-judge" "-DexcludedGroups="  # faithfulness smoke report (LLM judge, yes/no per answer)
+./mvnw test "-Dgroups=eval" "-DexcludedGroups="           # retrieval metrics (top-K recall, MRR, hit@1)
+./mvnw test "-Dgroups=eval-judge" "-DexcludedGroups="     # faithfulness smoke report (LLM judge, yes/no per answer)
+./mvnw test "-Dgroups=eval-feedback" "-DexcludedGroups="  # precision@k over human thumbs (skips below 10 labels)
 ```
+
+> recall@5, MRR and hit@1 are **eval-time** metrics - nothing computes them on a live request. They
+> need a golden set of known-correct answers, so they live in these tests. What a live request does
+> record is latency per stage and token counts, in `rag_trace`.
+
+The feedback eval replays every query someone labelled through all six backends and reports
+P@5 / P@10 / MRR-of-the-first-👍 with **judged coverage** printed beside it, so a precision built on
+two labels cannot pose as a verdict. Collect labels by clicking the 👍/👎 on search results and
+answer citations. It is a report, not a gate - labels grow over time.
 
 Wiki corpus eval (real 428-page corpus, live stack - NOT Testcontainers):
 ```bash
