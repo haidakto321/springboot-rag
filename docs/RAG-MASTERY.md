@@ -341,9 +341,32 @@ check), Amazon Comprehend PII detection, Amazon Macie, OWASP Top 10 for LLM Appl
 of decisions - which query was actually searched, which chunks came back, at what scores, what
 prompt got assembled - and none of it is recorded.
 
-**Current state here.** No per-request trace exists. Debugging is "run it again and squint".
+**Current state here. BUILT 2026-08-05.** One `rag_trace` row per answered question, written by
+`TraceRecorder` from both `/ask` and `/chat/stream`, plus a "Trace" toggle under every answer in
+the UI. Scoped to the caller: `GET /traces` only ever returns your own rows, because a trace holds
+the question typed and the documents it matched.
 
-**Drill.** Log one `rag_trace` row per request:
+**What it records, and why each field earns its place:**
+- `raw_query` **and** `condensed_query` - the condense step is the most common silent breakage in
+  chat, and it is invisible until you can see both strings side by side. Stored only when they
+  differ.
+- `retrieved` (JSONB: docId, chunkIndex, score) - "a correct chunk was retrieved but ranked below
+  junk" is otherwise indistinguishable from "it was never retrieved".
+- `stage_latency_ms` (JSONB: embed, retrieve, generate, total) - JSONB because a new stage should
+  not need a migration.
+- `prompt_tokens` / `completion_tokens` - from Ollama's `prompt_eval_count` / `eval_count`. Null
+  when the provider does not report them: "not measured" and "free" are different facts.
+- `guard_reason` - the `AnswerGuard` verdict, so a refusal caused by the guard is distinguishable
+  from a model that had nothing to say.
+- `answer` - the model's ORIGINAL text, not the guarded replacement. Debugging a blocked answer is
+  impossible if the blocked text was thrown away.
+
+**Design notes.** Tracing never throws (a broken trace must not break a working answer) and is a
+separate `searchTraced` method rather than a parameter on the hot path, so nothing that only
+observes can change what retrieval returns. `app.trace.keep` (default 500 rows per principal) is
+pruned after each insert - debugging exhaust with no retention rule quietly fills a disk.
+
+**Drill (as originally written).** Log one `rag_trace` row per request:
 
 ```
 request_id, ts, principal, project_ids, raw_query, condensed_query, backend,
@@ -387,6 +410,15 @@ detects that a source page changed, and nothing removes pages deleted upstream.
 **Why it kills projects.** The triangle: accuracy, flexibility, cost. Pick two. Teams that never
 put numbers on the third axis get surprised by the bill or by a 30-second answer.
 
+**First real numbers, from the §6 trace (2026-08-05, one request, qwen3:4b on this box):**
+`embed 6,852 ms | retrieve 82 ms | generate 210,779 ms | total 217,717 ms`, with
+`prompt 1,253 / completion 2,087` tokens. Generation is **97% of the wall clock** and retrieval is
+0.04% of it. The 2,087 completion tokens for a short answer are mostly reasoning (`eval_count`
+includes thinking), which at ~10 tok/s is the entire latency budget. Conclusion for this hardware:
+every meaningful lever is on the answer model - a smaller model, fewer context chunks, or not
+calling the LLM at all - and none of them are in the vector store. One request is not p95, but it
+is enough to point at the right axis.
+
 **Make it numbers, not opinions:** p95 latency per stage, tokens per answer, cost per 1,000
 questions. This repo already reasons this way once - `LEARNINGS.md` §14 measured that
 `edges=semantic` needs 2-4+ minutes per chunk on a 4 GB GPU and concluded weeks for the full
@@ -417,7 +449,7 @@ the point of the exercise.
 | 3 | Eval running on the realistic corpus, as a gate | 2 |
 | 4 | Query routing and transforms beyond condense | 1 |
 | 5 | Injection-resistant prompting, cite-or-refuse | 1 (was 0) |
-| 6 | Per-request trace of the whole chain | 0 |
+| 6 | Per-request trace of the whole chain | 2 (was 0) |
 | 7 | Incremental re-sync and delete propagation | 0 |
 | 8 | Measured latency / token / cost budget | 1 |
 
@@ -425,6 +457,12 @@ the point of the exercise.
 backend and every listing, verified by `AccessControlIntegrationTest`. It is a 2 and not more
 because identity itself is a toy: plain-text passwords in `application.yml`, no audit log, and
 group membership that only a redeploy can change.
+
+**Row 6 update (2026-08-05): now 2.** `rag_trace` records raw vs condensed query, the retrieved
+chunks with scores, per-stage latency, token counts, and the guard verdict for every answer, with a
+per-answer debug view in the UI. It is a 2 rather than more because it is storage plus a panel, not
+observability: no metrics, no alerting, no aggregate latency view, and nothing exported to
+CloudWatch-shaped tooling.
 
 **Row 5 update (2026-08-05): now 1, deliberately not 2.** Fenced untrusted context, an explicit
 data-not-instructions rule, and cite-or-refuse enforced in code - and the injected *instruction*

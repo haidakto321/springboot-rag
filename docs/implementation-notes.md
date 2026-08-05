@@ -871,3 +871,61 @@ a defence. Suite: 179 tests before the guard-frame case was added, 0 failures.
 An injection that keeps citing while misrepresenting the source passes the guard. Streaming warns
 after the fact. The scanner is a smoke alarm. And nothing here addresses a poisoned page being in
 the corpus at all - that is section 1 access labels plus ingest hygiene.
+
+---
+
+## 2026-08-05 - Per-request RAG trace (RAG-MASTERY move: section 6)
+
+### Design decisions
+
+**JSONB for the shape-changing parts, columns for what you filter on.** `retrieved` and
+`stage_latency_ms` are JSONB; principal, ts, backend, tokens and guard_reason are columns. Adding a
+stage or a per-hit field then needs no migration, and neither JSONB field is ever joined on.
+
+**`searchTraced` is a separate method, not a parameter on `search`.** Observation must not be able
+to change what retrieval returns, and the six existing `search` call sites stayed untouched. The
+traced variant recomputes nothing - it wraps the same switch with timers.
+
+**Tracing never throws.** `TraceRecorder` catches every RuntimeException and logs. A trace exists
+to explain a request; it must not be able to fail one.
+
+**The trace stores the model's ORIGINAL answer, not the guarded replacement.** Debugging an answer
+that `AnswerGuard` blocked is impossible if the blocked text was thrown away. `guard_reason` records
+why it was blocked.
+
+**`condensed_query` is stored only when it differs from the raw question.** A condensed query equal
+to the raw one is noise, and the difference is precisely what breaks follow-up retrieval.
+
+**Token counts may be null.** Ollama reports `prompt_eval_count` / `eval_count`; a provider that
+does not is recorded as null rather than 0, because "not measured" and "free" are different facts.
+`ChatProvider` gained `chatDetailed` and a 6-arg `chatStream` with an `onUsage` sink, both with
+defaults that chain DOWN to the simplest overload, so an existing provider keeps working.
+
+**Retention from day one.** `app.trace.keep` (500 rows per principal) pruned after each insert. No
+scheduler: one extra DELETE per answer is nothing next to a 200 second generation.
+
+**Traces are access-controlled.** `GET /traces` returns only the caller's own rows - a trace holds
+the question someone typed and the documents it matched, the same leak class as document titles in
+section 1.
+
+### Verification
+
+- `TraceRepositoryIntegrationTest` (5 cases: JSONB round-trip, cross-principal isolation, duplicate
+  request id, prune, null token counts) and `TraceControllerTest` (4 cases, including that a
+  `principal` request parameter is ignored).
+- Full suite: **188 tests, 0 failures, 3 skipped.**
+- Live: one real chat request through the running app produced a `trace` frame, a stored row, and
+  cross-user isolation (alice sees 0 of haiks' traces).
+
+### The first trace was immediately useful
+
+`embed 6,852 ms | retrieve 82 ms | generate 210,779 ms | total 217,717 ms`, tokens
+`prompt 1,253 / completion 2,087`. Generation is 97% of the wall clock; retrieval is 0.04%. The
+completion count is mostly reasoning tokens (think:true), ~10 tok/s, matching the §14 CPU
+measurement. Recorded in LEARNINGS section 18 and used to seed RAG-MASTERY section 8.
+
+### Not built
+
+No metrics or alerting, no aggregate latency view, no export to CloudWatch-shaped tooling, and the
+per-answer panel is the only UI. Scorecard row 6 was scored 2 on that basis: this is evidence
+capture, not observability.

@@ -7,10 +7,12 @@ import com.example.springbootrag.model.SearchHit;
 import com.example.springbootrag.security.SearchContext;
 import com.example.springbootrag.web.dto.AskResponse;
 import com.example.springbootrag.security.TestContexts;
+import com.example.springbootrag.trace.NoopTraceRecorder;
 import org.junit.jupiter.api.Test;
 
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Map;
 import java.util.function.Consumer;
 import java.util.stream.IntStream;
 
@@ -56,14 +58,14 @@ class ChatServiceTest {
 
     private final FakeChat chat = new FakeChat();
     private final ChatProperties props = new ChatProperties();
-    private final ChatService service = new ChatService(searchService, chat, props);
+    private final ChatService service = new ChatService(searchService, chat, props, NoopTraceRecorder.create());
 
     @Test
     void followupRetrievesWithCondensedQueryButGeneratesFromOriginal() {
         // On a follow-up, retrieval uses the condensed query; generation keeps the original question.
-        when(searchService.search(any(SearchContext.class), eq("rerank"), eq("condensed standalone query"), anyInt(), anyList(), any())).thenReturn(List.of(
+        when(searchService.searchTraced(any(SearchContext.class), eq("rerank"), eq("condensed standalone query"), anyInt(), anyList(), any())).thenReturn(new SearchService.TracedSearch(List.of(
                 new SearchHit(1, "doc-a", 0, "chunk one text", "a.md", "# A > ## S", 0.9, null),
-                new SearchHit(2, "doc-b", 3, "chunk two text", "b.md", null, 0.7, null)));
+                new SearchHit(2, "doc-b", 3, "chunk two text", "b.md", null, 0.7, null)), Map.of("embed", 1L, "retrieve", 2L)));
 
         List<String> tokens = new ArrayList<>();
         List<AskResponse.Source> sources = service.chatStream(TestContexts.PUBLIC, List.of(
@@ -91,8 +93,7 @@ class ChatServiceTest {
 
     @Test
     void firstTurnSkipsCondensation() {
-        when(searchService.search(any(SearchContext.class), eq("rerank"), eq("how does chunking work?"), anyInt(), anyList(), any()))
-                .thenReturn(List.of(new SearchHit(1, "d", 0, "c", null, null, 0.5, null)));
+        when(searchService.searchTraced(any(SearchContext.class), eq("rerank"), eq("how does chunking work?"), anyInt(), anyList(), any())).thenReturn(new SearchService.TracedSearch(List.of(new SearchHit(1, "d", 0, "c", null, null, 0.5, null)), Map.of("embed", 1L, "retrieve", 2L)));
 
         service.chatStream(TestContexts.PUBLIC, List.of(new ChatMessage("user", "how does chunking work?")), List.of(), List.of(), t -> {});
 
@@ -103,8 +104,7 @@ class ChatServiceTest {
     @Test
     void condensationFailureFallsBackToRawQuery() {
         chat.throwOnChat = true;
-        when(searchService.search(any(SearchContext.class), eq("rerank"), eq("what about overlap?"), anyInt(), anyList(), any()))
-                .thenReturn(List.of(new SearchHit(1, "d", 0, "c", null, null, 0.5, null)));
+        when(searchService.searchTraced(any(SearchContext.class), eq("rerank"), eq("what about overlap?"), anyInt(), anyList(), any())).thenReturn(new SearchService.TracedSearch(List.of(new SearchHit(1, "d", 0, "c", null, null, 0.5, null)), Map.of("embed", 1L, "retrieve", 2L)));
 
         List<String> tokens = new ArrayList<>();
         service.chatStream(TestContexts.PUBLIC, List.of(
@@ -118,8 +118,7 @@ class ChatServiceTest {
 
     @Test
     void trimsHistoryToLastTenMessages() {
-        when(searchService.search(any(SearchContext.class), anyString(), anyString(), anyInt(), anyList(), any()))
-                .thenReturn(List.of(new SearchHit(1, "d", 0, "c", null, null, 0.5, null)));
+        when(searchService.searchTraced(any(SearchContext.class), anyString(), anyString(), anyInt(), anyList(), any())).thenReturn(new SearchService.TracedSearch(List.of(new SearchHit(1, "d", 0, "c", null, null, 0.5, null)), Map.of("embed", 1L, "retrieve", 2L)));
 
         // 12 messages; last is a user turn.
         List<ChatMessage> history = new ArrayList<>(IntStream.range(0, 11)
@@ -136,7 +135,7 @@ class ChatServiceTest {
 
     @Test
     void noHitsEmitsFallbackAndSkipsModel() {
-        when(searchService.search(any(SearchContext.class), anyString(), anyString(), anyInt(), anyList(), any())).thenReturn(List.of());
+        when(searchService.searchTraced(any(SearchContext.class), anyString(), anyString(), anyInt(), anyList(), any())).thenReturn(new SearchService.TracedSearch(List.of(), Map.of("embed", 1L, "retrieve", 2L)));
 
         List<String> tokens = new ArrayList<>();
         List<AskResponse.Source> sources =
@@ -149,14 +148,13 @@ class ChatServiceTest {
 
     @Test
     void forwardsDocIdScopeToRetrieval() {
-        when(searchService.search(any(SearchContext.class), anyString(), anyString(), anyInt(), anyList(), any()))
-                .thenReturn(List.of(new SearchHit(1, "doc-a", 0, "c", null, null, 0.5, null)));
+        when(searchService.searchTraced(any(SearchContext.class), anyString(), anyString(), anyInt(), anyList(), any())).thenReturn(new SearchService.TracedSearch(List.of(new SearchHit(1, "doc-a", 0, "c", null, null, 0.5, null)), Map.of("embed", 1L, "retrieve", 2L)));
 
         service.chatStream(TestContexts.PUBLIC, List.of(new ChatMessage("user", "q")), List.of(), List.of("doc-a", "doc-b"), t -> {});
 
         @SuppressWarnings("unchecked")
         ArgumentCaptor<List<String>> scope = ArgumentCaptor.forClass(List.class);
-        verify(searchService).search(any(SearchContext.class), eq("rerank"), eq("q"), anyInt(), anyList(), scope.capture());
+        verify(searchService).searchTraced(any(SearchContext.class), eq("rerank"), eq("q"), anyInt(), anyList(), scope.capture());
         assertThat(scope.getValue()).containsExactly("doc-a", "doc-b");
     }
 

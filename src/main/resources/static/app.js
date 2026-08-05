@@ -966,6 +966,17 @@ function renderThread() {
             actions.appendChild(copy);
             actions.appendChild(up);
             actions.appendChild(down);
+
+            // Per-request trace: which query was really searched, what came back, where the time went.
+            if (m.requestId) {
+                const trace = document.createElement('button');
+                trace.type = 'button';
+                trace.className = 'msg-action';
+                trace.textContent = 'Trace';
+                trace.title = 'Show how this answer was produced';
+                trace.onclick = () => toggleTrace(bubble, m);
+                actions.appendChild(trace);
+            }
             bubble.appendChild(actions);
         }
 
@@ -1053,6 +1064,8 @@ $('#chat-form').addEventListener('submit', async (e) => {
                     scrollThreadBottom();
                 } else if (frame.type === 'sources') {
                     assistant.sources = frame.sources;
+                } else if (frame.type === 'trace') {
+                    assistant.requestId = frame.requestId;
                 } else if (frame.type === 'guard') {
                     // Tokens are already rendered; the server can only tell us they were not grounded.
                     assistant.guard = frame.reason;
@@ -1090,6 +1103,49 @@ function toggleSource(chip, source) {
     pre.textContent = source.content;
     chip.insertAdjacentElement('afterend', pre);
     chip._detail = pre;
+}
+
+// ---------- Per-request trace (debug view) ----------
+
+// Fetches /traces once and renders the row for this answer. The endpoint only ever returns the
+// caller's own traces, so nothing here can widen what the user may see.
+async function toggleTrace(bubble, m) {
+    if (bubble._traceBox) { bubble._traceBox.remove(); bubble._traceBox = null; return; }
+    const box = document.createElement('div');
+    box.className = 'trace-box';
+    box.textContent = 'Loading trace…';
+    bubble.appendChild(box);
+    bubble._traceBox = box;
+
+    try {
+        const res = await fetch('/traces?limit=20');
+        if (!res.ok) throw new Error(res.status);
+        const traces = await res.json();
+        const t = traces.find((x) => x.requestId === m.requestId);
+        if (!t) { box.textContent = 'No trace stored for this answer.'; return; }
+        box.innerHTML = renderTrace(t);
+    } catch (err) {
+        box.textContent = 'Could not load the trace: ' + err.message;
+    }
+}
+
+function renderTrace(t) {
+    const stages = Object.entries(t.stageLatencyMs || {})
+        .map(([k, v]) => `<span class="trace-stage"><b>${esc(k)}</b> ${v} ms</span>`).join('');
+    const hits = (t.retrieved || [])
+        .map((r, i) => `<tr><td>${i + 1}</td><td class="mono">${esc(r.docId)}</td>` +
+                       `<td>#${r.chunkIndex}</td><td>${r.score.toFixed(3)}</td></tr>`).join('');
+    const tokens = (t.promptTokens == null && t.completionTokens == null)
+        ? 'not reported'
+        : `${t.promptTokens ?? '?'} prompt / ${t.completionTokens ?? '?'} completion`;
+    return `
+        <div class="trace-line"><b>backend</b> ${esc(t.backend)} · <b>tokens</b> ${tokens} · <b>guard</b> ${esc(t.guardReason || '-')}</div>
+        <div class="trace-line"><b>searched</b> ${esc(t.condensedQuery || t.rawQuery)}` +
+        (t.condensedQuery ? ` <span class="trace-muted">(condensed from "${esc(t.rawQuery)}")</span>` : '') + `</div>
+        <div class="trace-stages">${stages}</div>
+        <table class="trace-table"><thead><tr><th>#</th><th>document</th><th>chunk</th><th>score</th></tr></thead>
+        <tbody>${hits}</tbody></table>
+        <div class="trace-muted mono">${esc(t.requestId)}</div>`;
 }
 
 // Local-only thumbs feedback (no backend); toggles and logs to localStorage.

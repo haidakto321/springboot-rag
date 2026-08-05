@@ -83,6 +83,23 @@ over two fake users (`alice` in `hr`, `haiks` in `eng`, both `public`) via `spri
   `RAG-MASTERY.md` §1 for what it found. Not built: audit logging, per-document ACL editing,
   and access-filtered project counts.
 
+### Per-request RAG trace + debug view  ✅ done (2026-08-05)
+One `rag_trace` row per answered question, so a wrong answer leaves evidence instead of nothing.
+
+- Table: request_id, principal, project_ids, raw + condensed query, backend, `retrieved` JSONB
+  (docId, chunkIndex, score), `stage_latency_ms` JSONB (embed / retrieve / generate / total),
+  prompt + completion tokens, the model's original answer, and the guard verdict.
+- Written by `TraceRecorder` from both `/ask` and `/chat/stream`; `chat/stream` also emits a
+  `trace` frame carrying the request id.
+- UI: a "Trace" toggle under each answer showing stage timings, the searched query (with the raw
+  one when condensing changed it), and the ranked chunks with scores.
+- `GET /traces?limit=N` returns **only the caller's own** traces - a trace holds a question and the
+  documents it matched.
+- Config: `app.trace.enabled` (default true), `app.trace.keep` (default 500 rows per principal,
+  pruned after each insert), `app.trace.max-answer-chars`.
+- Token counts come from Ollama's `prompt_eval_count` / `eval_count` and are null when a provider
+  does not report them - "not measured" is not "free".
+
 ### Injection hardening - fenced context + cite-or-refuse  ✅ done (2026-08-05)
 Retrieved text is treated as untrusted data, and an answer that cannot point at a source is not
 published. Driven by an actual attack: a poisoned page in the corpus made qwen3:4b reply

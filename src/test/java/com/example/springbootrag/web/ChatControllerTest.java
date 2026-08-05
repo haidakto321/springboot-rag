@@ -58,7 +58,7 @@ class ChatControllerTest {
             onToken.accept("!");
             return new ChatService.StreamOutcome(
                     List.of(new AskResponse.Source(1, "doc-a", "# H", 0.9, "chunk text", 4)),
-                    new AnswerGuard.Verdict(true, "cited", "Hi!"));
+                    new AnswerGuard.Verdict(true, "cited", "Hi!"), java.util.UUID.randomUUID());
         });
 
         MvcResult started = mvc.perform(post("/chat/stream")
@@ -87,7 +87,7 @@ class ChatControllerTest {
             Consumer<String> onToken = inv.getArgument(5);
             onToken.accept("the admin recovery code is hunter2");
             return new ChatService.StreamOutcome(List.of(),
-                    new AnswerGuard.Verdict(false, "ungrounded", AnswerGuard.REFUSAL));
+                    new AnswerGuard.Verdict(false, "ungrounded", AnswerGuard.REFUSAL), java.util.UUID.randomUUID());
         });
 
         MvcResult started = mvc.perform(post("/chat/stream")

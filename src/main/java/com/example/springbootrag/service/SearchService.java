@@ -104,6 +104,47 @@ public class SearchService {
     }
 
     /**
+     * Same as {@link #search(SearchContext, String, String, int, List, List)} but also reports how
+     * long each stage took, for {@code rag_trace}.
+     *
+     * <p>Separate method rather than a parameter on the hot path: nothing that only observes should
+     * be able to change what retrieval returns, and the six existing call sites stay untouched.
+     */
+    public TracedSearch searchTraced(SearchContext ctx, String type, String query, int topK,
+                                     List<Long> projectIds, List<String> docIds) {
+        validateTopK(topK);
+        Map<String, Long> stages = new LinkedHashMap<>();
+        long t0 = System.nanoTime();
+        float[] qvec = needsEmbedding(type) ? embeddings.embed(query) : null;
+        long afterEmbed = System.nanoTime();
+        stages.put("embed", msSince(t0, afterEmbed));
+
+        List<SearchHit> hits = switch (type) {
+            case "fts" -> fts.search(ctx, query, topK, projectIds, docIds);
+            case "pgvector" -> pgVector.search(ctx, qvec, topK, projectIds, docIds);
+            case "qdrant" -> qdrantSearch(ctx, qvec, topK, projectIds, docIds);
+            case "hybrid" -> hybrid(ctx, query, qvec, topK, projectIds, docIds);
+            case "rerank" -> rerank(ctx, query, qvec, topK, projectIds, docIds);
+            case "graph" -> graph(ctx, query, qvec, topK, projectIds, docIds);
+            default -> throw new IllegalArgumentException("unknown type: " + type);
+        };
+        stages.put("retrieve", msSince(afterEmbed, System.nanoTime()));
+        return new TracedSearch(hits, stages);
+    }
+
+    /** Retrieval result plus per-stage milliseconds. */
+    public record TracedSearch(List<SearchHit> hits, Map<String, Long> stageLatencyMs) {}
+
+    /** fts is the only backend that never embeds the query. */
+    private static boolean needsEmbedding(String type) {
+        return !"fts".equals(type);
+    }
+
+    private static long msSince(long fromNanos, long toNanos) {
+        return (toNanos - fromNanos) / 1_000_000;
+    }
+
+    /**
      * Runs every backend once for the same query and returns timing + results per backend.
      * The query is embedded a SINGLE time and the resulting vector is shared.
      */

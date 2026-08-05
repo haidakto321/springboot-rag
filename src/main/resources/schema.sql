@@ -136,6 +136,31 @@ UPDATE chunks SET allowed_groups = ARRAY['public'] WHERE allowed_groups IS NULL;
 
 CREATE INDEX IF NOT EXISTS idx_chunks_allowed_groups ON chunks USING gin (allowed_groups);
 
+-- ---- Per-request RAG trace (RAG-MASTERY section 6) ----
+-- One row per answered question. When an answer is wrong nothing throws, so the only way to debug
+-- it is to record every decision that produced it: which query was really searched, which chunks
+-- came back at what score, and where the time went.
+-- The variable-shaped parts are JSONB: the retrieved list and the stage timings both change shape
+-- as backends change, and neither is ever joined on.
+CREATE TABLE IF NOT EXISTS rag_trace (
+    id                BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+    request_id        UUID NOT NULL UNIQUE,
+    ts                TIMESTAMPTZ NOT NULL DEFAULT now(),
+    principal         VARCHAR(255) NOT NULL,
+    project_ids       BIGINT[],
+    raw_query         TEXT NOT NULL,
+    condensed_query   TEXT,
+    backend           VARCHAR(32) NOT NULL,
+    retrieved         JSONB NOT NULL DEFAULT '[]'::jsonb,   -- [{docId, chunkIndex, score}]
+    stage_latency_ms  JSONB NOT NULL DEFAULT '{}'::jsonb,   -- {embed, retrieve, generate, total}
+    prompt_tokens     INT,
+    completion_tokens INT,
+    answer            TEXT,
+    guard_reason      VARCHAR(32)
+);
+
+CREATE INDEX IF NOT EXISTS idx_rag_trace_principal ON rag_trace (principal, ts DESC);
+
 -- ---- Per-chunk relevance feedback (eval only - never feeds live ranking) ----
 -- Keyed by (doc_id, chunk_index), NOT by chunks.id: re-ingesting a document deletes and
 -- reinserts its rows, so a chunk id is not stable across imports but the pair is.

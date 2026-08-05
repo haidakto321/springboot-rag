@@ -43,6 +43,11 @@ public class OllamaChatProvider implements ChatProvider {
      */
     @Override
     public String chat(String systemPrompt, String userPrompt) {
+        return chatDetailed(systemPrompt, userPrompt).content();
+    }
+
+    @Override
+    public ChatReply chatDetailed(String systemPrompt, String userPrompt) {
         ChatResponse resp;
         try {
             resp = client.post()
@@ -64,7 +69,10 @@ public class OllamaChatProvider implements ChatProvider {
         if (resp == null || resp.message() == null || resp.message().content() == null) {
             throw new ChatUnavailableException("Ollama returned no chat message");
         }
-        return stripThink(resp.message().content());
+        // Ollama names them prompt_eval_count / eval_count; note eval_count INCLUDES the tokens
+        // spent thinking, which is exactly why the cost of a reasoning model is worth recording.
+        return new ChatReply(stripThink(resp.message().content()),
+                new Usage(resp.promptEvalCount(), resp.evalCount()));
     }
 
     @Override
@@ -75,6 +83,13 @@ public class OllamaChatProvider implements ChatProvider {
     @Override
     public void chatStream(String systemPrompt, List<ChatMessage> messages, boolean think,
                            Consumer<String> onToken, Consumer<String> onReasoning) {
+        chatStream(systemPrompt, messages, think, onToken, onReasoning, u -> {});
+    }
+
+    @Override
+    public void chatStream(String systemPrompt, List<ChatMessage> messages, boolean think,
+                           Consumer<String> onToken, Consumer<String> onReasoning,
+                           Consumer<Usage> onUsage) {
         List<Map<String, String>> ollamaMessages = new ArrayList<>();
         ollamaMessages.add(Map.of("role", "system", "content", systemPrompt));
         for (ChatMessage m : messages) {
@@ -117,7 +132,11 @@ public class OllamaChatProvider implements ChatProvider {
                                         filter.accept(chunk.message().content());
                                     }
                                 }
-                                if (chunk.done()) break;
+                                if (chunk.done()) {
+                                    // Counts only arrive on the final chunk.
+                                    onUsage.accept(new Usage(chunk.promptEvalCount(), chunk.evalCount()));
+                                    break;
+                                }
                             }
                         }
                         return null;
@@ -214,7 +233,11 @@ public class OllamaChatProvider implements ChatProvider {
         }
     }
 
-    private record ChatResponse(Message message) {}
-    private record StreamChunk(Message message, boolean done) {}
+    private record ChatResponse(Message message,
+                                @com.fasterxml.jackson.annotation.JsonProperty("prompt_eval_count") Integer promptEvalCount,
+                                @com.fasterxml.jackson.annotation.JsonProperty("eval_count") Integer evalCount) {}
+    private record StreamChunk(Message message, boolean done,
+                               @com.fasterxml.jackson.annotation.JsonProperty("prompt_eval_count") Integer promptEvalCount,
+                               @com.fasterxml.jackson.annotation.JsonProperty("eval_count") Integer evalCount) {}
     private record Message(String role, String content, String thinking) {}
 }

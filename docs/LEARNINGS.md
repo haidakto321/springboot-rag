@@ -739,6 +739,70 @@ blocking, and why it is listed last here.
 
 ---
 
+## 18. Per-request tracing (the empty stack trace problem)
+
+Built 2026-08-05 (RAG-MASTERY section 6). One `rag_trace` row per answered question, a `guard`-style
+`trace` frame handing the request id to the client, and a "Trace" toggle under every answer.
+
+**Why this gap is different from every other gap.** When an answer is wrong, nothing throws.
+There is no exception, no 500, no stack trace - just a plausible paragraph. The failure lives in a
+chain of decisions (which query was searched, which chunks came back at what score, what the guard
+said), and none of it exists after the response is written unless it was recorded on the way past.
+
+**What each field is for**, because a trace nobody uses is just disk:
+
+| Field | The bug it catches |
+|---|---|
+| `raw_query` + `condensed_query` | The condense step mangling a good follow-up - invisible until you see both strings |
+| `retrieved[]` with scores | "Retrieved but ranked below junk" vs "never retrieved at all" |
+| `stage_latency_ms` | One stage eating 80% of the time (here: `generate`, by an order of magnitude) |
+| `prompt_tokens` / `completion_tokens` | Cost, and the reasoning tax - Ollama's `eval_count` includes thinking tokens |
+| `guard_reason` | A refusal from `AnswerGuard` vs a model that genuinely had nothing |
+| `answer` (the model's ORIGINAL text) | Debugging a blocked answer is impossible if the blocked text was discarded |
+
+**Shape decisions worth reusing.**
+- **JSONB for the variable parts** (`retrieved`, `stage_latency_ms`), scalars for what you filter
+  on (principal, ts). Adding a stage or a per-hit field then needs no migration, and neither is
+  ever joined on.
+- **A separate `searchTraced` method, not a trace parameter on `search`.** Observation must not be
+  able to change what retrieval returns, and the six existing call sites stayed untouched.
+- **Tracing never throws.** `TraceRecorder` catches everything and logs: a broken trace must not
+  break a working answer.
+- **Retention from day one.** `app.trace.keep` (500 rows per principal) pruned after each insert.
+  Debugging exhaust without a retention rule is a disk-full incident with a delay fuse.
+- **Traces are access-controlled like documents.** They hold the question someone typed and the
+  documents it matched, so `GET /traces` is scoped to the caller's own rows - the same reasoning
+  that hid feedback labels in §16.
+
+**First trace, first finding.** The very first real request through the new code (question: "what
+is chunking and why does it matter", project 1, qwen3:4b, identity reranker):
+
+```
+stages : embed 6,852 ms | retrieve 82 ms | generate 210,779 ms | total 217,717 ms
+tokens : prompt 1,253 | completion 2,087
+guard  : cited
+```
+
+Read that table once and the whole latency conversation changes:
+- **Generation is 97% of the wall clock.** Retrieval - the part this project spends most of its
+  effort on - is 82 ms, four orders of magnitude cheaper. Optimising retrieval speed here would be
+  measuring one raindrop during a flood.
+- **2,087 completion tokens for a three-sentence answer.** That is the reasoning tax: Ollama's
+  `eval_count` includes thinking tokens, and `think:true` (needed to keep chain-of-thought out of
+  the answer, §12) means paying for them. 2,087 tokens over 211 s is ~10 tok/s, which matches the
+  ~11.5 tok/s CPU measurement in §14 exactly.
+- **Embedding took 6.9 s** - first call after startup, so mostly model load, but it dwarfs
+  retrieval and is worth watching.
+
+None of that was visible before. It is also the honest starting point for §8's cost budget: the
+lever that matters on this hardware is the answer model, not the vector store.
+
+> Lesson: the hard part of RAG debugging is not that failures are subtle, it is that they leave no
+> evidence. Write the evidence down at the time or accept "run it again and squint". The first
+> trace usually pays for the feature.
+
+---
+
 ## Where to go next
 `docs/ROADMAP.md` lists what's built and what's queued - notably **condense-question retrieval**
 (fixes vague follow-ups), snippet windowing, and token-budget history trimming. Each is a small

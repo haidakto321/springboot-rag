@@ -60,6 +60,9 @@ public class ChatController {
                                 token -> writeFrame(out, Map.of("type", "token", "text", token)),
                                 reasoning -> writeFrame(out, Map.of("type", "reasoning", "text", reasoning)));
                 writeFrame(out, Map.of("type", "sources", "sources", outcome.sources()));
+                // Hands the client the id of the trace row for this answer, so the debug view can
+                // show exactly the request the user is looking at rather than "the latest one".
+                writeFrame(out, Map.of("type", "trace", "requestId", outcome.requestId().toString()));
                 // The tokens are already on the wire, so a failed grounding check can only be
                 // reported, not applied. The UI turns this into a warning on the answer.
                 if (!outcome.verdict().allowed()) {

@@ -8,11 +8,14 @@ import com.example.springbootrag.model.SearchHit;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import com.example.springbootrag.security.SearchContext;
+import com.example.springbootrag.trace.TraceRecorder;
 import com.example.springbootrag.web.dto.AskResponse;
 import org.springframework.stereotype.Service;
 
 import java.util.ArrayList;
+import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.function.Consumer;
 
 /**
@@ -37,11 +40,14 @@ public class ChatService {
     private final SearchService searchService;
     private final ChatProvider chat;
     private final ChatProperties props;
+    private final TraceRecorder tracer;
 
-    public ChatService(SearchService searchService, ChatProvider chat, ChatProperties props) {
+    public ChatService(SearchService searchService, ChatProvider chat, ChatProperties props,
+                       TraceRecorder tracer) {
         this.searchService = searchService;
         this.chat = chat;
         this.props = props;
+        this.tracer = tracer;
     }
 
     /**
@@ -60,7 +66,8 @@ public class ChatService {
      * failed the check. That is a real limitation of streaming, not an oversight: buffering the
      * whole answer to guard it first would trade away the reason streaming exists.
      */
-    public record StreamOutcome(List<AskResponse.Source> sources, AnswerGuard.Verdict verdict) {}
+    public record StreamOutcome(List<AskResponse.Source> sources, AnswerGuard.Verdict verdict,
+                                java.util.UUID requestId) {}
 
     /** Convenience overload: no reasoning channel, thinking disabled. */
     public StreamOutcome chatStream(SearchContext ctx,
@@ -78,6 +85,8 @@ public class ChatService {
                                     boolean think,
                                     Consumer<String> onToken,
                                     Consumer<String> onReasoning) {
+        java.util.UUID requestId = java.util.UUID.randomUUID();
+        long start = System.nanoTime();
         if (history == null || history.isEmpty()) {
             throw new IllegalArgumentException("messages are required");
         }
@@ -100,12 +109,17 @@ public class ChatService {
 
         List<Long> pScope = projectIds == null ? List.of() : projectIds;
         List<String> dScope = docIds == null ? List.of() : docIds;
-        List<SearchHit> hits = searchService.search(ctx, "rerank", retrievalQuery,
+        SearchService.TracedSearch search = searchService.searchTraced(ctx, "rerank", retrievalQuery,
                 props.getContextChunks(), pScope, dScope);
+        List<SearchHit> hits = search.hits();
+        Map<String, Long> stages = new LinkedHashMap<>(search.stageLatencyMs());
         if (hits.isEmpty()) {
             onToken.accept("No relevant chunks found in the knowledge base.");
+            stages.put("total", msSince(start));
+            tracer.record(requestId, ctx, pScope, last.content(), retrievalQuery, "rerank", hits,
+                    stages, null, null, null, "no-hits");
             return new StreamOutcome(List.of(),
-                    new AnswerGuard.Verdict(true, "no-hits", AnswerGuard.REFUSAL));
+                    new AnswerGuard.Verdict(true, "no-hits", AnswerGuard.REFUSAL), requestId);
         }
 
         // Prior turns verbatim; the final user turn carries the fenced context + question.
@@ -113,23 +127,35 @@ public class ChatService {
         modelMessages.add(new ChatMessage("user", AskService.buildUserPrompt(last.content(), hits)));
 
         // Tee the stream: the client gets tokens live, and a copy is kept so the finished answer
-        // can still be checked for grounding.
+        // can still be checked for grounding and written to the trace.
         StringBuilder full = new StringBuilder();
+        java.util.concurrent.atomic.AtomicReference<ChatProvider.Usage> usage =
+                new java.util.concurrent.atomic.AtomicReference<>(ChatProvider.Usage.unknown());
+        long beforeGenerate = System.nanoTime();
         chat.chatStream(AskService.SYSTEM_PROMPT, modelMessages, think,
-                token -> { full.append(token); onToken.accept(token); }, onReasoning);
+                token -> { full.append(token); onToken.accept(token); }, onReasoning, usage::set);
+        stages.put("generate", (System.nanoTime() - beforeGenerate) / 1_000_000);
 
         AnswerGuard.Verdict verdict = AnswerGuard.check(full.toString(), hits.size());
         if (!verdict.allowed()) {
             log.warn("streamed answer failed the grounding guard ({}) - already sent to the client",
                     verdict.reason());
         }
+        stages.put("total", msSince(start));
+        tracer.record(requestId, ctx, pScope, last.content(), retrievalQuery, "rerank", hits, stages,
+                usage.get().promptTokens(), usage.get().completionTokens(),
+                full.toString(), verdict.reason());
 
         List<AskResponse.Source> sources = new ArrayList<>();
         for (int i = 0; i < hits.size(); i++) {
             SearchHit h = hits.get(i);
             sources.add(new AskResponse.Source(i + 1, h.docId(), h.headingPath(), h.score(), h.content(), h.chunkIndex()));
         }
-        return new StreamOutcome(sources, verdict);
+        return new StreamOutcome(sources, verdict, requestId);
+    }
+
+    private static long msSince(long startNanos) {
+        return (System.nanoTime() - startNanos) / 1_000_000;
     }
 
     /**

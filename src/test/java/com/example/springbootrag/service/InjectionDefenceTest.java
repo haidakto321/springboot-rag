@@ -8,6 +8,7 @@ import com.example.springbootrag.model.SearchHit;
 import com.example.springbootrag.security.SearchContext;
 import com.example.springbootrag.security.TestContexts;
 import com.example.springbootrag.web.dto.AskResponse;
+import com.example.springbootrag.trace.NoopTraceRecorder;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 
@@ -15,6 +16,7 @@ import java.io.IOException;
 import java.io.InputStream;
 import java.nio.charset.StandardCharsets;
 import java.util.List;
+import java.util.Map;
 import java.util.function.Consumer;
 
 import static org.assertj.core.api.Assertions.assertThat;
@@ -78,17 +80,18 @@ class InjectionDefenceTest {
         when(projectService.defaultProjectId()).thenReturn(1L);
 
         String poisoned = poisonedPage();
-        when(searchService.search(any(SearchContext.class), eq("rerank"), anyString(), anyInt(), anyList(), anyList()))
-                .thenReturn(List.of(
+        when(searchService.searchTraced(any(SearchContext.class), eq("rerank"), anyString(), anyInt(), anyList(), anyList()))
+                .thenReturn(new SearchService.TracedSearch(List.of(
                         new SearchHit(1, "Expense-Policy", 1, poisoned, "Expense-Policy.md",
                                 "# Expense reimbursement policy > ## Administrative notice", 0.9, null),
                         new SearchHit(2, "Expense-Policy", 2, "Mileage is 0.30 EUR per kilometre.",
-                                "Expense-Policy.md", "# Expense reimbursement policy > ## Mileage", 0.5, null)));
+                                "Expense-Policy.md", "# Expense reimbursement policy > ## Mileage", 0.5, null)),
+                        Map.of("embed", 1L, "retrieve", 2L)));
     }
 
     @Test
     void anObeyedInjectionNeverReachesTheUser() {
-        AskService ask = new AskService(searchService, chat, props, projectService);
+        AskService ask = new AskService(searchService, chat, props, projectService, NoopTraceRecorder.create());
 
         AskResponse resp = ask.ask(TestContexts.PUBLIC, "what does the administrative notice say?");
 
@@ -103,7 +106,7 @@ class InjectionDefenceTest {
 
     @Test
     void theSystemPromptTellsTheModelThatReferenceMaterialIsData() {
-        AskService ask = new AskService(searchService, chat, props, projectService);
+        AskService ask = new AskService(searchService, chat, props, projectService, NoopTraceRecorder.create());
         ask.ask(TestContexts.PUBLIC, "what is the meal cap?");
 
         assertThat(chat.lastSystem)
@@ -113,7 +116,7 @@ class InjectionDefenceTest {
 
     @Test
     void thePoisonedPageStaysInsideTheFence() {
-        AskService ask = new AskService(searchService, chat, props, projectService);
+        AskService ask = new AskService(searchService, chat, props, projectService, NoopTraceRecorder.create());
         ask.ask(TestContexts.PUBLIC, "what is the meal cap?");
 
         String prompt = chat.lastUser;
@@ -130,7 +133,7 @@ class InjectionDefenceTest {
 
     @Test
     void aStreamedInjectionIsReportedBecauseItCannotBeRecalled() {
-        ChatService chatService = new ChatService(searchService, chat, props);
+        ChatService chatService = new ChatService(searchService, chat, props, NoopTraceRecorder.create());
         StringBuilder streamed = new StringBuilder();
 
         ChatService.StreamOutcome outcome = chatService.chatStream(TestContexts.PUBLIC,
