@@ -630,6 +630,26 @@ body {
 .msg-action.on { color: var(--ac); border-color: var(--ac); }
 .chat-msg.user .msg-actions { display: none; }
 
+/* ---------- Per-chunk relevance thumbs (eval labels) ---------- */
+.vote { display: inline-flex; gap: 2px; align-items: center; }
+.vote-btn {
+  border: none; background: none; cursor: pointer; padding: 2px 4px; line-height: 1;
+  font-family: inherit; font-size: 12px; border-radius: 6px;
+  opacity: .35; filter: grayscale(1); transition: opacity .12s, filter .12s;
+}
+.vote-btn:hover { opacity: .85; filter: grayscale(.2); }
+.vote-btn.on { opacity: 1; filter: none; background: var(--chip); }
+/* Search rows: keep the thumbs quiet until the row is hovered or a label exists. */
+.result-vote { margin-top: 6px; align-self: flex-start; }
+.result-row .result-vote { opacity: 0; transition: opacity .12s; }
+.result-row:hover .result-vote,
+.result-row .result-vote:focus-within { opacity: 1; }
+.result-row .result-vote:has(.vote-btn.on) { opacity: 1; }
+/* Citation chips: sit inside the pill, after the open arrow. */
+.chip-vote { padding-right: 6px; }
+.chip-vote .vote-btn { font-size: 11px; padding: 3px; }
+.chip-vote .vote-btn.on { background: rgba(0, 0, 0, .08); }
+
 /* ---------- AI thinking toggle + collapsible reasoning box ---------- */
 .think-toggle {
   display: inline-flex;

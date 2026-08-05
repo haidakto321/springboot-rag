@@ -562,6 +562,49 @@ box (RTX 3050 Laptop, 4 GB VRAM) and it does not fit:
 
 ---
 
+## 15. Human relevance labels (feedback as eval, not as ranking)
+
+Built 2026-08-05 (RAG-MASTERY section 3 drill D, ROADMAP "Option A"): a thumb on each search
+result and each answer citation writes a label to `chunk_feedback`, and
+`FeedbackPrecisionEvalTest` turns those labels into precision numbers per backend.
+
+**Why a click is worth collecting at all.** A cross-encoder is a *fixed content model*: it scores
+(query, chunk) text pairs and never learns from usage. The golden set says whether retrieval found
+the one page you already knew about; it cannot say whether what the user was actually shown was
+useful. On this corpus the 11-question golden set said the cross-encoder *lowers* MRR
+(0.919 -> 0.909, section 14) - a real result, but 11 questions thin. Labels are how that sample
+grows without hand-writing more golden entries.
+
+**The design decisions worth remembering:**
+
+- **Eval only, deliberately.** No label is read at query time and no score is nudged by one. The
+  tempting next step - `final = w1*reranker + w2*feedback` - overfits to a handful of clicks and
+  cold-starts on every unseen query. That is ROADMAP "Option B" and it stays unbuilt until there
+  are enough labels to justify it.
+- **Key by `(doc_id, chunk_index)`, not by `chunks.id`.** Ingest is upsert-by-document: it deletes
+  and reinserts the rows, so chunk ids are not stable across a re-import and id-based labels would
+  silently orphan. The pair survives a re-ingest of unchanged content.
+- **One label per (project, doc, chunk, query), upserted.** A repeat vote overwrites; un-voting
+  deletes the row. An append-only click log keeps more history but forces every consumer to
+  re-derive "latest wins", and the consumer here is an eval that wants clean
+  `(query, chunk, relevant)` triples.
+- **The label belongs to the query, not the answer.** The existing whole-answer thumb (still
+  localStorage-only) says "I liked this reply". A per-chunk thumb says "this chunk was relevant to
+  this question", which is the only signal a retrieval metric can use.
+- **precision@k is computed over JUDGED hits only.** With sparse human labels, counting every
+  unlabelled hit as irrelevant would measure how much someone clicked, not how good retrieval is.
+  The report therefore also prints **coverage** (judged / returned) so a precision built on two
+  labels cannot masquerade as a verdict.
+- **Report, not a gate.** `WikiRetrievalEvalTest` gates against a committed baseline because its
+  golden set is frozen. Labels grow every time someone clicks, so any threshold committed today
+  fails tomorrow for an honest reason.
+
+> Lesson: collect human labels against the *question*, keep them out of the ranking path, and
+> report coverage next to precision. A metric whose sample size is invisible is a metric that
+> will eventually be quoted as fact.
+
+---
+
 ## Where to go next
 `docs/ROADMAP.md` lists what's built and what's queued - notably **condense-question retrieval**
 (fixes vague follow-ups), snippet windowing, and token-budget history trimming. Each is a small

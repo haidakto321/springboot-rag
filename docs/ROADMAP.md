@@ -68,31 +68,36 @@ Merged "streaming answers" + "conversational follow-up".
 - UI: sidebar project switcher (grouped by `group_name`), manage-projects modal
   (create/rename/delete/set-group), and a "Search whole group" toggle on Search & Ask and Compare.
 
-## Planned (not yet built)
-
-### Per-chunk relevance feedback - eval only (Option A)  ⬜ planned
+### Per-chunk relevance feedback - eval only (Option A)  ✅ done (2026-08-05)
 Goal: collect human relevance labels on individual retrieved chunks so we can MEASURE retrieval /
 reranker quality against real usage - NOT to change ranking live (no fine-tuning, no live boost).
 The existing whole-answer 👍/👎 (localStorage-only) stays; this adds a per-source signal with a backend.
 
-- **Signal:** a thumb on each source/citation chip in Search results and in the Ask answer's chips.
-  One click logs `{ query, projectId, docId, chunkIndex, rating: up|down, ts }`.
-- **Backend:** `POST /feedback` -> new `chunk_feedback` table (Postgres). Simple insert; no auth
-  (single-user dev sandbox, same posture as the rest). Add a `GET /feedback` (or a small eval
-  reader) to dump labels for analysis.
-- **Use:** offline eval. Feed the labels as `(query, chunkId, relevant)` pairs to check whether the
-  reranker ranks thumbs-up chunks above thumbs-down (precision@k on human labels) - complements the
-  golden-set eval (`golden.yaml`, `golden-wiki.yaml`). This is the cheap, honest win.
+- **Signal** ✅ - a small 👍/👎 pair on every search result row and on every answer citation chip.
+  A click writes `{ query, projectId, docId, chunkIndex, rating: up|down, ts }`; clicking the active
+  thumb clears the label. Thumbs are restored on reload from `GET /feedback?projectId&query`.
+- **Backend** ✅ - `POST /feedback` (upsert), `DELETE /feedback` (un-vote), `GET /feedback`
+  (dump/filter) over a new `chunk_feedback` table. No auth, same posture as the rest of the sandbox.
+  **Deviation from the original spec:** one label per `(project, doc, chunk, query)` (UNIQUE +
+  ON CONFLICT UPDATE) instead of a plain append-only insert, so consumers read clean
+  `(query, chunk, relevant)` triples with no latest-wins dedupe. Labels key on `(doc_id, chunk_index)`,
+  never on `chunks.id`, which re-ingest rewrites.
+- **Use** ✅ - `FeedbackPrecisionEvalTest` (tag `eval-feedback`) groups the labels by query, replays
+  each through all six backends against the live stack, and reports P@5 / P@10 / MRR-of-first-👍 /
+  judged coverage per backend. Precision counts JUDGED hits only; coverage is printed beside it so a
+  two-label precision cannot pose as a verdict. It is a report, not a gate - labels grow over time.
+  Run: `./mvnw test "-Dgroups=eval-feedback" "-DexcludedGroups="` (add `-Deval.rerank=djl` for the
+  cross-encoder run; skips when fewer than 10 labels exist, override `-Deval.feedback.min=N`).
 - **Explicitly OUT of scope for A:** no query-time score nudge, no cross-encoder fine-tuning. Those
   are a later "Option B" (blend `final = w1*reranker + w2*feedback`) - deferred; risks cold-start on
   unseen queries and overfitting to a few clicks. Revisit only after enough labels accrue.
-- **Why now-ish:** the cross-encoder is a fixed content model - it never learns from clicks on its
+- **Why:** the cross-encoder is a fixed content model - it never learns from clicks on its
   own. Per-chunk labels are the only way to know if it actually helps on THIS corpus. The 11-question
   golden set gave a first answer on 2026-08-05 (it did not help - MRR 0.919 -> 0.909, see
   `LEARNINGS.md` section 14), but 11 questions is too thin to act on, which is exactly the case for
-  labels at scale.
-- UI note: keep it low-clutter - a small thumb per chip, not a big widget. See LEARNINGS §on
-  feedback vs reranking for the reasoning.
+  labels at scale. Reasoning and full design notes: `LEARNINGS.md` section 15.
+
+## Planned (not yet built)
 
 ### CI-runnable eval gate - frozen test corpus  ⬜ planned (deliberately deferred 2026-08-05)
 Goal: make the retrieval regression gate enforceable by CI instead of by developer discipline.

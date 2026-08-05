@@ -630,6 +630,76 @@ function windowSnippet(content) {
     return { text, truncated: true };
 }
 
+// ---------- Per-chunk relevance labels (eval only - never changes ranking) ----------
+// Backed by POST/DELETE/GET /feedback. See docs/RAG-MASTERY.md section 3 drill D.
+
+const MAX_LABEL_QUERY = 500;                  // matches FeedbackController.MAX_QUERY
+const chunkLabels = new Map();                // `query \0 docId \0 chunkIndex` -> 'up' | 'down'
+
+const labelKey = (query, docId, chunkIndex) => `${query}\u0000${docId}\u0000${chunkIndex}`;
+// No thumbs while "search whole group" is on: a hit can then come from a sibling project, but a
+// SearchHit carries no projectId, so the label would be filed under the ACTIVE project and the
+// offline eval - which replays each query inside one project - would never find that chunk again.
+const labelable = (query) => Boolean(
+    activeProjectId && !groupSearchEnabled && query && query.length <= MAX_LABEL_QUERY);
+
+// Merges the stored labels for one query into the map, so thumbs survive a reload.
+async function loadLabels(query) {
+    if (!labelable(query)) return;
+    try {
+        const res = await fetch(`/feedback?projectId=${activeProjectId}&query=${encodeURIComponent(query)}`);
+        if (!res.ok) return;
+        for (const l of await res.json()) chunkLabels.set(labelKey(l.query, l.docId, l.chunkIndex), l.rating);
+    } catch (_) { /* labels are optional - a failed load must not break search */ }
+}
+
+// Toggles one label. Clicking the active thumb clears it (DELETE), otherwise upserts it.
+// The map is updated first so the UI feels instant, and rolled back if the server refuses.
+async function voteChunk(query, docId, chunkIndex, rating, rerender) {
+    const key = labelKey(query, docId, chunkIndex);
+    const before = chunkLabels.get(key);
+    const next = before === rating ? null : rating;
+    if (next) chunkLabels.set(key, next); else chunkLabels.delete(key);
+    rerender();
+
+    try {
+        const res = next
+            ? await fetch('/feedback', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ query, projectId: Number(activeProjectId), docId, chunkIndex, rating: next }),
+              })
+            : await fetch(`/feedback?projectId=${activeProjectId}&query=${encodeURIComponent(query)}`
+                + `&docId=${encodeURIComponent(docId)}&chunkIndex=${chunkIndex}`, { method: 'DELETE' });
+        if (!res.ok) throw new Error(res.status);
+    } catch (_) {
+        if (before) chunkLabels.set(key, before); else chunkLabels.delete(key);
+        rerender();
+        toast('Could not save relevance feedback', 'error');
+    }
+}
+
+// Two small thumbs for one chunk. Returns null when the query cannot be labelled.
+function buildVote(query, docId, chunkIndex, rerender, extraClass) {
+    if (!labelable(query)) return null;
+    const current = chunkLabels.get(labelKey(query, docId, chunkIndex));
+    const wrap = document.createElement('span');
+    wrap.className = 'vote' + (extraClass ? ' ' + extraClass : '');
+    for (const [rating, glyph, title] of [['up', '👍', 'Relevant to this query'], ['down', '👎', 'Not relevant']]) {
+        const b = document.createElement('button');
+        b.type = 'button';
+        b.className = 'vote-btn' + (current === rating ? ' on' : '');
+        b.textContent = glyph;
+        b.title = title;
+        b.onclick = (e) => {
+            e.stopPropagation();     // never trigger the row's open-in-context
+            voteChunk(query, docId, chunkIndex, rating, rerender);
+        };
+        wrap.appendChild(b);
+    }
+    return wrap;
+}
+
 function renderHits() {
     const hitsEl = $('#search-hits');
     hitsEl.innerHTML = '';
@@ -670,6 +740,8 @@ function renderHits() {
                 <span class="result-score-val">${h.score.toFixed(3)}</span>
                 <div class="score-track"><div class="score-fill" style="width:${pct}%"></div></div>
             </div>`;
+        const vote = buildVote(lastQuery, h.docId, h.chunkIndex, renderHits, 'result-vote');
+        if (vote) row.querySelector('.result-main').appendChild(vote);
         hitsEl.appendChild(row);
     }
 }
@@ -732,6 +804,7 @@ async function runSearch(reset, record) {
     lastHits = await res.json();
     lastQuery = q;
     meta.textContent = `${lastHits.length} result${lastHits.length === 1 ? '' : 's'} · ${ms} ms`;
+    await loadLabels(q);          // restore thumbs already stored for this query
     renderHits();
     // Heuristic: a full page back means there may be more.
     $('#search-more').hidden = !(lastHits.length > 0 && lastHits.length === searchTopK);
@@ -801,6 +874,9 @@ function renderThread() {
 
                 chip.appendChild(peek);
                 chip.appendChild(open);
+                // Relevance thumbs on the citation itself: the label is about the chunk, not the answer.
+                const vote = buildVote(m.query, s.docId, s.chunkIndex, renderThread, 'chip-vote');
+                if (vote) chip.appendChild(vote);
                 chips.appendChild(chip);
             }
             bubble.appendChild(chips);
@@ -860,7 +936,9 @@ $('#chat-form').addEventListener('submit', async (e) => {
     $('#chat-q').value = '';
 
     chatMessages.push({ role: 'user', content: q });
-    const assistant = { role: 'assistant', content: '', sources: null, streaming: true };
+    // query is kept on the answer so its citation chips can be labelled. It is the RAW question,
+    // not the condensed follow-up the server may have actually searched with.
+    const assistant = { role: 'assistant', content: '', sources: null, streaming: true, query: q };
     chatMessages.push(assistant);
     renderThread();
 
@@ -939,6 +1017,10 @@ $('#chat-form').addEventListener('submit', async (e) => {
         send.disabled = false;
         renderThread();       // finalize: drop caret, render citation chips
         $('#chat-q').focus();
+        if (assistant.sources && assistant.sources.length) {
+            await loadLabels(q);   // same question asked before -> show the thumbs already stored
+            renderThread();
+        }
     }
 });
 

@@ -124,3 +124,21 @@ CREATE TABLE IF NOT EXISTS entity_edge (
 CREATE INDEX IF NOT EXISTS idx_chunk_entity_entity ON chunk_entity (entity_id);
 CREATE INDEX IF NOT EXISTS idx_entity_edge_src ON entity_edge (project_id, src_entity);
 CREATE INDEX IF NOT EXISTS idx_entity_name ON entity (project_id, name_norm);
+
+-- ---- Per-chunk relevance feedback (eval only - never feeds live ranking) ----
+-- Keyed by (doc_id, chunk_index), NOT by chunks.id: re-ingesting a document deletes and
+-- reinserts its rows, so a chunk id is not stable across imports but the pair is.
+-- query_text is capped so the UNIQUE btree index can never exceed the ~2704-byte row limit.
+CREATE TABLE IF NOT EXISTS chunk_feedback (
+    id          BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+    project_id  BIGINT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+    query_text  TEXT NOT NULL CHECK (char_length(query_text) BETWEEN 1 AND 500),
+    doc_id      VARCHAR(255) NOT NULL,
+    chunk_index INT NOT NULL CHECK (chunk_index >= 0),
+    rating      VARCHAR(8) NOT NULL CHECK (rating IN ('up', 'down')),
+    created_at  TIMESTAMPTZ NOT NULL DEFAULT now(),
+    updated_at  TIMESTAMPTZ NOT NULL DEFAULT now(),
+    UNIQUE (project_id, doc_id, chunk_index, query_text)
+);
+
+CREATE INDEX IF NOT EXISTS idx_chunk_feedback_project ON chunk_feedback (project_id, updated_at DESC);

@@ -627,3 +627,107 @@ A stale incremental compile broke JUnit discovery mid-task with
 referenced the type in the default package). `./mvnw clean test` fixed it. Worth knowing: adding
 classes to the `eval` package while running targeted `-Dtest=` builds can leave `target/test-classes`
 inconsistent, and the symptom looks like a code defect rather than a build-state one.
+
+---
+
+## 2026-08-05 - Per-chunk relevance feedback (RAG-MASTERY move 2, ROADMAP "Option A")
+
+Executed inline (no subagents), five units: schema + repository, controller, UI thumbs, offline
+eval reader, docs. What follows is the part that is not visible in the diff.
+
+### Decisions that were not in the spec
+
+**Upsert instead of the specced "simple insert".** ROADMAP described an append-only log. Built as
+`UNIQUE (project_id, doc_id, chunk_index, query_text)` + `ON CONFLICT DO UPDATE`, with
+`DELETE /feedback` for un-voting. Reason: the only consumer is an eval that wants clean
+`(query, chunk, relevant)` triples. An append log pushes latest-wins dedupe into every consumer and
+buys history nobody asked for. Cost of the choice: a user changing their mind is not recoverable.
+
+**Labels key on `(doc_id, chunk_index)`, never `chunks.id`.** Ingest is delete-then-insert per
+document, so chunk ids do not survive a re-import. `updated_at` is kept so a stale label set can at
+least be dated.
+
+**`query_text`, capped at 500 characters, enforced in three places.** The column is part of a
+btree UNIQUE index, and Postgres rejects index rows over ~2704 bytes. The DB has a CHECK, the
+controller returns 400 over the cap, and the frontend hides the thumbs rather than offering a
+control that would fail. A CHECK alone would have surfaced as a 500 on a long query.
+
+**Backend and rank are deliberately NOT stored.** Tempting, since the UI knows which backend
+produced the hit. But a label answers "is this chunk relevant to this question", which is
+backend-independent - the eval replays the query through all six backends itself. Storing the
+backend would invite per-backend label sets that cannot be compared.
+
+**Validation lives in the controller, no service layer.** A `FeedbackService` would have been a
+pass-through; `DocumentController` already talks to a repository directly. Project existence is
+checked via `ProjectService.exists` so an unknown project is a 400, not an FK violation surfacing
+as a 500.
+
+**Chat labels use the RAW question, not the condensed one.** `ChatService` may rewrite a follow-up
+before retrieving. The label is stored against what the human typed, because that is what they were
+judging. Consequence: a label from chat and a label from the search box for the same wording share
+a key, which is intended; but the eval replays the raw text, so a label collected after a condense
+may be scored against a slightly different retrieval than the user saw. Accepted - the alternative
+(storing the condensed query) makes the label unreadable to a human reviewer.
+
+### Frontend
+
+- One `chunkLabels` map keyed `query \0 docId \0 chunkIndex`, shared by search rows and citation
+  chips, so the same chunk labelled in Ask shows as labelled in Search for the same query.
+- Optimistic update with rollback: the thumb flips immediately and reverts with an error toast if
+  the request fails, so the UI never shows a label the server does not have.
+- `GET /feedback?projectId&query` is called after every search (and after an answer finishes) to
+  restore thumbs across reloads. A failed load is swallowed - labels must never break search.
+- Thumbs on search rows are hidden until row hover (or when a label exists), keeping the low-clutter
+  requirement from the ROADMAP note. `e.stopPropagation()` on the buttons, because the whole row is
+  a click target for open-in-context.
+
+### Eval reader (`FeedbackPrecisionEvalTest`, tag `eval-feedback`)
+
+Same posture as `WikiRetrievalEvalTest`: no Testcontainers, reads the live stack, read-only by
+construction, skips rather than fails when the data is not there (fewer than 10 labels).
+
+- **precision@k over judged hits only.** Unlabelled hits are ignored, not counted as irrelevant.
+  With sparse labels the alternative measures click volume. The trade-off is that precision on two
+  labels looks like precision on twenty, which is why **coverage (judged / returned)** is printed in
+  the same table and a notice fires when coverage is thin.
+- **MRR(up)** - mean reciprocal rank of the first thumbs-up chunk - is the number that actually
+  answers the reranker question, since precision ignores position.
+- **Report, not a gate**, unlike drill C. The golden set is frozen so it can be gated; labels grow
+  with every click, so a committed threshold would fail tomorrow for an honest reason.
+- One assertion survives: if no labelled chunk appears in the top 10 of ANY backend, the run fails
+  with a message pointing at corpus re-ingest, because a table of zeros otherwise reads as "all
+  backends are bad".
+
+### Known limitation found during self-review: group search cannot be labelled
+
+With "search whole group" on, results can come from a sibling project, but `SearchHit` carries no
+`projectId` - so the label would be filed under the ACTIVE project and the eval, which replays each
+query scoped to one project, would never see that chunk again. The thumbs are therefore hidden
+while the group toggle is on, rather than silently writing labels that cannot be replayed. The
+proper fix is a `projectId` on `SearchHit`, which touches all four repositories and was out of
+scope here.
+
+Related and accepted: a label collected while document scope chips were active is replayed
+*unscoped within its project*. That is intentional - the label rates the chunk against the
+question, and the eval measures the backend rather than reproducing one user's filter.
+
+### Verification performed
+
+- Full default suite: **145 tests, 0 failures, 3 skipped** (the 3 pre-existing manual DJL tests).
+- Live smoke against the running app on :8085 - upsert flips the rating in place (one row, id
+  unchanged), bad rating / unknown project / out-of-range limit all return 400, DELETE clears, and
+  a second GET returns `[]`.
+- `FeedbackPrecisionEvalTest` was exercised end to end by writing 6 synthetic labels through the
+  API against project 5, running the eval, then deleting them again. It produced the full table, so
+  the reader works - but those numbers were self-fulfilling by construction (rank 1 labelled up,
+  rank 4 labelled down) and were NOT recorded anywhere as a finding. With the labels gone the test
+  skips, which is the correct behaviour on a clean install.
+- The UI was verified by syntax check and by confirming the served `app.js` / `style.css` carry the
+  new code. The thumbs were not clicked in a real browser - that is the natural first step next
+  session, and it is also what produces the first honest numbers.
+
+### Not built
+
+No `Option B` score blending, no aggregate stats endpoint, no UI for browsing collected labels
+(`GET /feedback` returns JSON and that is enough for now). The eval has no numbers yet - it needs
+real clicks against the `docmaster` corpus, which is a human step, not a code step.

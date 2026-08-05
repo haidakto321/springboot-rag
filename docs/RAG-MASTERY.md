@@ -50,6 +50,7 @@ where this repo already is.
 | Streaming answers with citations | done | `POST /chat/stream` NDJSON |
 | Retrieval eval (recall@5, MRR, hit@1) | done, self-corpus only | `RetrievalEvalTest` |
 | Answer eval (LLM-as-judge faithfulness) | done | `FaithfulnessEvalTest` |
+| Human relevance labels on chunks, replayed offline | done, awaiting clicks | `POST /feedback`, `FeedbackPrecisionEvalTest` |
 | Real corpus (428 docs / 7,536 chunks) | imported | project 5 "docmaster" |
 
 That is roughly the top 20% of hobby RAG. Everything below is missing.
@@ -171,10 +172,14 @@ matter:
 **Drill C - make it a gate.** Record today's numbers as a baseline and assert against it with a
 tolerance. Any retrieval change that drops the baseline must justify itself or be reverted.
 
-**Drill D - human labels.** Build the planned per-chunk feedback (ROADMAP "Option A"): today
-thumbs live only in `static/app.js` localStorage. Add `POST /feedback` -> `chunk_feedback`
-table storing `{query, projectId, docId, chunkIndex, rating, ts}`, then compute precision@k
-against those human labels. The 11-question golden set already gave a first answer to "does
+**Drill D - human labels. DONE (2026-08-05).** `POST /feedback` upserts one label per
+`(project, doc, chunk, query)` into `chunk_feedback`, thumbs sit on every search row and every
+answer citation chip, and `FeedbackPrecisionEvalTest` (tag `eval-feedback`) replays the labelled
+queries through all six backends and reports P@5 / P@10 / MRR-of-first-👍 with judged **coverage**
+printed beside them. Precision is computed over judged hits only - with sparse labels, treating
+every unlabelled hit as irrelevant would measure clicking, not retrieval. It stays a report rather
+than a gate, because the label set grows every time someone votes. Design notes: `LEARNINGS.md`
+section 15. The original plan was as below. The 11-question golden set already gave a first answer to "does
 `DjlReranker` actually help on **this** corpus, at the latency it costs?" - no, it lowered MRR
 (`LEARNINGS.md` section 14) - but 11 questions is too thin to act on, which is exactly why human
 labels at scale matter. A fixed cross-encoder never learns from clicks by
@@ -375,8 +380,11 @@ In order. Each is small, each unlocks the next.
    golden set against the live `docmaster` project and prints recall@5/MRR/hit@1 plus a
    graph-vs-hybrid diff (`LEARNINGS.md` §11, §14). **Drill C followed on 2026-08-05**: the report
    became a regression gate with a committed baseline, so §9 row 3 is now 2.
-2. **Build `POST /feedback` + per-chunk thumbs** (§3 drill D, already specced in `ROADMAP.md`).
-   Produces human labels, which answer whether the reranker earns its latency on this corpus.
+2. **Build `POST /feedback` + per-chunk thumbs** (§3 drill D, already specced in `ROADMAP.md`) -
+   **DONE (2026-08-05).** Labels are collected per `(query, doc, chunk)` and replayed offline by
+   `FeedbackPrecisionEvalTest`. The machinery now exists; the *answer* to "does the reranker earn
+   its latency on this corpus" arrives only once enough thumbs have been clicked - the eval skips
+   below 10 labels on purpose rather than printing confident noise.
 3. **Add principal-based filtering and injection hardening** (§1 and §5). Two fake groups and
    one poisoned page are enough to learn it properly. This is the gap between a sandbox and
    something an organisation could deploy.
