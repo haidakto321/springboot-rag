@@ -17,9 +17,12 @@ import org.springframework.test.context.TestPropertySource;
 
 import java.util.ArrayList;
 import java.util.Arrays;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Locale;
+import java.util.Map;
 import java.util.Optional;
+import java.util.stream.Collectors;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
@@ -49,6 +52,14 @@ class WikiRetrievalEvalTest {
     static final int TOP_K = 10;
     static final List<String> BACKENDS =
             List.of("fts", "pgvector", "qdrant", "hybrid", "rerank", "graph");
+
+    /**
+     * A floor, not a pin. With 11 questions recall@5 and hit@1 move in steps of 1/11 = 0.091, so
+     * this tolerance makes those two exact-or-better and in practice only tunes MRR: a question
+     * slipping rank 1 to rank 2 costs 0.045 and fails, a slip from rank 9 to 10 costs 0.001 and
+     * passes.
+     */
+    static final double TOLERANCE = 0.02;
 
     @Autowired SearchService searchService;
     @Autowired ProjectRepository projects;
@@ -88,6 +99,29 @@ class WikiRetrievalEvalTest {
                 assertThat(Arrays.stream(run.ranks()).anyMatch(r -> r > 0))
                         .as("backend '%s' found no golden doc for any question", run.backend())
                         .isTrue());
+
+        String variant = variantOf(reranker);
+        EvalBaseline actual = buildBaseline(project, golden, runs, variant);
+
+        if (Boolean.getBoolean("eval.baseline.update")) {
+            updateBaseline(actual);
+            return;
+        }
+
+        EvalBaseline expected = EvalBaselineStore.load(variant);
+        BaselineComparison.newQuestions(expected, actual).forEach(q ->
+                System.out.printf("notice: golden question is new and therefore not gated: %s%n", q));
+
+        List<BaselineComparison.Violation> violations =
+                BaselineComparison.compare(expected, actual, TOLERANCE);
+        assertThat(violations)
+                .withFailMessage(() -> String.format(Locale.ROOT,
+                        "retrieval regression against the baseline (variant '%s', tolerance %.3f):%n%s",
+                        variant, TOLERANCE,
+                        violations.stream()
+                                .map(v -> "  [" + v.backend() + "] " + v.detail())
+                                .collect(Collectors.joining("\n"))))
+                .isEmpty();
     }
 
     /** One backend's full sweep: hits per question, plus the rank of the expected doc. */
@@ -133,14 +167,9 @@ class WikiRetrievalEvalTest {
     private static void printAggregate(List<BackendRun> runs, int questionCount) {
         System.out.printf("%n%-10s %10s %10s %10s%n", "backend", "recall@5", "MRR", "hit@1");
         for (BackendRun run : runs) {
-            double recall5 = 0, mrr = 0, hit1 = 0;
-            for (int rank : run.ranks()) {
-                if (rank >= 1 && rank <= 5) recall5++;
-                if (rank >= 1) mrr += 1.0 / rank;
-                if (rank == 1) hit1++;
-            }
+            BackendMetrics m = BackendMetrics.of(run.ranks(), questionCount);
             System.out.printf(Locale.ROOT, "%-10s %10.3f %10.3f %10.3f%n",
-                    run.backend(), recall5 / questionCount, mrr / questionCount, hit1 / questionCount);
+                    run.backend(), m.recall5(), m.mrr(), m.hit1());
         }
     }
 
@@ -209,6 +238,51 @@ class WikiRetrievalEvalTest {
             return s.substring(0, Math.max(0, Math.min(max, s.length())));
         }
         return s.length() <= max ? s : s.substring(0, max - 3) + "...";
+    }
+
+    /**
+     * Baseline section name, derived from the ACTIVE bean rather than from -Deval.rerank. Deriving
+     * it from the flag would let app.rerank.provider=djl in application.yml write djl numbers into
+     * the identity section.
+     */
+    static String variantOf(Reranker active) {
+        String name = active.getClass().getSimpleName();
+        return switch (name) {
+            case "IdentityReranker" -> "identity";
+            case "DjlReranker" -> "djl";
+            default -> throw new IllegalStateException("unknown reranker implementation '" + name
+                    + "' - give it a baseline variant name in variantOf");
+        };
+    }
+
+    /** Turns this run into the same shape the committed baseline uses. */
+    private static EvalBaseline buildBaseline(ProjectSummary project, List<GoldenEntry> golden,
+                                              List<BackendRun> runs, String variant) {
+        CorpusFingerprint corpus = new CorpusFingerprint(
+                project.id(), project.name(), project.docCount(), project.chunkCount());
+
+        Map<String, BackendMetrics> metrics = new LinkedHashMap<>();
+        Map<String, List<String>> found = new LinkedHashMap<>();
+        for (BackendRun run : runs) {
+            metrics.put(run.backend(), BackendMetrics.of(run.ranks(), golden.size()));
+            List<String> hits = new ArrayList<>();
+            for (int i = 0; i < golden.size(); i++) {
+                if (run.ranks()[i] > 0) {
+                    hits.add(golden.get(i).question());
+                }
+            }
+            found.put(run.backend(), hits);
+        }
+        return new EvalBaseline(corpus, variant,
+                golden.stream().map(GoldenEntry::question).toList(), metrics, found);
+    }
+
+    /** Regenerates the baseline instead of asserting, when -Deval.baseline.update=true is set. */
+    private static void updateBaseline(EvalBaseline actual) {
+        EvalBaselineStore.write(actual);
+        System.out.printf("%nbaseline updated for variant '%s' -> %s%n"
+                        + "assertions were SKIPPED for this run; review the diff before committing%n",
+                actual.variant(), EvalBaselineStore.SOURCE);
     }
 
     /**
