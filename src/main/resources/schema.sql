@@ -125,6 +125,17 @@ CREATE INDEX IF NOT EXISTS idx_chunk_entity_entity ON chunk_entity (entity_id);
 CREATE INDEX IF NOT EXISTS idx_entity_edge_src ON entity_edge (project_id, src_entity);
 CREATE INDEX IF NOT EXISTS idx_entity_name ON entity (project_id, name_norm);
 
+-- ---- Access labels (RAG-MASTERY section 1) ----
+-- Stamped at ingest, filtered INSIDE every retrieval query. NULL means "written before access
+-- control existed"; the one-time backfill below hands those to the 'public' group. After that,
+-- a chunk with an empty array is readable by NOBODY - the array overlap operator (&&) is false
+-- for both NULL and '{}', so the default is deny, not allow.
+ALTER TABLE chunks ADD COLUMN IF NOT EXISTS allowed_groups TEXT[];
+
+UPDATE chunks SET allowed_groups = ARRAY['public'] WHERE allowed_groups IS NULL;
+
+CREATE INDEX IF NOT EXISTS idx_chunks_allowed_groups ON chunks USING gin (allowed_groups);
+
 -- ---- Per-chunk relevance feedback (eval only - never feeds live ranking) ----
 -- Keyed by (doc_id, chunk_index), NOT by chunks.id: re-ingesting a document deletes and
 -- reinserts its rows, so a chunk id is not stable across imports but the pair is.

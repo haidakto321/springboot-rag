@@ -2,6 +2,7 @@ package com.example.springbootrag.integration;
 
 import com.example.springbootrag.model.SearchHit;
 import com.example.springbootrag.repository.PgVectorRepository;
+import com.example.springbootrag.security.TestContexts;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
@@ -38,9 +39,10 @@ class UpdatedAtIntegrationTest {
         long p = jdbc.queryForObject("SELECT id FROM projects ORDER BY id LIMIT 1", Long.class);
         Instant when = Instant.parse("2026-06-01T00:00:00Z");
         float[] vec = new float[768];
-        repo.insert(p, "doc-recency", 0, "hello world", "doc-recency.md", null, vec, when);
+        repo.insert(p, "doc-recency", 0, "hello world", "doc-recency.md", null, vec, when,
+                TestContexts.publicLabel());
 
-        List<SearchHit> hits = repo.search(vec, 5, List.of(p), List.of("doc-recency"));
+        List<SearchHit> hits = repo.search(TestContexts.PUBLIC, vec, 5, List.of(p), List.of("doc-recency"));
         assertThat(hits).isNotEmpty();
         assertThat(hits.get(0).updatedAt()).isEqualTo(when);
     }

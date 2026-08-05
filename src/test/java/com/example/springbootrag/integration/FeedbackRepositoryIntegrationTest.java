@@ -4,6 +4,7 @@ import com.example.springbootrag.embedding.EmbeddingProvider;
 import com.example.springbootrag.model.FeedbackLabel;
 import com.example.springbootrag.repository.FeedbackRepository;
 import com.example.springbootrag.repository.ProjectRepository;
+import com.example.springbootrag.security.TestContexts;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -77,6 +78,21 @@ class FeedbackRepositoryIntegrationTest {
         jdbc.update("DELETE FROM chunk_feedback");
         jdbc.update("DELETE FROM projects WHERE name <> 'Default'");
         projectId = projects.create("Labels", null);
+        // list() joins chunks to hide labels on documents the caller cannot read, so the labelled
+        // chunks have to exist. Access label 'public' matches TestContexts.PUBLIC.
+        chunk("runbook", 3);
+        chunk("runbook", 4);
+        chunk("doc", 0);
+        chunk("doc", 1);
+        chunk("doc", 2);
+    }
+
+    /** Minimal readable chunk row - the embedding value is irrelevant here. */
+    private void chunk(String docId, int index) {
+        String embedding = "[" + "0,".repeat(767) + "0]";
+        jdbc.update("INSERT INTO chunks (project_id, doc_id, chunk_index, content, embedding, allowed_groups) "
+                + "VALUES (?,?,?,?,?::vector, ARRAY['public'])",
+                projectId, docId, index, "body of " + docId + " " + index, embedding);
     }
 
     @Test
@@ -84,7 +100,7 @@ class FeedbackRepositoryIntegrationTest {
         repo.upsert(projectId, "how to deploy", "runbook", 3, "up");
         repo.upsert(projectId, "how to deploy", "runbook", 3, "down");
 
-        List<FeedbackLabel> labels = repo.list(projectId, null, 100);
+        List<FeedbackLabel> labels = repo.list(TestContexts.PUBLIC, projectId, null, 100);
         assertThat(labels).hasSize(1);
         assertThat(labels.getFirst().rating()).isEqualTo("down");
         assertThat(labels.getFirst().relevant()).isFalse();
@@ -95,8 +111,8 @@ class FeedbackRepositoryIntegrationTest {
         repo.upsert(projectId, "how to deploy", "runbook", 3, "up");
         repo.upsert(projectId, "rollback steps", "runbook", 3, "down");
 
-        assertThat(repo.list(projectId, null, 100)).hasSize(2);
-        assertThat(repo.list(projectId, "rollback steps", 100))
+        assertThat(repo.list(TestContexts.PUBLIC, projectId, null, 100)).hasSize(2);
+        assertThat(repo.list(TestContexts.PUBLIC, projectId, "rollback steps", 100))
                 .singleElement()
                 .satisfies(l -> assertThat(l.rating()).isEqualTo("down"));
     }
@@ -108,7 +124,7 @@ class FeedbackRepositoryIntegrationTest {
 
         assertThat(repo.clear(projectId, "how to deploy", "runbook", 3)).isEqualTo(1);
         assertThat(repo.clear(projectId, "how to deploy", "runbook", 3)).isZero();
-        assertThat(repo.list(projectId, null, 100))
+        assertThat(repo.list(TestContexts.PUBLIC, projectId, null, 100))
                 .singleElement()
                 .satisfies(l -> assertThat(l.chunkIndex()).isEqualTo(4));
     }
@@ -119,7 +135,7 @@ class FeedbackRepositoryIntegrationTest {
         repo.upsert(projectId, "q2", "doc", 1, "up");
         repo.upsert(projectId, "q3", "doc", 2, "down");
 
-        List<FeedbackLabel> page = repo.list(projectId, null, 2);
+        List<FeedbackLabel> page = repo.list(TestContexts.PUBLIC, projectId, null, 2);
         assertThat(page).hasSize(2);
         assertThat(page.stream().map(FeedbackLabel::query)).containsExactly("q3", "q2");
         assertThat(repo.count(projectId)).isEqualTo(3);
@@ -128,10 +144,13 @@ class FeedbackRepositoryIntegrationTest {
     @Test
     void labelsOfOtherProjectsAreNotReturned() {
         long other = projects.create("Other", null);
+        String embedding = "[" + "0,".repeat(767) + "0]";
+        jdbc.update("INSERT INTO chunks (project_id, doc_id, chunk_index, content, embedding, allowed_groups) "
+                + "VALUES (?,?,?,?,?::vector, ARRAY['public'])", other, "doc", 0, "other body", embedding);
         repo.upsert(projectId, "q", "doc", 0, "up");
         repo.upsert(other, "q", "doc", 0, "down");
 
-        assertThat(repo.list(projectId, null, 100))
+        assertThat(repo.list(TestContexts.PUBLIC, projectId, null, 100))
                 .singleElement()
                 .satisfies(l -> assertThat(l.rating()).isEqualTo("up"));
     }
@@ -142,6 +161,20 @@ class FeedbackRepositoryIntegrationTest {
         projects.delete(projectId);
 
         assertThat(repo.count(null)).isZero();
+    }
+
+    @Test
+    void aLabelOnARestrictedChunkIsHiddenFromOtherGroups() {
+        String embedding = "[" + "0,".repeat(767) + "0]";
+        jdbc.update("INSERT INTO chunks (project_id, doc_id, chunk_index, content, embedding, allowed_groups) "
+                + "VALUES (?,?,?,?,?::vector, ARRAY['hr'])", projectId, "secret", 0, "salary", embedding);
+        repo.upsert(projectId, "pay", "secret", 0, "up");
+
+        assertThat(repo.list(TestContexts.PUBLIC, projectId, null, 100))
+                .as("a label carries a doc id and a query - both leak if the chunk is unreadable")
+                .noneMatch(l -> l.docId().equals("secret"));
+        assertThat(repo.list(TestContexts.of("hr"), projectId, null, 100))
+                .anyMatch(l -> l.docId().equals("secret"));
     }
 
     @Test

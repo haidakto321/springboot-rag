@@ -5,6 +5,7 @@ import com.example.springbootrag.repository.ProjectRepository;
 import com.example.springbootrag.rerank.Reranker;
 import com.example.springbootrag.service.SearchService;
 import com.example.springbootrag.web.dto.ProjectSummary;
+import com.example.springbootrag.security.TestContexts;
 import org.junit.jupiter.api.Assumptions;
 import org.junit.jupiter.api.Tag;
 import org.junit.jupiter.api.Test;
@@ -135,7 +136,7 @@ class WikiRetrievalEvalTest {
             int[] ranks = new int[golden.size()];
             for (int i = 0; i < golden.size(); i++) {
                 GoldenEntry entry = golden.get(i);
-                List<SearchHit> result = searchService.search(
+                List<SearchHit> result = searchService.search(TestContexts.PUBLIC,
                         backend, entry.question(), TOP_K, List.of(projectId), List.of());
                 hits.add(result);
                 ranks[i] = rankOfExpected(result, entry);

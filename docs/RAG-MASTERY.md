@@ -51,6 +51,7 @@ where this repo already is.
 | Retrieval eval (recall@5, MRR, hit@1) | done, self-corpus only | `RetrievalEvalTest` |
 | Answer eval (LLM-as-judge faithfulness) | done | `FaithfulnessEvalTest` |
 | Human relevance labels on chunks, replayed offline | done, awaiting clicks | `POST /feedback`, `FeedbackPrecisionEvalTest` |
+| Permission-aware retrieval (identity -> access labels) | done | `SearchContext`, `chunks.allowed_groups`, `SecurityConfig` |
 | Real corpus (428 docs / 7,536 chunks) | imported | project 5 "docmaster" |
 
 That is roughly the top 20% of hobby RAG. Everything below is missing.
@@ -66,10 +67,16 @@ That is roughly the top 20% of hobby RAG. Everything below is missing.
 Once RAG can read the whole corpus, one question from the wrong person is a data breach with
 a friendly chat UI in front of it. Companies cancel RAG projects over this, not over recall@5.
 
-**Current state here.** There is no authentication at all - `pom.xml` has no
-`spring-boot-starter-security`. `projectId` and `docIds` are **UI scoping, supplied by the
-browser**, so they are convenience filters, not a security boundary. That posture is fine for a
-single-user sandbox and must not be copied into anything real.
+**Current state here. BUILT 2026-08-05.** `spring-boot-starter-security` provides HTTP Basic over
+two in-memory users (`alice` in `hr`, `bob` in `eng`, both in `public`). Every chunk carries
+`allowed_groups`, stamped at ingest and mirrored into the Qdrant payload. `SearchContext`
+(principal + groups) is the first argument of every retrieval method and is built ONLY from the
+authenticated principal. `projectId` and `docIds` are still browser-supplied, and still only
+narrow. Details below; design notes in `LEARNINGS.md` section 16.
+
+**What it is not:** plain-text passwords, a static user list in `application.yml`, no audit trail,
+no group management beyond editing the config. The lesson being learned here is retrieval-time
+authorisation, not identity management - swap this block for a real IdP before copying any of it.
 
 **Concept.**
 - Stamp access labels onto each chunk **at ingest time** (inherited from the source document).
@@ -78,17 +85,30 @@ single-user sandbox and must not be copied into anything real.
 - Filter **before or inside** the vector search, not after. Post-filtering top-k silently returns
   fewer results, and worse, tempts you to over-fetch and leak in a debug view.
 
-**Drill.**
-1. Add `allowed_groups TEXT[]` to the chunk table and to the Qdrant payload; populate at ingest.
-2. Introduce a `SearchContext` (principal + groups) as the first argument of
-   `SearchService.search(...)`; keep `docIds` as a narrowing-only filter.
-3. Seed two fake users in different groups and one restricted document.
-4. Now try to break it, and write down what you find:
-   - Can a crafted `docIds` / `projectIds` parameter widen access?
-   - Does the **reranker** see candidates the user cannot read? (It over-fetches
-     `app.rerank.candidates` = 50 before trimming - filter must be applied *before* that.)
-   - Do citation chips, the chunk-view endpoint, or the "no results" hint leak restricted
-     document **titles**? Leaking a title is still leaking.
+**Drill - DONE 2026-08-05.** Steps 1-3 as written: `allowed_groups TEXT[]` (GIN indexed) plus the
+Qdrant payload key, `SearchContext` threaded through every backend, two fake users, one restricted
+document. Step 4, what breaking it actually found (`AccessControlIntegrationTest`, 10 cases):
+
+- **Crafted `docIds` / `projectIds` cannot widen.** They are separate SQL predicates ANDed with
+  the group predicate, so naming a restricted document by id returns nothing. Proven per backend,
+  not once - six backends means six places to forget.
+- **The reranker never sees unreadable candidates**, because the filter lives inside the
+  repository query rather than after it. The over-fetch of `app.rerank.candidates` = 50 is where a
+  post-filter design would have leaked into the cross-encoder and into any debug view of it.
+- **Graph expansion was the interesting one.** `doc_edge` carries no access label, so a link from
+  a readable page to a restricted one is a natural leak path: the seed is legal, the expansion is
+  not. It holds only because the neighbour's *chunks* are loaded through the filtered query. The
+  edge itself is still readable - the graph shape leaks, the content does not.
+- **Titles leak like content**, so `listDocuments`, the chunk view, and now the feedback label dump
+  all filter too. A stored label carries a document id and someone's query text.
+- **`POST /feedback` was an existence oracle** before the visibility check: 200 versus 400 told the
+  caller whether a chunk existed under a document they could not read.
+- **Writing needed its own rule.** Read filtering says nothing about who may *stamp* a label, so
+  `bob` could have marked a document `hr` - planting content into a group he cannot read.
+  `CurrentUser.requireOwnGroups` now rejects that with 403.
+- **Empty groups must fail closed.** SQL array overlap against `ARRAY[]::text[]` is false, which is
+  the right default; Qdrant's empty should-clause matches EVERYTHING, so that case is short-circuited
+  explicitly. Two stores, opposite empty-set semantics - the kind of asymmetry that ships a breach.
 
 > Lesson: retrieval-time filtering is a security control. Anything derived from the browser is
 > a suggestion, not a permission.
@@ -332,7 +352,7 @@ the point of the exercise.
 
 | # | Capability | Today (2026-07-28) |
 |---|---|---|
-| 1 | Retrieval filtered by authenticated identity | 0 |
+| 1 | Retrieval filtered by authenticated identity | 2 (was 0) |
 | 2 | Ingestion failure modes catalogued for this corpus | 1 |
 | 3 | Eval running on the realistic corpus, as a gate | 2 |
 | 4 | Query routing and transforms beyond condense | 1 |
@@ -388,6 +408,11 @@ In order. Each is small, each unlocks the next.
 3. **Add principal-based filtering and injection hardening** (§1 and §5). Two fake groups and
    one poisoned page are enough to learn it properly. This is the gap between a sandbox and
    something an organisation could deploy.
+   - **§1 DONE (2026-08-05):** HTTP Basic, `allowed_groups` per chunk, `SearchContext` threaded
+     through every backend, and `AccessControlIntegrationTest` proving that scope parameters, the
+     reranker over-fetch, graph expansion, listings, citations, and feedback labels all hold the
+     line. Scorecard row 1: 0 -> 2. Findings in `LEARNINGS.md` §16.
+   - **§5 injection hardening: NEXT.** Poisoned page, fenced reference material, cite-or-refuse.
 
 ---
 

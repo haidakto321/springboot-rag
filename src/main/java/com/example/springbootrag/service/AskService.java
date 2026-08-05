@@ -3,6 +3,7 @@ package com.example.springbootrag.service;
 import com.example.springbootrag.chat.ChatProvider;
 import com.example.springbootrag.config.ChatProperties;
 import com.example.springbootrag.model.SearchHit;
+import com.example.springbootrag.security.SearchContext;
 import com.example.springbootrag.web.dto.AskResponse;
 import org.springframework.stereotype.Service;
 
@@ -32,18 +33,22 @@ public class AskService {
         this.projectService = projectService;
     }
 
-    /** Legacy single-question entry point: scopes to the default project. */
-    public AskResponse ask(String question) {
-        return ask(question, List.of(projectService.defaultProjectId()));
+    /** Single-question entry point: scopes to the default project. */
+    public AskResponse ask(SearchContext ctx, String question) {
+        return ask(ctx, question, List.of(projectService.defaultProjectId()));
     }
 
-    /** Ask scoped to a specific set of projects (empty = all projects). */
-    public AskResponse ask(String question, List<Long> projectIds) {
+    /**
+     * Ask scoped to a specific set of projects (empty = every project the caller may read).
+     * Retrieval runs under the caller's access labels, so a chunk they cannot read can never reach
+     * the prompt - and therefore can never be quoted back to them in an answer.
+     */
+    public AskResponse ask(SearchContext ctx, String question, List<Long> projectIds) {
         if (question == null || question.isBlank()) {
             throw new IllegalArgumentException("question is required");
         }
         // "rerank" = hybrid + reranker; with no reranker configured it degrades to plain hybrid.
-        List<SearchHit> hits = searchService.search("rerank", question, props.getContextChunks(),
+        List<SearchHit> hits = searchService.search(ctx, "rerank", question, props.getContextChunks(),
                 projectIds, List.of());
         if (hits.isEmpty()) {
             return new AskResponse("No relevant chunks found in the knowledge base.", List.of());

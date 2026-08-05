@@ -4,6 +4,7 @@ import com.example.springbootrag.chat.ChatProvider;
 import com.example.springbootrag.service.AskService;
 import com.example.springbootrag.service.IngestService;
 import com.example.springbootrag.web.dto.AskResponse;
+import com.example.springbootrag.security.TestContexts;
 import org.junit.jupiter.api.Tag;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -71,7 +72,7 @@ class FaithfulnessEvalTest {
 
         int yes = 0, partial = 0, no = 0, unparsed = 0;
         for (GoldenEntry e : golden) {
-            AskResponse resp = askService.ask(e.question());
+            AskResponse resp = askService.ask(TestContexts.PUBLIC, e.question());
             StringBuilder ctx = new StringBuilder();
             resp.sources().forEach(s -> ctx.append('[').append(s.index()).append("] ")
                     .append(s.content()).append("\n\n"));

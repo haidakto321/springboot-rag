@@ -630,6 +630,15 @@ body {
 .msg-action.on { color: var(--ac); border-color: var(--ac); }
 .chat-msg.user .msg-actions { display: none; }
 
+/* ---------- Signed-in identity + upload access label ---------- */
+.who-am-i {
+  margin-top: 10px; padding: 12px 14px; border: 1px solid var(--border);
+  border-radius: 10px; background: var(--surface2);
+}
+.who-name { font-size: 13px; font-weight: 800; margin-top: 4px; }
+.who-groups { font-size: 11.5px; font-weight: 700; color: var(--muted); margin-top: 2px; }
+.upload-groups { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; margin-top: 4px; }
+
 /* ---------- Per-chunk relevance thumbs (eval labels) ---------- */
 .vote { display: inline-flex; gap: 2px; align-items: center; }
 .vote-btn {

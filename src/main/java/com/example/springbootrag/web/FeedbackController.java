@@ -2,6 +2,8 @@ package com.example.springbootrag.web;
 
 import com.example.springbootrag.model.FeedbackLabel;
 import com.example.springbootrag.repository.FeedbackRepository;
+import com.example.springbootrag.repository.PgVectorRepository;
+import com.example.springbootrag.security.CurrentUser;
 import com.example.springbootrag.service.ProjectService;
 import com.example.springbootrag.web.dto.FeedbackRequest;
 import org.springframework.web.bind.annotation.DeleteMapping;
@@ -33,10 +35,15 @@ public class FeedbackController {
 
     private final FeedbackRepository repo;
     private final ProjectService projects;
+    private final PgVectorRepository chunks;
+    private final CurrentUser currentUser;
 
-    public FeedbackController(FeedbackRepository repo, ProjectService projects) {
+    public FeedbackController(FeedbackRepository repo, ProjectService projects,
+                              PgVectorRepository chunks, CurrentUser currentUser) {
         this.repo = repo;
         this.projects = projects;
+        this.chunks = chunks;
+        this.currentUser = currentUser;
     }
 
     @PostMapping("/feedback")
@@ -45,6 +52,7 @@ public class FeedbackController {
         long projectId = requireProject(req.projectId());
         String docId = requireDocId(req.docId());
         int chunkIndex = requireChunkIndex(req.chunkIndex());
+        requireVisible(projectId, docId, chunkIndex);
         repo.upsert(projectId, query, docId, chunkIndex, requireRating(req.rating()));
     }
 
@@ -54,8 +62,11 @@ public class FeedbackController {
                       @RequestParam Long projectId,
                       @RequestParam String docId,
                       @RequestParam Integer chunkIndex) {
-        repo.clear(requireProject(projectId), requireQuery(query),
-                requireDocId(docId), requireChunkIndex(chunkIndex));
+        long project = requireProject(projectId);
+        String doc = requireDocId(docId);
+        int index = requireChunkIndex(chunkIndex);
+        requireVisible(project, doc, index);
+        repo.clear(project, requireQuery(query), doc, index);
     }
 
     /** Label dump for the UI (to restore thumb state) and for ad-hoc analysis. Newest first. */
@@ -67,7 +78,17 @@ public class FeedbackController {
             throw new IllegalArgumentException("limit must be between 1 and " + MAX_LIMIT);
         }
         String q = (query == null || query.isBlank()) ? null : query.strip();
-        return repo.list(projectId, q, limit);
+        return repo.list(currentUser.context(), projectId, q, limit);
+    }
+
+    /**
+     * Labelling a chunk you cannot read would be an existence oracle: the 200/400 alone tells the
+     * caller whether a document with that id exists. Same answer for "not visible" and "not there".
+     */
+    private void requireVisible(long projectId, String docId, int chunkIndex) {
+        if (!chunks.isVisible(currentUser.context(), projectId, docId, chunkIndex)) {
+            throw new IllegalArgumentException("chunk not found: " + docId + "#" + chunkIndex);
+        }
     }
 
     private static String requireQuery(String query) {

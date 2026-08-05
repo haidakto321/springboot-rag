@@ -14,6 +14,7 @@ import org.springframework.context.annotation.Primary;
 import org.springframework.mock.web.MockMultipartFile;
 import org.springframework.test.context.DynamicPropertyRegistry;
 import org.springframework.test.context.DynamicPropertySource;
+import org.springframework.security.test.context.support.WithMockUser;
 import org.springframework.test.web.servlet.MockMvc;
 import org.testcontainers.containers.PostgreSQLContainer;
 import org.testcontainers.junit.jupiter.Container;
@@ -31,6 +32,7 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 @SpringBootTest(properties = "app.graph.edges=structural")
 @AutoConfigureMockMvc
 @Testcontainers
+@WithMockUser(username = "alice", authorities = {"GROUP_public"})   // real filter chain: an HTTP test needs an identity, and one with a group to read anything
 class DocumentIntegrationTest {
 
     @Container

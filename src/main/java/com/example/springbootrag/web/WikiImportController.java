@@ -1,5 +1,6 @@
 package com.example.springbootrag.web;
 
+import com.example.springbootrag.security.CurrentUser;
 import com.example.springbootrag.service.ProjectService;
 import com.example.springbootrag.tool.WikiImporter;
 import com.example.springbootrag.web.dto.WikiImportRequest;
@@ -35,11 +36,14 @@ public class WikiImportController {
     private final WikiImporter wikiImporter;
     private final ProjectService projectService;
     private final ObjectMapper mapper;
+    private final CurrentUser currentUser;
 
-    public WikiImportController(WikiImporter wikiImporter, ProjectService projectService, ObjectMapper mapper) {
+    public WikiImportController(WikiImporter wikiImporter, ProjectService projectService,
+                                ObjectMapper mapper, CurrentUser currentUser) {
         this.wikiImporter = wikiImporter;
         this.projectService = projectService;
         this.mapper = mapper;
+        this.currentUser = currentUser;
     }
 
     @PostMapping(value = "/projects/{projectId}/import-wiki", produces = "application/x-ndjson")
@@ -51,6 +55,7 @@ public class WikiImportController {
         if (req == null || req.path() == null || req.path().isBlank()) {
             throw new IllegalArgumentException("path is required");
         }
+        currentUser.requireOwnGroups(req.groups());
         Path wikiRoot = Path.of(req.path().strip());
         if (!Files.isDirectory(wikiRoot)) {
             throw new IllegalArgumentException("path does not exist or is not a directory");
@@ -78,7 +83,7 @@ public class WikiImportController {
                         writeFrame(out, Map.of("type", "skip", "done", done, "total", count, "doc", doc,
                                 "message", e.getMessage() == null ? e.getClass().getSimpleName() : e.getMessage()));
                     }
-                });
+                }, req.groups());
                 if (!started[0]) {
                     // no pages found: still emit a start frame so the client sees the total.
                     writeFrame(out, Map.of("type", "start", "total", total[0]));

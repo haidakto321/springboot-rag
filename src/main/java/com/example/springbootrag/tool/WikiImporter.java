@@ -35,9 +35,14 @@ public class WikiImporter {
         default void onError(int done, int total, String docId, Exception e) {}
     }
 
-    /** Backward-compatible overload with no progress reporting. */
+    /** Backward-compatible overload: no progress reporting, default access label. */
     public int importDir(long projectId, Path wikiRoot) throws Exception {
         return importDir(projectId, wikiRoot, (done, total, docId) -> {});
+    }
+
+    /** Overload without an access label: every page gets the configured default group. */
+    public int importDir(long projectId, Path wikiRoot, ProgressListener listener) throws Exception {
+        return importDir(projectId, wikiRoot, listener, null);
     }
 
     /**
@@ -46,7 +51,8 @@ public class WikiImporter {
      * from the parent folder's page to each child page. Returns the number of pages imported.
      * Invokes {@code listener} after each page with the running done/total counts and the doc id.
      */
-    public int importDir(long projectId, Path wikiRoot, ProgressListener listener) throws Exception {
+    public int importDir(long projectId, Path wikiRoot, ProgressListener listener,
+                         List<String> allowedGroups) throws Exception {
         int count = 0;
         try (Stream<Path> paths = Files.walk(wikiRoot)) {
             List<Path> pages = paths
@@ -63,7 +69,8 @@ public class WikiImporter {
                 try {
                     String text = Files.readString(page, StandardCharsets.UTF_8);
                     Instant updated = gitDate(wikiRoot, wikiRoot.relativize(page).toString());
-                    ingest.ingestMarkdown(projectId, docId, page.getFileName().toString(), text, updated);
+                    ingest.ingestMarkdown(projectId, docId, page.getFileName().toString(), text,
+                            updated, allowedGroups);
                     // hierarchy edge: parent folder page -> this page
                     Path parent = page.getParent();
                     if (parent != null && !parent.equals(wikiRoot)) {

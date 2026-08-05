@@ -13,6 +13,7 @@ import com.example.springbootrag.repository.EntityRepository;
 import com.example.springbootrag.repository.PgFtsRepository;
 import com.example.springbootrag.repository.PgVectorRepository;
 import com.example.springbootrag.repository.QdrantRepository;
+import com.example.springbootrag.security.SearchContext;
 import org.springframework.stereotype.Service;
 
 import java.util.LinkedHashMap;
@@ -59,41 +60,45 @@ public class SearchService {
 
     private static final int MAX_TOP_K = 100;
 
-    // ---- Legacy overloads (no project filter) ----------------------------------------
+    // ---- Convenience overloads (still identity-bound) --------------------------------
 
-    public List<SearchHit> search(String type, String query, int topK) {
-        return search(type, query, topK, List.of(), List.of());
+    public List<SearchHit> search(SearchContext ctx, String type, String query, int topK) {
+        return search(ctx, type, query, topK, List.of(), List.of());
     }
 
-    /** Scopes by docIds only; empty = all documents across all projects. */
-    public List<SearchHit> search(String type, String query, int topK, List<String> docIds) {
-        return search(type, query, topK, List.of(), docIds);
+    /** Scopes by docIds only; empty = every document the caller may read. */
+    public List<SearchHit> search(SearchContext ctx, String type, String query, int topK, List<String> docIds) {
+        return search(ctx, type, query, topK, List.of(), docIds);
     }
 
-    public Map<String, BackendResult> compare(String query, int topK) {
-        return compare(query, topK, List.of(), List.of());
+    public Map<String, BackendResult> compare(SearchContext ctx, String query, int topK) {
+        return compare(ctx, query, topK, List.of(), List.of());
     }
 
-    public Map<String, BackendResult> compare(String query, int topK, List<String> docIds) {
-        return compare(query, topK, List.of(), docIds);
+    public Map<String, BackendResult> compare(SearchContext ctx, String query, int topK, List<String> docIds) {
+        return compare(ctx, query, topK, List.of(), docIds);
     }
 
     // ---- Primary project-scoped overloads -------------------------------------------
 
     /**
      * Searches using the given backend type, optionally scoped by projectIds and docIds.
-     * Empty list for either means that filter is absent.
+     * Empty list for either optional filter means that filter is absent.
+     *
+     * <p>{@code ctx} is not one filter among several: projectIds and docIds come from the browser
+     * and can only NARROW the result set, while the access labels in ctx come from the
+     * authenticated principal and always apply. There is deliberately no overload without it.
      */
-    public List<SearchHit> search(String type, String query, int topK,
+    public List<SearchHit> search(SearchContext ctx, String type, String query, int topK,
                                   List<Long> projectIds, List<String> docIds) {
         validateTopK(topK);
         return switch (type) {
-            case "fts" -> fts.search(query, topK, projectIds, docIds);
-            case "pgvector" -> pgVector.search(embeddings.embed(query), topK, projectIds, docIds);
-            case "qdrant" -> qdrantSearch(embeddings.embed(query), topK, projectIds, docIds);
-            case "hybrid" -> hybrid(query, embeddings.embed(query), topK, projectIds, docIds);
-            case "rerank" -> rerank(query, embeddings.embed(query), topK, projectIds, docIds);
-            case "graph" -> graph(query, embeddings.embed(query), topK, projectIds, docIds);
+            case "fts" -> fts.search(ctx, query, topK, projectIds, docIds);
+            case "pgvector" -> pgVector.search(ctx, embeddings.embed(query), topK, projectIds, docIds);
+            case "qdrant" -> qdrantSearch(ctx, embeddings.embed(query), topK, projectIds, docIds);
+            case "hybrid" -> hybrid(ctx, query, embeddings.embed(query), topK, projectIds, docIds);
+            case "rerank" -> rerank(ctx, query, embeddings.embed(query), topK, projectIds, docIds);
+            case "graph" -> graph(ctx, query, embeddings.embed(query), topK, projectIds, docIds);
             default -> throw new IllegalArgumentException("unknown type: " + type);
         };
     }
@@ -102,18 +107,18 @@ public class SearchService {
      * Runs every backend once for the same query and returns timing + results per backend.
      * The query is embedded a SINGLE time and the resulting vector is shared.
      */
-    public Map<String, BackendResult> compare(String query, int topK,
+    public Map<String, BackendResult> compare(SearchContext ctx, String query, int topK,
                                               List<Long> projectIds, List<String> docIds) {
         validateTopK(topK);
         float[] qvec = embeddings.embed(query);
 
         Map<String, BackendResult> out = new LinkedHashMap<>();
-        out.put("fts", timed(() -> fts.search(query, topK, projectIds, docIds)));
-        out.put("pgvector", timed(() -> pgVector.search(qvec, topK, projectIds, docIds)));
-        out.put("qdrant", timed(() -> qdrantSearch(qvec, topK, projectIds, docIds)));
-        out.put("hybrid", timed(() -> hybrid(query, qvec, topK, projectIds, docIds)));
-        out.put("rerank", timed(() -> rerank(query, qvec, topK, projectIds, docIds)));
-        out.put("graph", timed(() -> graph(query, qvec, topK, projectIds, docIds)));
+        out.put("fts", timed(() -> fts.search(ctx, query, topK, projectIds, docIds)));
+        out.put("pgvector", timed(() -> pgVector.search(ctx, qvec, topK, projectIds, docIds)));
+        out.put("qdrant", timed(() -> qdrantSearch(ctx, qvec, topK, projectIds, docIds)));
+        out.put("hybrid", timed(() -> hybrid(ctx, query, qvec, topK, projectIds, docIds)));
+        out.put("rerank", timed(() -> rerank(ctx, query, qvec, topK, projectIds, docIds)));
+        out.put("graph", timed(() -> graph(ctx, query, qvec, topK, projectIds, docIds)));
         return out;
     }
 
@@ -126,22 +131,27 @@ public class SearchService {
         return new BackendResult(hits, ms);
     }
 
-    private List<SearchHit> hybrid(String query, float[] queryEmbedding, int topK,
+    private List<SearchHit> hybrid(SearchContext ctx, String query, float[] queryEmbedding, int topK,
                                    List<Long> projectIds, List<String> docIds) {
-        List<SearchHit> keyword = fts.search(query, topK, projectIds, docIds);
-        List<SearchHit> vector = pgVector.search(queryEmbedding, topK, projectIds, docIds);
+        List<SearchHit> keyword = fts.search(ctx, query, topK, projectIds, docIds);
+        List<SearchHit> vector = pgVector.search(ctx, queryEmbedding, topK, projectIds, docIds);
         return rrf.fuse(List.of(keyword, vector), topK);
     }
 
-    private List<SearchHit> rerank(String query, float[] queryEmbedding, int topK,
+    /**
+     * Over-fetches {@code app.rerank.candidates} before trimming to topK. The access filter is
+     * applied by the repositories INSIDE that over-fetch, so the cross-encoder never scores - and
+     * no debug view can ever print - a chunk the caller may not read.
+     */
+    private List<SearchHit> rerank(SearchContext ctx, String query, float[] queryEmbedding, int topK,
                                    List<Long> projectIds, List<String> docIds) {
-        List<SearchHit> candidates = hybrid(query, queryEmbedding, rerankProps.getCandidates(), projectIds, docIds);
+        List<SearchHit> candidates = hybrid(ctx, query, queryEmbedding, rerankProps.getCandidates(), projectIds, docIds);
         return reranker.rerank(query, candidates, topK);
     }
 
-    private List<SearchHit> graph(String query, float[] queryEmbedding, int topK,
+    private List<SearchHit> graph(SearchContext ctx, String query, float[] queryEmbedding, int topK,
                                   List<Long> projectIds, List<String> docIds) {
-        List<SearchHit> seed = hybrid(query, queryEmbedding, graphProps.getCandidates(), projectIds, docIds);
+        List<SearchHit> seed = hybrid(ctx, query, queryEmbedding, graphProps.getCandidates(), projectIds, docIds);
         if (seed.isEmpty()) {
             return seed;   // fallback: nothing to expand from
         }
@@ -156,7 +166,9 @@ public class SearchService {
             List<String> seedDocs = seed.stream().map(SearchHit::docId).distinct().toList();
             List<String> neighborDocs = docEdges.neighbors(projectId, seedDocs);
             if (!neighborDocs.isEmpty()) {
-                for (SearchHit h : pgVector.chunksByDocIds(projectId, neighborDocs)) {
+                // Graph expansion walks doc_edge, which carries no access label - the label check
+                // happens here, when the neighbour's chunks are loaded.
+                for (SearchHit h : pgVector.chunksByDocIds(ctx, projectId, neighborDocs)) {
                     byId.putIfAbsent(h.id(), h);
                 }
             }
@@ -171,7 +183,7 @@ public class SearchService {
                 List<Long> expanded = new java.util.ArrayList<>(matched);
                 expanded.addAll(entityRepo.neighborEntityIds(projectId, matched));
                 List<Long> chunkIds = entityRepo.chunkIdsForEntities(expanded);
-                for (SearchHit h : pgVector.chunksByIds(chunkIds)) {
+                for (SearchHit h : pgVector.chunksByIds(ctx, chunkIds)) {
                     byId.putIfAbsent(h.id(), h);
                 }
             }
@@ -191,10 +203,10 @@ public class SearchService {
         return ranked;
     }
 
-    private List<SearchHit> qdrantSearch(float[] queryEmbedding, int topK,
+    private List<SearchHit> qdrantSearch(SearchContext ctx, float[] queryEmbedding, int topK,
                                           List<Long> projectIds, List<String> docIds) {
         try {
-            return qdrant.search(queryEmbedding, topK, projectIds, docIds);
+            return qdrant.search(ctx, queryEmbedding, topK, projectIds, docIds);
         } catch (ExecutionException | InterruptedException e) {
             throw new IllegalStateException("Qdrant search failed", e);
         }

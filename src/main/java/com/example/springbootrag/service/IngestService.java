@@ -12,12 +12,14 @@ import com.example.springbootrag.repository.DocEdgeRepository;
 import com.example.springbootrag.repository.EntityRepository;
 import com.example.springbootrag.repository.PgVectorRepository;
 import com.example.springbootrag.repository.QdrantRepository;
+import com.example.springbootrag.security.SecurityProperties;
 import org.springframework.stereotype.Service;
 
 import java.time.Instant;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 import java.util.concurrent.ExecutionException;
 
 @Service
@@ -31,6 +33,7 @@ public class IngestService {
     private final EntityExtractor entityExtractor;
     private final EntityRepository entityRepo;
     private final GraphProperties graphProps;
+    private final SecurityProperties securityProps;
     // Hard ceiling per chunk so an atomic table/code block can never exceed the embedding
     // model's context window (nomic-embed-text runs at ~2048 tokens under Ollama). Dense
     // tables (IDs, numbers, pipes) tokenize near 1 char/token, so 2000 chars stays under
@@ -47,7 +50,8 @@ public class IngestService {
                          DocEdgeRepository docEdges,
                          EntityExtractor entityExtractor,
                          EntityRepository entityRepo,
-                         GraphProperties graphProps) {
+                         GraphProperties graphProps,
+                         SecurityProperties securityProps) {
         this.embeddings = embeddings;
         this.pgVector = pgVector;
         this.qdrant = qdrant;
@@ -56,16 +60,17 @@ public class IngestService {
         this.entityExtractor = entityExtractor;
         this.entityRepo = entityRepo;
         this.graphProps = graphProps;
+        this.securityProps = securityProps;
     }
 
     // ---- Legacy wrappers (resolve default project) ----------------------------------------
 
-    /** Raw-text ingest via the default project. */
+    /** Raw-text ingest via the default project, labelled with the default group. */
     public int ingest(String docId, String text) {
         return ingest(projectService.defaultProjectId(), docId, text);
     }
 
-    /** Markdown ingest via the default project. */
+    /** Markdown ingest via the default project, labelled with the default group. */
     public int ingestMarkdown(String docId, String sourceFile, String markdownText) {
         return ingestMarkdown(projectService.defaultProjectId(), docId, sourceFile, markdownText);
     }
@@ -79,18 +84,29 @@ public class IngestService {
 
     /** Raw-text ingest: word-window chunking, no metadata. */
     public int ingest(long projectId, String docId, String text) {
-        return ingestChunks(projectId, docId, null, wordWindow.chunk(text), null);
+        return ingestChunks(projectId, docId, null, wordWindow.chunk(text), null, null);
     }
 
     /** Markdown file ingest: structure-aware chunking with heading breadcrumbs. */
     public int ingestMarkdown(long projectId, String docId, String sourceFile, String markdownText) {
-        return ingestMarkdown(projectId, docId, sourceFile, markdownText, null);
+        return ingestMarkdown(projectId, docId, sourceFile, markdownText, null, null);
     }
 
     /** Markdown file ingest with an explicit document updated_at (e.g. git commit date). */
     public int ingestMarkdown(long projectId, String docId, String sourceFile,
                               String markdownText, Instant updatedAt) {
-        int stored = ingestChunks(projectId, docId, sourceFile, markdown.chunk(markdownText), updatedAt);
+        return ingestMarkdown(projectId, docId, sourceFile, markdownText, updatedAt, null);
+    }
+
+    /**
+     * Markdown file ingest with an explicit updated_at and access label.
+     * A null or empty {@code allowedGroups} falls back to the configured default group - never to
+     * "no label", which would make the document unreadable by everyone.
+     */
+    public int ingestMarkdown(long projectId, String docId, String sourceFile,
+                              String markdownText, Instant updatedAt, List<String> allowedGroups) {
+        int stored = ingestChunks(projectId, docId, sourceFile, markdown.chunk(markdownText),
+                updatedAt, allowedGroups);
         // Structural edges: one 'link' edge per outbound cross-page reference.
         for (String dst : linkParser.outboundDocIds(markdownText)) {
             docEdges.insertLink(projectId, docId, dst);
@@ -103,26 +119,32 @@ public class IngestService {
      * re-ingesting the same document replaces it instead of accumulating duplicates.
      */
     public int ingestChunks(long projectId, String docId, String sourceFile, List<Chunk> chunks) {
-        return ingestChunks(projectId, docId, sourceFile, chunks, null);
+        return ingestChunks(projectId, docId, sourceFile, chunks, null, null);
     }
 
     /**
      * Upsert-by-project+doc: clear any existing chunks for this project/docId first so
      * re-ingesting the same document replaces it instead of accumulating duplicates.
+     *
+     * <p>Every chunk of a document inherits the same access label, resolved once here. Group names
+     * are validated against the configured directory so a typo is a 400 rather than a document
+     * that silently nobody can read.
      */
-    public int ingestChunks(long projectId, String docId, String sourceFile, List<Chunk> chunks, Instant updatedAt) {
+    public int ingestChunks(long projectId, String docId, String sourceFile, List<Chunk> chunks,
+                            Instant updatedAt, List<String> allowedGroups) {
         if (docId == null || docId.isBlank()) {
             throw new IllegalArgumentException("docId is required");
         }
+        List<String> groups = resolveGroups(allowedGroups);
         chunks = capToBudget(chunks);
         delete(projectId, docId);
         for (Chunk chunk : chunks) {
             float[] vec = embeddings.embed(chunk.text());
             long id = pgVector.insert(projectId, docId, chunk.position(), chunk.text(),
-                    sourceFile, chunk.headingPath(), vec, updatedAt);
+                    sourceFile, chunk.headingPath(), vec, updatedAt, groups);
             try {
                 qdrant.upsert(id, projectId, docId, chunk.position(), chunk.text(),
-                        sourceFile, chunk.headingPath(), vec);
+                        sourceFile, chunk.headingPath(), vec, groups);
             } catch (ExecutionException | InterruptedException e) {
                 throw new IllegalStateException("Qdrant upsert failed", e);
             }
@@ -131,6 +153,31 @@ public class IngestService {
             }
         }
         return chunks.size();
+    }
+
+    /**
+     * Null/empty means "the default group". Unknown names are rejected: an access label pointing
+     * at a group nobody belongs to produces a document that is silently invisible, which is far
+     * harder to notice than an error at upload time.
+     */
+    private List<String> resolveGroups(List<String> requested) {
+        if (requested == null || requested.isEmpty()) {
+            return List.of(securityProps.getDefaultGroup());
+        }
+        Set<String> known = securityProps.knownGroups();
+        List<String> cleaned = new java.util.ArrayList<>();
+        for (String g : requested) {
+            if (g == null || g.isBlank()) continue;
+            String name = g.strip();
+            if (!known.contains(name)) {
+                throw new IllegalArgumentException("unknown group '" + name + "' - known groups: " + known);
+            }
+            if (!cleaned.contains(name)) cleaned.add(name);
+        }
+        if (cleaned.isEmpty()) {
+            return List.of(securityProps.getDefaultGroup());
+        }
+        return cleaned;
     }
 
     public void delete(long projectId, String docId) {

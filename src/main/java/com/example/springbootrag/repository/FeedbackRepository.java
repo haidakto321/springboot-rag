@@ -1,6 +1,7 @@
 package com.example.springbootrag.repository;
 
 import com.example.springbootrag.model.FeedbackLabel;
+import com.example.springbootrag.security.SearchContext;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.jdbc.core.RowMapper;
 import org.springframework.stereotype.Repository;
@@ -51,12 +52,24 @@ public class FeedbackRepository {
             """, projectId, docId, chunkIndex, query);
     }
 
-    /** Newest first. Both filters are optional; a null value drops that condition. */
-    public List<FeedbackLabel> list(Long projectId, String query, int limit) {
+    /**
+     * Newest first, restricted to labels whose chunk the caller may still read. Both other filters
+     * are optional; a null value drops that condition.
+     *
+     * <p>The visibility join matters: a label carries a document id and the query someone typed,
+     * so dumping labels for restricted chunks would leak exactly the titles the access filter is
+     * there to hide. It also self-heals - relabelling a document to a narrower group immediately
+     * hides its old labels from everyone else.
+     */
+    public List<FeedbackLabel> list(SearchContext ctx, Long projectId, String query, int limit) {
         StringBuilder sql = new StringBuilder("""
             SELECT id, project_id, query_text, doc_id, chunk_index, rating, updated_at
-            FROM chunk_feedback WHERE 1 = 1""");
-        List<Object> args = new ArrayList<>();
+            FROM chunk_feedback f WHERE EXISTS (
+                SELECT 1 FROM chunks c
+                WHERE c.project_id = f.project_id AND c.doc_id = f.doc_id
+                  AND c.chunk_index = f.chunk_index AND""");
+        sql.append(DocFilter.groupClause(ctx.groups())).append(")");
+        List<Object> args = new ArrayList<>(ctx.groups());
         if (projectId != null) {
             sql.append(" AND project_id = ?");
             args.add(projectId);
@@ -70,6 +83,7 @@ public class FeedbackRepository {
         return jdbc.query(sql.toString(), MAPPER, args.toArray());
     }
 
+    /** Raw row count, NOT access filtered. Not exposed over HTTP - diagnostics and tests only. */
     public int count(Long projectId) {
         return projectId == null
                 ? jdbc.queryForObject("SELECT count(*) FROM chunk_feedback", Integer.class)

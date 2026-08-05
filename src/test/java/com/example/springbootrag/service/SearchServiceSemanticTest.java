@@ -12,6 +12,8 @@ import com.example.springbootrag.repository.PgFtsRepository;
 import com.example.springbootrag.repository.PgVectorRepository;
 import com.example.springbootrag.repository.QdrantRepository;
 import com.example.springbootrag.rerank.IdentityReranker;
+import com.example.springbootrag.security.SearchContext;
+import com.example.springbootrag.security.TestContexts;
 import org.junit.jupiter.api.Test;
 
 import java.util.List;
@@ -37,8 +39,8 @@ class SearchServiceSemanticTest {
         ChatProvider chat = mock(ChatProvider.class);
 
         // seed hybrid = a chunk in the well-known doc A
-        when(fts.search(anyString(), anyInt(), anyList(), anyList())).thenReturn(List.of(hit(1, "A")));
-        when(vec.search(any(float[].class), anyInt(), anyList(), anyList())).thenReturn(List.of(hit(1, "A")));
+        when(fts.search(any(SearchContext.class), anyString(), anyInt(), anyList(), anyList())).thenReturn(List.of(hit(1, "A")));
+        when(vec.search(any(SearchContext.class), any(float[].class), anyInt(), anyList(), anyList())).thenReturn(List.of(hit(1, "A")));
         when(edges.neighbors(anyLong(), anyList())).thenReturn(List.of());   // no structural link (orphan)
 
         // query mentions PaymentsService -> matches entity 10 -> chunk 99 lives in orphan doc B
@@ -47,7 +49,7 @@ class SearchServiceSemanticTest {
         when(entities.matchEntityIds(anyLong(), anyList(), anyInt())).thenReturn(List.of(10L));
         when(entities.neighborEntityIds(anyLong(), eq(List.of(10L)))).thenReturn(List.of());
         when(entities.chunkIdsForEntities(anyList())).thenReturn(List.of(99L));
-        when(vec.chunksByIds(eq(List.of(99L)))).thenReturn(List.of(hit(99, "B")));
+        when(vec.chunksByIds(any(SearchContext.class), eq(List.of(99L)))).thenReturn(List.of(hit(99, "B")));
 
         GraphProperties gp = new GraphProperties();
         gp.setEdges("both");
@@ -55,7 +57,7 @@ class SearchServiceSemanticTest {
                 new RerankProperties(), edges, gp,
                 new EntityExtractor(chat, ""), entities);
 
-        List<SearchHit> out = svc.search("graph", "who owns PaymentsService", 10, List.of(1L), List.of());
+        List<SearchHit> out = svc.search(TestContexts.PUBLIC, "graph", "who owns PaymentsService", 10, List.of(1L), List.of());
         assertThat(out).extracting(SearchHit::docId).contains("A", "B");   // orphan B reconnected
     }
 }

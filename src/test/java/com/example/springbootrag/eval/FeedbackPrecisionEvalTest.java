@@ -5,6 +5,7 @@ import com.example.springbootrag.model.SearchHit;
 import com.example.springbootrag.repository.FeedbackRepository;
 import com.example.springbootrag.rerank.Reranker;
 import com.example.springbootrag.service.SearchService;
+import com.example.springbootrag.security.TestContexts;
 import org.junit.jupiter.api.Assumptions;
 import org.junit.jupiter.api.Tag;
 import org.junit.jupiter.api.Test;
@@ -116,7 +117,7 @@ class FeedbackPrecisionEvalTest {
         int scoredP5 = 0, scoredP10 = 0, judged = 0, up = 0, returned = 0;
 
         for (LabelledQuery q : queries) {
-            List<SearchHit> hits = searchService.search(
+            List<SearchHit> hits = searchService.search(TestContexts.PUBLIC,
                     backend, q.query(), TOP_K, List.of(q.projectId()), List.of());
             returned += hits.size();
 
@@ -179,7 +180,7 @@ class FeedbackPrecisionEvalTest {
 
         List<FeedbackLabel> labels;
         try {
-            labels = feedback.list(null, null, 1000);
+            labels = feedback.list(TestContexts.PUBLIC, null, null, 1000);
         } catch (DataAccessException e) {
             return Assumptions.abort(
                     "Postgres is not reachable (or chunk_feedback does not exist yet - start the "

@@ -1,6 +1,7 @@
 package com.example.springbootrag.web;
 
 import com.example.springbootrag.model.SearchHit;
+import com.example.springbootrag.security.CurrentUser;
 import com.example.springbootrag.service.ProjectService;
 import com.example.springbootrag.service.SearchService;
 import com.example.springbootrag.service.SearchService.BackendResult;
@@ -14,12 +15,19 @@ public class SearchController {
 
     private final SearchService searchService;
     private final ProjectService projectService;
+    private final CurrentUser currentUser;
 
-    public SearchController(SearchService searchService, ProjectService projectService) {
+    public SearchController(SearchService searchService, ProjectService projectService,
+                            CurrentUser currentUser) {
         this.searchService = searchService;
         this.projectService = projectService;
+        this.currentUser = currentUser;
     }
 
+    /**
+     * projectId, group, and docIds are browser-supplied scope: they narrow the result set.
+     * The access labels come from {@link CurrentUser} and are not addressable from the request.
+     */
     @GetMapping("/search")
     public List<SearchHit> search(@RequestParam String q,
                                   @RequestParam(defaultValue = "hybrid") String type,
@@ -28,7 +36,8 @@ public class SearchController {
                                   @RequestParam(required = false) Long projectId,
                                   @RequestParam(defaultValue = "false") boolean group) {
         List<Long> scope = projectService.resolveScope(projectId, group);
-        return searchService.search(type, q, topK, scope, docIds == null ? List.of() : docIds);
+        return searchService.search(currentUser.context(), type, q, topK, scope,
+                docIds == null ? List.of() : docIds);
     }
 
     @GetMapping("/compare")
@@ -38,6 +47,7 @@ public class SearchController {
                                               @RequestParam(required = false) Long projectId,
                                               @RequestParam(defaultValue = "false") boolean group) {
         List<Long> scope = projectService.resolveScope(projectId, group);
-        return searchService.compare(q, topK, scope, docIds == null ? List.of() : docIds);
+        return searchService.compare(currentUser.context(), q, topK, scope,
+                docIds == null ? List.of() : docIds);
     }
 }

@@ -605,6 +605,57 @@ grows without hand-writing more golden entries.
 
 ---
 
+## 16. Permission-aware retrieval (the filter IS the security control)
+
+Built 2026-08-05 (RAG-MASTERY section 1). Two fake users, one restricted document, and an access
+label on every chunk. What the exercise actually taught:
+
+**Where the filter lives decides whether it works.** The label predicate is inside every
+repository query, ANDed with the ranking condition - not applied to the result list afterwards.
+Post-filtering looks equivalent and is not: `rerank` over-fetches
+`app.rerank.candidates` = 50 hybrid candidates before trimming to topK, so a post-filter would
+still have fed restricted text to the cross-encoder, into its scores, and into any debug view of
+them. It also silently shrinks result pages, which pushes you toward over-fetching more, which
+widens the leak. Filter first, rank second.
+
+**Client scope narrows, identity decides.** `projectId` and `docIds` come from the browser and are
+plain SQL predicates ANDed with the group predicate. Asking for a restricted document by exact id
+therefore returns nothing rather than everything - the property worth testing per backend, since
+six backends are six chances to forget one.
+
+**Empty sets mean opposite things in Postgres and Qdrant.** `allowed_groups && ARRAY[]::text[]` is
+false, so a caller with no groups reads nothing - fail closed for free. Qdrant's `should` clause
+with zero conditions matches EVERYTHING, so the same code shape fails OPEN. That asymmetry is
+exactly the sort of thing that ships a breach, and it is invisible until someone writes the
+"user with no groups" test. `QdrantRepository.search` short-circuits before building the filter.
+
+**Graph expansion is the natural leak path.** `doc_edge` has no access label, so a link from a
+readable page to a restricted one is a legal seed with an illegal expansion. It holds only because
+neighbour chunks are loaded through the filtered query. Note what is still exposed: the *edge*,
+and therefore the shape of the graph. Content is protected; topology is not.
+
+**A title is data.** Document lists, the chunk view, the "no results" hint, and stored feedback
+labels all disclose that a document exists. `POST /feedback` was worse - a 200 versus a 400 was an
+existence oracle for any chunk id someone guessed. All of them filter now, and the oracle returns
+the same answer for "restricted" and "absent".
+
+**Read rules say nothing about writes.** Filtering reads by group still let any user *stamp* a
+document with any group - planting content into a group they cannot read, or hiding their own
+upload from themselves. `CurrentUser.requireOwnGroups` closes it. Worth remembering as a pattern:
+every label that controls reads needs a rule about who may apply it.
+
+**Migrations need a per-store answer.** `schema.sql` backfills NULL labels to `public` in one
+UPDATE; Qdrant has no migration mechanism, so `QdrantAclBackfill` stamps unlabelled points at
+startup using the `is_empty` condition (missing, null, and `[]` alike). Skip that and the wiki
+corpus stays visible in pgvector while vanishing from qdrant - a one-sided regression that reads
+like a search bug, not a migration gap.
+
+> Lesson: retrieval-time filtering is not a feature of search, it is a security control that
+> happens to live in the search path. Ask of every stage - fusion, over-fetch, graph expansion,
+> citations, listings, feedback - "what does this see, and who authorised it".
+
+---
+
 ## Where to go next
 `docs/ROADMAP.md` lists what's built and what's queued - notably **condense-question retrieval**
 (fixes vague follow-ups), snippet windowing, and token-budget history trimming. Each is a small

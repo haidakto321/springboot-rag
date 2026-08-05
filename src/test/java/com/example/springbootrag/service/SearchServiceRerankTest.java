@@ -11,6 +11,8 @@ import com.example.springbootrag.repository.EntityRepository;
 import com.example.springbootrag.repository.PgFtsRepository;
 import com.example.springbootrag.repository.PgVectorRepository;
 import com.example.springbootrag.repository.QdrantRepository;
+import com.example.springbootrag.security.SearchContext;
+import com.example.springbootrag.security.TestContexts;
 import org.junit.jupiter.api.Test;
 
 import java.util.List;
@@ -40,8 +42,8 @@ class SearchServiceRerankTest {
 
         when(embeddings.embed("q")).thenReturn(new float[]{0.1f});
         // Same list from both arms so hybrid order is deterministic: 1,2,3
-        when(fts.search(eq("q"), eq(50), anyList(), any())).thenReturn(List.of(hit(1), hit(2), hit(3)));
-        when(pgVector.search(eq(new float[]{0.1f}), eq(50), anyList(), any())).thenReturn(List.of(hit(1), hit(2), hit(3)));
+        when(fts.search(any(SearchContext.class), eq("q"), eq(50), anyList(), any())).thenReturn(List.of(hit(1), hit(2), hit(3)));
+        when(pgVector.search(any(SearchContext.class), eq(new float[]{0.1f}), eq(50), anyList(), any())).thenReturn(List.of(hit(1), hit(2), hit(3)));
 
         RerankProperties props = new RerankProperties();
         props.setCandidates(50);
@@ -49,7 +51,7 @@ class SearchServiceRerankTest {
         SearchService service = new SearchService(embeddings, fts, pgVector, qdrant,
                 new FakeReranker(), props, edges, new GraphProperties(), entityExtractor, entityRepo);
 
-        List<SearchHit> out = service.search("rerank", "q", 3);
+        List<SearchHit> out = service.search(TestContexts.PUBLIC, "rerank", "q", 3);
 
         // FakeReranker reverses hybrid's order
         assertThat(out).extracting(SearchHit::id).containsExactly(3L, 2L, 1L);

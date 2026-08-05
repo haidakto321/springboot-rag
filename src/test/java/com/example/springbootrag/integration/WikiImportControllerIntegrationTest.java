@@ -4,6 +4,7 @@ import com.example.springbootrag.embedding.EmbeddingProvider;
 import com.example.springbootrag.repository.PgVectorRepository;
 import com.example.springbootrag.repository.ProjectRepository;
 import com.example.springbootrag.tool.WikiImporter;
+import com.example.springbootrag.security.TestContexts;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import org.junit.jupiter.api.Test;
@@ -16,6 +17,7 @@ import org.springframework.context.annotation.Primary;
 import org.springframework.http.MediaType;
 import org.springframework.test.context.DynamicPropertyRegistry;
 import org.springframework.test.context.DynamicPropertySource;
+import org.springframework.security.test.context.support.WithMockUser;
 import org.springframework.test.web.servlet.MockMvc;
 import org.springframework.test.web.servlet.MvcResult;
 import org.testcontainers.containers.PostgreSQLContainer;
@@ -41,6 +43,7 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 @SpringBootTest(properties = "app.graph.edges=structural")
 @AutoConfigureMockMvc
 @Testcontainers
+@WithMockUser(username = "alice", authorities = {"GROUP_public"})   // real filter chain: an HTTP test needs an identity, and one with a group to read anything
 class WikiImportControllerIntegrationTest {
 
     @Container
@@ -128,7 +131,7 @@ class WikiImportControllerIntegrationTest {
             assertThat(done.get("pagesFailed").asInt()).isEqualTo(0);
 
             // Docs actually landed.
-            assertThat(pgVector.listDocuments(projectId)).hasSize(3);
+            assertThat(pgVector.listDocuments(TestContexts.PUBLIC, projectId)).hasSize(3);
         } finally {
             cleanup(projectId, wiki);
         }

@@ -1,5 +1,8 @@
 package com.example.springbootrag.web;
 
+import com.example.springbootrag.security.CurrentUser;
+import com.example.springbootrag.security.SecurityConfig;
+import com.example.springbootrag.security.TestContexts;
 import com.example.springbootrag.service.ChatService;
 import com.example.springbootrag.service.ProjectService;
 import com.example.springbootrag.web.dto.AskResponse;
@@ -9,6 +12,8 @@ import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.autoconfigure.web.servlet.WebMvcTest;
 import org.springframework.boot.test.mock.mockito.MockBean;
 import org.springframework.test.web.servlet.MockMvc;
+import org.springframework.context.annotation.Import;
+import org.springframework.security.test.context.support.WithMockUser;
 import org.springframework.test.web.servlet.MvcResult;
 
 import java.util.List;
@@ -27,23 +32,27 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
 @WebMvcTest(ChatController.class)
+@Import(SecurityConfig.class)   // exercise the real policy (stateless Basic, CSRF off), not the slice default
+@WithMockUser   // the filter chain is real now; without an identity every call is a 401
 class ChatControllerTest {
 
     @Autowired MockMvc mvc;
     @MockBean ChatService chatService;
     @MockBean ProjectService projectService;
+    @MockBean CurrentUser currentUser;
 
     @BeforeEach
     void setupProjectService() {
         when(projectService.defaultProjectId()).thenReturn(1L);
         when(projectService.resolveScope(any(), anyBoolean())).thenReturn(List.of(1L));
+        when(currentUser.context()).thenReturn(TestContexts.PUBLIC);
     }
 
     @Test
     @SuppressWarnings("unchecked")
     void streamsTokenSourcesAndDoneFrames() throws Exception {
-        when(chatService.chatStream(anyList(), anyList(), any(), anyBoolean(), any(), any())).thenAnswer(inv -> {
-            Consumer<String> onToken = inv.getArgument(4);
+        when(chatService.chatStream(any(), anyList(), anyList(), any(), anyBoolean(), any(), any())).thenAnswer(inv -> {
+            Consumer<String> onToken = inv.getArgument(5);
             onToken.accept("Hi");
             onToken.accept("!");
             return List.of(new AskResponse.Source(1, "doc-a", "# H", 0.9, "chunk text", 4));
@@ -64,7 +73,7 @@ class ChatControllerTest {
                 .contains("\"type\":\"sources\"").contains("doc-a")
                 .contains("\"type\":\"done\"");
 
-        verify(chatService).chatStream(anyList(), eq(List.of(1L)), any(), anyBoolean(), any(), any());
+        verify(chatService).chatStream(eq(TestContexts.PUBLIC), anyList(), eq(List.of(1L)), any(), anyBoolean(), any(), any());
     }
 
     @Test

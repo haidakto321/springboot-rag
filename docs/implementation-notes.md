@@ -731,3 +731,80 @@ question, and the eval measures the backend rather than reproducing one user's f
 No `Option B` score blending, no aggregate stats endpoint, no UI for browsing collected labels
 (`GET /feedback` returns JSON and that is enough for now). The eval has no numbers yet - it needs
 real clicks against the `docmaster` corpus, which is a human step, not a code step.
+
+---
+
+## 2026-08-05 - Permission-aware retrieval (RAG-MASTERY move 3, section 1)
+
+Executed inline. Three user decisions taken up front: add `spring-boot-starter-security` (rather
+than a fake header principal), do section 1 before section 5, and backfill the existing corpus to a
+`public` group rather than letting it go dark or fail open.
+
+### Design decisions
+
+**`SearchContext` is a required first argument, with no bypass overload.** Every retrieval entry
+point takes `(principal, groups)`. The old identity-free overloads were deleted rather than kept
+for convenience, so "search without an identity" is not expressible. Tests use
+`TestContexts.PUBLIC`; there is deliberately no superuser context, because a back door added for
+tests outlives the test.
+
+**The label predicate is built with placeholders, not a literal.** `allowed_groups && ARRAY[?,?]`
+rather than a hand-built `{"a","b"}` string, so group names can never be concatenated into SQL.
+The one place a literal is still built is `insert`, where `toArrayLiteral` escapes quotes and
+backslashes.
+
+**NULL means "pre-ACL", `{}` means "nobody".** The column is nullable so the one-time backfill can
+find rows written before access control existed. After that, ingest always writes at least one
+group, so re-running the backfill UPDATE cannot re-open a deliberately restricted chunk. Both NULL
+and `{}` are false under `&&`, so the default stays deny either way.
+
+**Qdrant gets its own migration.** `QdrantAclBackfill` (ApplicationRunner, `is_empty` filter,
+idempotent, failure logged not fatal). Without it the 7,536 pre-ACL points would be invisible to
+the qdrant backend while pgvector kept working - the eval gate would catch the regression, but it
+would read as a search defect rather than a missing migration.
+
+**Group ownership on writes.** `CurrentUser.requireOwnGroups` rejects labelling a document with a
+group you are not in (403). Found during self-review: read filtering alone would have let `bob`
+stamp a document `hr`.
+
+**Unknown group names are rejected at ingest** against the configured directory. A typo would
+otherwise produce a document that silently nobody can read, which is much harder to notice than an
+upload error.
+
+**Streaming identity is captured on the request thread.** `ChatController` resolves the context
+before returning the `StreamingResponseBody`, because the body runs on an async thread where
+`SecurityContextHolder` is no longer populated - and where a pooled thread might hold someone
+else's context.
+
+**Feedback endpoints gained a visibility check** (`PgVectorRepository.isVisible`) and the label
+dump joins `chunks`, because a label carries a document id plus a human's query text.
+
+### What broke in the test suite, and why it is worth knowing
+
+- `@WebMvcTest` slices do NOT pick up the application's `SecurityConfig`; they get Boot's default
+  chain, which has CSRF enabled. Every POST/PATCH/DELETE became a 403. Fixed with
+  `@Import(SecurityConfig.class)` rather than `.with(csrf())`, so the slice tests exercise the real
+  policy instead of a different one.
+- MockMvc integration tests needed both an identity AND a group:
+  `@WithMockUser(username = "alice", authorities = {"GROUP_public"})`. A plain `@WithMockUser` gets
+  `ROLE_USER`, no groups, and therefore reads nothing - which is correct behaviour that looks like
+  a broken test.
+- `FeedbackRepositoryIntegrationTest` had been labelling chunks that never existed. Once `list`
+  joined `chunks` for visibility, those labels became invisible - the test was fixed by inserting
+  the chunks it was pretending to label, which is closer to reality anyway.
+
+### Verification
+
+- `AccessControlIntegrationTest`: 10 cases covering all six backends, crafted `docIds` /
+  `projectIds`, the reranker over-fetch width, a `doc_edge` link into a restricted document,
+  document listings, the chunk view, the answer path, feedback labels, the no-groups caller, and
+  an unknown group name at ingest.
+- The tests are not vacuous by construction: every "bob cannot see it" assertion is paired with an
+  "alice CAN see it" assertion on the same query, so a filter that denied everyone would fail.
+
+### Known gaps (deliberate)
+
+Plain-text passwords and a static user list; no audit log of who read what; `doc_edge` rows are
+still readable, so graph topology leaks even though content does not; project-level document and
+chunk COUNTS in `/projects` are not access filtered, so a restricted document still moves a number.
+Section 5 (injection hardening) is the next pass and is not in this change.

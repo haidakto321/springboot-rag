@@ -3,6 +3,7 @@ package com.example.springbootrag.eval;
 import com.example.springbootrag.model.SearchHit;
 import com.example.springbootrag.service.IngestService;
 import com.example.springbootrag.service.SearchService;
+import com.example.springbootrag.security.TestContexts;
 import org.junit.jupiter.api.Tag;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -71,7 +72,7 @@ class RetrievalEvalTest {
         for (String backend : BACKENDS) {
             double recall5 = 0, mrr = 0, hit1 = 0;
             for (GoldenEntry e : golden) {
-                List<SearchHit> hits = searchService.search(backend, e.question(), TOP_K);
+                List<SearchHit> hits = searchService.search(TestContexts.PUBLIC, backend, e.question(), TOP_K);
                 int rank = rankOfExpected(hits, e); // 1-based, 0 = not found
                 if (rank >= 1 && rank <= 5) recall5++;
                 if (rank >= 1) mrr += 1.0 / rank;

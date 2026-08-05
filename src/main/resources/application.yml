@@ -22,6 +22,19 @@ spring:
       request-timeout: 600000   # 10 minutes; -1 would disable the timeout entirely
 
 app:
+  # Two fake users in different groups - the smallest setup that can prove permission-aware
+  # retrieval works (docs/RAG-MASTERY.md section 1). Plain-text passwords and an in-memory
+  # directory are SANDBOX ONLY; a real system swaps this whole block for an identity provider.
+  security:
+    default-group: public          # stamped on ingest when no groups are named
+    backfill-qdrant-groups: true   # label pre-ACL Qdrant points at startup, like schema.sql does for Postgres
+    users:
+      - username: alice
+        password: alice
+        groups: [public, hr]
+      - username: bob
+        password: bob
+        groups: [public, eng]
   embedding:
     provider: ollama
     model: nomic-embed-text

@@ -4,6 +4,7 @@ import com.example.springbootrag.chat.ChatProvider;
 import com.example.springbootrag.chat.ChatProvider.ChatMessage;
 import com.example.springbootrag.config.ChatProperties;
 import com.example.springbootrag.model.SearchHit;
+import com.example.springbootrag.security.SearchContext;
 import com.example.springbootrag.web.dto.AskResponse;
 import org.springframework.stereotype.Service;
 
@@ -45,15 +46,17 @@ public class ChatService {
      * @param projectIds optional project scope (empty = all projects)
      * @param docIds optional document scope (empty = all documents)
      */
-    /** Backward-compatible overload: no reasoning channel, thinking disabled. */
-    public List<AskResponse.Source> chatStream(List<ChatMessage> history,
+    /** Convenience overload: no reasoning channel, thinking disabled. */
+    public List<AskResponse.Source> chatStream(SearchContext ctx,
+                                               List<ChatMessage> history,
                                                List<Long> projectIds,
                                                List<String> docIds,
                                                Consumer<String> onToken) {
-        return chatStream(history, projectIds, docIds, false, onToken, r -> {});
+        return chatStream(ctx, history, projectIds, docIds, false, onToken, r -> {});
     }
 
-    public List<AskResponse.Source> chatStream(List<ChatMessage> history,
+    public List<AskResponse.Source> chatStream(SearchContext ctx,
+                                               List<ChatMessage> history,
                                                List<Long> projectIds,
                                                List<String> docIds,
                                                boolean think,
@@ -81,7 +84,7 @@ public class ChatService {
 
         List<Long> pScope = projectIds == null ? List.of() : projectIds;
         List<String> dScope = docIds == null ? List.of() : docIds;
-        List<SearchHit> hits = searchService.search("rerank", retrievalQuery,
+        List<SearchHit> hits = searchService.search(ctx, "rerank", retrievalQuery,
                 props.getContextChunks(), pScope, dScope);
         if (hits.isEmpty()) {
             onToken.accept("No relevant chunks found in the knowledge base.");

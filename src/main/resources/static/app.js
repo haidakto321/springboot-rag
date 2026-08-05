@@ -52,6 +52,44 @@ $('#theme-toggle').addEventListener('click', () => {
     applyTheme(theme);
 });
 
+// ---------- Identity ----------
+// The server decides who we are (HTTP Basic). This is display only: retrieval is filtered by the
+// authenticated principal server-side, so nothing here can widen what the user can read.
+
+let me = { principal: '-', groups: [] };
+let uploadGroups = new Set();   // access label chosen for the next upload
+
+async function loadMe() {
+    try {
+        const res = await fetch('/me');
+        if (!res.ok) return;
+        me = await res.json();
+    } catch (_) { return; }
+    $('#who-name').textContent = me.principal;
+    $('#who-groups').textContent = (me.groups || []).join(' · ');
+    if (!uploadGroups.size) uploadGroups.add('public');
+    renderUploadGroups();
+}
+
+// One chip per group the signed-in user belongs to. Uploading with none selected means the
+// server's default group, so the document never becomes unreadable by accident.
+function renderUploadGroups() {
+    const host = $('#upload-groups');
+    if (!host) return;
+    host.innerHTML = '';
+    for (const g of me.groups || []) {
+        const b = document.createElement('button');
+        b.type = 'button';
+        b.className = 'scope-chip' + (uploadGroups.has(g) ? ' on' : '');
+        b.textContent = g;
+        b.onclick = () => {
+            if (uploadGroups.has(g)) uploadGroups.delete(g); else uploadGroups.add(g);
+            renderUploadGroups();
+        };
+        host.appendChild(b);
+    }
+}
+
 // ---------- Projects ----------
 
 let activeProjectId = null;
@@ -537,7 +575,8 @@ function uploadFile(file) {
 
     const ui = createUploadRow(file.name);
     const xhr = new XMLHttpRequest();
-    xhr.open('POST', '/projects/' + activeProjectId + '/documents');
+    const groupParams = [...uploadGroups].map((g) => 'groups=' + encodeURIComponent(g)).join('&');
+    xhr.open('POST', '/projects/' + activeProjectId + '/documents' + (groupParams ? '?' + groupParams : ''));
 
     ui.cancelBtn.addEventListener('click', () => { xhr.abort(); ui.remove(); });
 
@@ -1151,4 +1190,5 @@ document.addEventListener('keydown', (e) => {
     $('#search-q').focus();
 });
 
+loadMe();
 loadProjects();

@@ -5,6 +5,7 @@ import com.example.springbootrag.embedding.EmbeddingProvider;
 import com.example.springbootrag.model.SearchHit;
 import com.example.springbootrag.service.IngestService;
 import com.example.springbootrag.service.SearchService;
+import com.example.springbootrag.security.TestContexts;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
@@ -138,7 +139,7 @@ class OrphanReconnectionIntegrationTest {
         // content-derived vector shares no word-bucket with "refunds" and its text has no FTS
         // lexeme match, so both the keyword and vector legs rank Known-Page first and the
         // width-1 cut drops the orphan entirely.
-        List<SearchHit> hybrid = search.search("hybrid", query, 1, List.of(p), List.of());
+        List<SearchHit> hybrid = search.search(TestContexts.PUBLIC, "hybrid", query, 1, List.of(p), List.of());
         assertThat(hybrid).extracting(SearchHit::docId).doesNotContain("Orphan-Page");
 
         // Differentiator 2: graph(), built on that very same narrow seed, DOES surface the
@@ -147,7 +148,7 @@ class OrphanReconnectionIntegrationTest {
         // entity, orphan chunk included. If semantic expansion were broken or disabled (e.g.
         // app.graph.edges=structural), there are no links between these pages, so structural
         // expansion alone would find nothing and this assertion would fail.
-        List<SearchHit> graph = search.search("graph", query, 10, List.of(p), List.of());
+        List<SearchHit> graph = search.search(TestContexts.PUBLIC, "graph", query, 10, List.of(p), List.of());
         assertThat(graph).extracting(SearchHit::docId).contains("Orphan-Page");
     }
 }

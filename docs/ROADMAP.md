@@ -68,6 +68,21 @@ Merged "streaming answers" + "conversational follow-up".
 - UI: sidebar project switcher (grouped by `group_name`), manage-projects modal
   (create/rename/delete/set-group), and a "Search whole group" toggle on Search & Ask and Compare.
 
+### Permission-aware retrieval  ✅ done (2026-08-05)
+Every chunk carries `allowed_groups` (stamped at ingest, mirrored into the Qdrant payload), and
+every retrieval path takes a `SearchContext` built from the authenticated principal - HTTP Basic
+over two fake users (`alice` in `hr`, `bob` in `eng`, both `public`) via `spring-boot-starter-security`.
+
+- UI: sidebar shows who you are signed in as; the Import panel picks the access label for the
+  upload (only groups you belong to - the server rejects the rest with 403).
+- `projectId` / `docIds` stay browser-supplied and narrowing-only; the group filter is applied
+  inside every query, before the reranker's 50-candidate over-fetch.
+- Existing corpora keep working: `schema.sql` backfills unlabelled chunks to `public` and
+  `QdrantAclBackfill` does the same for pre-ACL Qdrant points at startup.
+- `AccessControlIntegrationTest` is the "try to break it" half - see `LEARNINGS.md` §16 and
+  `RAG-MASTERY.md` §1 for what it found. Not built: audit logging, per-document ACL editing,
+  and access-filtered project counts.
+
 ### Per-chunk relevance feedback - eval only (Option A)  ✅ done (2026-08-05)
 Goal: collect human relevance labels on individual retrieved chunks so we can MEASURE retrieval /
 reranker quality against real usage - NOT to change ranking live (no fine-tuning, no live boost).
