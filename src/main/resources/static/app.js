@@ -52,6 +52,44 @@ $('#theme-toggle').addEventListener('click', () => {
     applyTheme(theme);
 });
 
+// ---------- Identity ----------
+// The server decides who we are (HTTP Basic). This is display only: retrieval is filtered by the
+// authenticated principal server-side, so nothing here can widen what the user can read.
+
+let me = { principal: '-', groups: [] };
+let uploadGroups = new Set();   // access label chosen for the next upload
+
+async function loadMe() {
+    try {
+        const res = await fetch('/me');
+        if (!res.ok) return;
+        me = await res.json();
+    } catch (_) { return; }
+    $('#who-name').textContent = me.principal;
+    $('#who-groups').textContent = (me.groups || []).join(' · ');
+    if (!uploadGroups.size) uploadGroups.add('public');
+    renderUploadGroups();
+}
+
+// One chip per group the signed-in user belongs to. Uploading with none selected means the
+// server's default group, so the document never becomes unreadable by accident.
+function renderUploadGroups() {
+    const host = $('#upload-groups');
+    if (!host) return;
+    host.innerHTML = '';
+    for (const g of me.groups || []) {
+        const b = document.createElement('button');
+        b.type = 'button';
+        b.className = 'scope-chip' + (uploadGroups.has(g) ? ' on' : '');
+        b.textContent = g;
+        b.onclick = () => {
+            if (uploadGroups.has(g)) uploadGroups.delete(g); else uploadGroups.add(g);
+            renderUploadGroups();
+        };
+        host.appendChild(b);
+    }
+}
+
 // ---------- Projects ----------
 
 let activeProjectId = null;
@@ -537,7 +575,8 @@ function uploadFile(file) {
 
     const ui = createUploadRow(file.name);
     const xhr = new XMLHttpRequest();
-    xhr.open('POST', '/projects/' + activeProjectId + '/documents');
+    const groupParams = [...uploadGroups].map((g) => 'groups=' + encodeURIComponent(g)).join('&');
+    xhr.open('POST', '/projects/' + activeProjectId + '/documents' + (groupParams ? '?' + groupParams : ''));
 
     ui.cancelBtn.addEventListener('click', () => { xhr.abort(); ui.remove(); });
 
@@ -554,6 +593,10 @@ function uploadFile(file) {
         if (xhr.status >= 200 && xhr.status < 300) {
             const body = JSON.parse(xhr.responseText);
             toast(`Imported ${file.name} · ${body.chunksStored ?? '?'} chunks`);
+            // Ingest-time smell test: this document tries to talk to the model.
+            if (body.warnings && body.warnings.length) {
+                toast(`${file.name}: possible prompt injection - ${body.warnings[0]}`, 'error');
+            }
             localStorage.setItem('kb-last-import', 'Today');
             refreshDocs();
         } else {
@@ -630,6 +673,76 @@ function windowSnippet(content) {
     return { text, truncated: true };
 }
 
+// ---------- Per-chunk relevance labels (eval only - never changes ranking) ----------
+// Backed by POST/DELETE/GET /feedback. See docs/RAG-MASTERY.md section 3 drill D.
+
+const MAX_LABEL_QUERY = 500;                  // matches FeedbackController.MAX_QUERY
+const chunkLabels = new Map();                // `query \0 docId \0 chunkIndex` -> 'up' | 'down'
+
+const labelKey = (query, docId, chunkIndex) => `${query}\u0000${docId}\u0000${chunkIndex}`;
+// No thumbs while "search whole group" is on: a hit can then come from a sibling project, but a
+// SearchHit carries no projectId, so the label would be filed under the ACTIVE project and the
+// offline eval - which replays each query inside one project - would never find that chunk again.
+const labelable = (query) => Boolean(
+    activeProjectId && !groupSearchEnabled && query && query.length <= MAX_LABEL_QUERY);
+
+// Merges the stored labels for one query into the map, so thumbs survive a reload.
+async function loadLabels(query) {
+    if (!labelable(query)) return;
+    try {
+        const res = await fetch(`/feedback?projectId=${activeProjectId}&query=${encodeURIComponent(query)}`);
+        if (!res.ok) return;
+        for (const l of await res.json()) chunkLabels.set(labelKey(l.query, l.docId, l.chunkIndex), l.rating);
+    } catch (_) { /* labels are optional - a failed load must not break search */ }
+}
+
+// Toggles one label. Clicking the active thumb clears it (DELETE), otherwise upserts it.
+// The map is updated first so the UI feels instant, and rolled back if the server refuses.
+async function voteChunk(query, docId, chunkIndex, rating, rerender) {
+    const key = labelKey(query, docId, chunkIndex);
+    const before = chunkLabels.get(key);
+    const next = before === rating ? null : rating;
+    if (next) chunkLabels.set(key, next); else chunkLabels.delete(key);
+    rerender();
+
+    try {
+        const res = next
+            ? await fetch('/feedback', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ query, projectId: Number(activeProjectId), docId, chunkIndex, rating: next }),
+              })
+            : await fetch(`/feedback?projectId=${activeProjectId}&query=${encodeURIComponent(query)}`
+                + `&docId=${encodeURIComponent(docId)}&chunkIndex=${chunkIndex}`, { method: 'DELETE' });
+        if (!res.ok) throw new Error(res.status);
+    } catch (_) {
+        if (before) chunkLabels.set(key, before); else chunkLabels.delete(key);
+        rerender();
+        toast('Could not save relevance feedback', 'error');
+    }
+}
+
+// Two small thumbs for one chunk. Returns null when the query cannot be labelled.
+function buildVote(query, docId, chunkIndex, rerender, extraClass) {
+    if (!labelable(query)) return null;
+    const current = chunkLabels.get(labelKey(query, docId, chunkIndex));
+    const wrap = document.createElement('span');
+    wrap.className = 'vote' + (extraClass ? ' ' + extraClass : '');
+    for (const [rating, glyph, title] of [['up', '👍', 'Relevant to this query'], ['down', '👎', 'Not relevant']]) {
+        const b = document.createElement('button');
+        b.type = 'button';
+        b.className = 'vote-btn' + (current === rating ? ' on' : '');
+        b.textContent = glyph;
+        b.title = title;
+        b.onclick = (e) => {
+            e.stopPropagation();     // never trigger the row's open-in-context
+            voteChunk(query, docId, chunkIndex, rating, rerender);
+        };
+        wrap.appendChild(b);
+    }
+    return wrap;
+}
+
 function renderHits() {
     const hitsEl = $('#search-hits');
     hitsEl.innerHTML = '';
@@ -670,6 +783,8 @@ function renderHits() {
                 <span class="result-score-val">${h.score.toFixed(3)}</span>
                 <div class="score-track"><div class="score-fill" style="width:${pct}%"></div></div>
             </div>`;
+        const vote = buildVote(lastQuery, h.docId, h.chunkIndex, renderHits, 'result-vote');
+        if (vote) row.querySelector('.result-main').appendChild(vote);
         hitsEl.appendChild(row);
     }
 }
@@ -732,6 +847,7 @@ async function runSearch(reset, record) {
     lastHits = await res.json();
     lastQuery = q;
     meta.textContent = `${lastHits.length} result${lastHits.length === 1 ? '' : 's'} · ${ms} ms`;
+    await loadLabels(q);          // restore thumbs already stored for this query
     renderHits();
     // Heuristic: a full page back means there may be more.
     $('#search-more').hidden = !(lastHits.length > 0 && lastHits.length === searchTopK);
@@ -767,10 +883,25 @@ function renderThread() {
         const bubble = document.createElement('div');
         bubble.className = 'bubble';
 
+        // Assistant reasoning (if any) sits above the answer, collapsed behind a toggle.
+        if (m.role === 'assistant' && m.reasoning) {
+            bubble.appendChild(buildThoughts(m.reasoning, false));
+        }
+
         const text = document.createElement('div');
         text.className = 'bubble-text' + (m.error ? ' error' : '') + (m.streaming ? ' streaming' : '');
         text.textContent = m.content || '';
         bubble.appendChild(text);
+
+        // Grounding warning sits directly under the answer text, before the citations.
+        if (m.role === 'assistant' && !m.streaming && m.guard) {
+            const warn = document.createElement('div');
+            warn.className = 'guard-warning';
+            warn.textContent = m.guard === 'ungrounded'
+                ? 'This answer cited no source. Treat it as unverified - it may come from the model, or from instructions hidden in a document.'
+                : 'This answer cited a source that was not retrieved. Treat it as unverified.';
+            bubble.appendChild(warn);
+        }
 
         if (m.sources && m.sources.length) {
             const chips = document.createElement('div');
@@ -796,6 +927,9 @@ function renderThread() {
 
                 chip.appendChild(peek);
                 chip.appendChild(open);
+                // Relevance thumbs on the citation itself: the label is about the chunk, not the answer.
+                const vote = buildVote(m.query, s.docId, s.chunkIndex, renderThread, 'chip-vote');
+                if (vote) chip.appendChild(vote);
                 chips.appendChild(chip);
             }
             bubble.appendChild(chips);
@@ -832,6 +966,17 @@ function renderThread() {
             actions.appendChild(copy);
             actions.appendChild(up);
             actions.appendChild(down);
+
+            // Per-request trace: which query was really searched, what came back, where the time went.
+            if (m.requestId) {
+                const trace = document.createElement('button');
+                trace.type = 'button';
+                trace.className = 'msg-action';
+                trace.textContent = 'Trace';
+                trace.title = 'Show how this answer was produced';
+                trace.onclick = () => toggleTrace(bubble, m);
+                actions.appendChild(trace);
+            }
             bubble.appendChild(actions);
         }
 
@@ -855,7 +1000,9 @@ $('#chat-form').addEventListener('submit', async (e) => {
     $('#chat-q').value = '';
 
     chatMessages.push({ role: 'user', content: q });
-    const assistant = { role: 'assistant', content: '', sources: null, streaming: true };
+    // query is kept on the answer so its citation chips can be labelled. It is the RAW question,
+    // not the condensed follow-up the server may have actually searched with.
+    const assistant = { role: 'assistant', content: '', sources: null, streaming: true, query: q };
     chatMessages.push(assistant);
     renderThread();
 
@@ -873,7 +1020,7 @@ $('#chat-form').addEventListener('submit', async (e) => {
         const res = await fetch('/chat/stream', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ messages: payload, docIds: scopeDocIds(), projectId: Number(activeProjectId), group: groupSearchEnabled }),
+            body: JSON.stringify({ messages: payload, docIds: scopeDocIds(), projectId: Number(activeProjectId), group: groupSearchEnabled, think: $('#think-toggle')?.checked || false }),
         });
 
         if (!res.ok || !res.body) {
@@ -888,6 +1035,9 @@ $('#chat-form').addEventListener('submit', async (e) => {
 
         const reader = res.body.getReader();
         const decoder = new TextDecoder();
+        const bubble = streamEl.parentElement;   // live handle for the reasoning box
+        let reasoningBody = null;
+        let answerStarted = false;
         let buf = '';
         while (true) {
             const { done, value } = await reader.read();
@@ -900,12 +1050,25 @@ $('#chat-form').addEventListener('submit', async (e) => {
                 if (!line) continue;
                 let frame;
                 try { frame = JSON.parse(line); } catch (_) { continue; }
-                if (frame.type === 'token') {
+                if (frame.type === 'reasoning') {
+                    assistant.reasoning = (assistant.reasoning || '') + frame.text;
+                    if (!reasoningBody) reasoningBody = mountThoughts(bubble, true); // expanded while thinking
+                    reasoningBody.textContent = assistant.reasoning;
+                    scrollThreadBottom();
+                } else if (frame.type === 'token') {
+                    // Answer starts -> collapse the thinking box (keep it available behind the toggle).
+                    if (!answerStarted && reasoningBody) collapseThoughts(bubble);
+                    answerStarted = true;
                     assistant.content += frame.text;
                     streamEl.textContent = assistant.content;
                     scrollThreadBottom();
                 } else if (frame.type === 'sources') {
                     assistant.sources = frame.sources;
+                } else if (frame.type === 'trace') {
+                    assistant.requestId = frame.requestId;
+                } else if (frame.type === 'guard') {
+                    // Tokens are already rendered; the server can only tell us they were not grounded.
+                    assistant.guard = frame.reason;
                 } else if (frame.type === 'error') {
                     assistant.content = (assistant.content ? assistant.content + '\n' : '') + `[error: ${frame.message}]`;
                     assistant.error = true;
@@ -923,6 +1086,10 @@ $('#chat-form').addEventListener('submit', async (e) => {
         send.disabled = false;
         renderThread();       // finalize: drop caret, render citation chips
         $('#chat-q').focus();
+        if (assistant.sources && assistant.sources.length) {
+            await loadLabels(q);   // same question asked before -> show the thumbs already stored
+            renderThread();
+        }
     }
 });
 
@@ -938,6 +1105,49 @@ function toggleSource(chip, source) {
     chip._detail = pre;
 }
 
+// ---------- Per-request trace (debug view) ----------
+
+// Fetches /traces once and renders the row for this answer. The endpoint only ever returns the
+// caller's own traces, so nothing here can widen what the user may see.
+async function toggleTrace(bubble, m) {
+    if (bubble._traceBox) { bubble._traceBox.remove(); bubble._traceBox = null; return; }
+    const box = document.createElement('div');
+    box.className = 'trace-box';
+    box.textContent = 'Loading trace…';
+    bubble.appendChild(box);
+    bubble._traceBox = box;
+
+    try {
+        const res = await fetch('/traces?limit=20');
+        if (!res.ok) throw new Error(res.status);
+        const traces = await res.json();
+        const t = traces.find((x) => x.requestId === m.requestId);
+        if (!t) { box.textContent = 'No trace stored for this answer.'; return; }
+        box.innerHTML = renderTrace(t);
+    } catch (err) {
+        box.textContent = 'Could not load the trace: ' + err.message;
+    }
+}
+
+function renderTrace(t) {
+    const stages = Object.entries(t.stageLatencyMs || {})
+        .map(([k, v]) => `<span class="trace-stage"><b>${esc(k)}</b> ${v} ms</span>`).join('');
+    const hits = (t.retrieved || [])
+        .map((r, i) => `<tr><td>${i + 1}</td><td class="mono">${esc(r.docId)}</td>` +
+                       `<td>#${r.chunkIndex}</td><td>${r.score.toFixed(3)}</td></tr>`).join('');
+    const tokens = (t.promptTokens == null && t.completionTokens == null)
+        ? 'not reported'
+        : `${t.promptTokens ?? '?'} prompt / ${t.completionTokens ?? '?'} completion`;
+    return `
+        <div class="trace-line"><b>backend</b> ${esc(t.backend)} · <b>tokens</b> ${tokens} · <b>guard</b> ${esc(t.guardReason || '-')}</div>
+        <div class="trace-line"><b>searched</b> ${esc(t.condensedQuery || t.rawQuery)}` +
+        (t.condensedQuery ? ` <span class="trace-muted">(condensed from "${esc(t.rawQuery)}")</span>` : '') + `</div>
+        <div class="trace-stages">${stages}</div>
+        <table class="trace-table"><thead><tr><th>#</th><th>document</th><th>chunk</th><th>score</th></tr></thead>
+        <tbody>${hits}</tbody></table>
+        <div class="trace-muted mono">${esc(t.requestId)}</div>`;
+}
+
 // Local-only thumbs feedback (no backend); toggles and logs to localStorage.
 function recordFeedback(m, rating, upBtn, downBtn) {
     m.feedback = m.feedback === rating ? null : rating;
@@ -951,10 +1161,39 @@ function recordFeedback(m, rating, upBtn, downBtn) {
     if (m.feedback) toast(m.feedback === 'up' ? 'Marked helpful' : 'Marked not helpful');
 }
 
+// ---------- AI thinking (collapsible reasoning box) ----------
+// Builds a collapsible "Thoughts" box; returns the element (its <pre> body is on el._body).
+function buildThoughts(text, expanded) {
+    const box = document.createElement('div');
+    box.className = 'thoughts' + (expanded ? ' open' : '');
+    const toggle = document.createElement('button');
+    toggle.type = 'button';
+    toggle.className = 'thoughts-toggle';
+    toggle.innerHTML = '<span class="caret">▸</span> 💭 Thoughts';
+    toggle.onclick = () => box.classList.toggle('open');
+    const body = document.createElement('pre');
+    body.className = 'thoughts-body';
+    body.textContent = text || '';
+    box.appendChild(toggle);
+    box.appendChild(body);
+    box._body = body;
+    return box;
+}
+// Ensures a live thoughts box is the first child of a streaming bubble; returns its <pre> body.
+function mountThoughts(bubble, expanded) {
+    let box = bubble.querySelector('.thoughts');
+    if (!box) { box = buildThoughts('', expanded); bubble.insertBefore(box, bubble.firstChild); }
+    return box._body;
+}
+function collapseThoughts(bubble) {
+    const box = bubble.querySelector('.thoughts');
+    if (box) box.classList.remove('open');
+}
+
 // ---------- Compare ----------
 
 // Fixed backend order, matching the /compare response.
-const BACKENDS = ['fts', 'pgvector', 'qdrant', 'hybrid', 'rerank'];
+const BACKENDS = ['fts', 'pgvector', 'qdrant', 'hybrid', 'rerank', 'graph'];
 
 $('#compare-form').addEventListener('submit', async (e) => {
     e.preventDefault();
@@ -1024,4 +1263,5 @@ document.addEventListener('keydown', (e) => {
     $('#search-q').focus();
 });
 
+loadMe();
 loadProjects();

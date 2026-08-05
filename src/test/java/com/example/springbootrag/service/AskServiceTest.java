@@ -3,14 +3,19 @@ package com.example.springbootrag.service;
 import com.example.springbootrag.chat.ChatProvider;
 import com.example.springbootrag.config.ChatProperties;
 import com.example.springbootrag.model.SearchHit;
+import com.example.springbootrag.security.SearchContext;
 import com.example.springbootrag.web.dto.AskResponse;
+import com.example.springbootrag.security.TestContexts;
+import com.example.springbootrag.trace.NoopTraceRecorder;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 
 import java.util.List;
+import java.util.Map;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
+import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyInt;
 import static org.mockito.ArgumentMatchers.anyList;
 import static org.mockito.ArgumentMatchers.anyString;
@@ -42,16 +47,16 @@ class AskServiceTest {
     @BeforeEach
     void setup() {
         when(projectService.defaultProjectId()).thenReturn(1L);
-        askService = new AskService(searchService, chat, props, projectService);
+        askService = new AskService(searchService, chat, props, projectService, NoopTraceRecorder.create());
     }
 
     @Test
     void buildsNumberedContextAndReturnsSources() {
-        when(searchService.search(eq("rerank"), anyString(), anyInt(), eq(List.of(1L)), anyList())).thenReturn(List.of(
-                new SearchHit(1, "doc-a", 0, "chunk one text", "a.md", "# A > ## S", 0.9),
-                new SearchHit(2, "doc-b", 3, "chunk two text", "b.md", null, 0.7)));
+        when(searchService.searchTraced(any(SearchContext.class), eq("rerank"), anyString(), anyInt(), eq(List.of(1L)), anyList())).thenReturn(new SearchService.TracedSearch(List.of(
+                new SearchHit(1, "doc-a", 0, "chunk one text", "a.md", "# A > ## S", 0.9, null),
+                new SearchHit(2, "doc-b", 3, "chunk two text", "b.md", null, 0.7, null)), Map.of("embed", 1L, "retrieve", 2L)));
 
-        AskResponse resp = askService.ask("what happened?");
+        AskResponse resp = askService.ask(TestContexts.PUBLIC, "what happened?");
 
         assertThat(resp.answer()).isEqualTo("canned answer [1]");
         assertThat(chat.lastUser).contains("[1]").contains("chunk one text");
@@ -69,11 +74,11 @@ class AskServiceTest {
 
     @Test
     void emptyRetrievalShortCircuitsWithoutCallingLlm() {
-        when(searchService.search(eq("rerank"), anyString(), anyInt(), anyList(), anyList())).thenReturn(List.of());
+        when(searchService.searchTraced(any(SearchContext.class), eq("rerank"), anyString(), anyInt(), anyList(), anyList())).thenReturn(new SearchService.TracedSearch(List.of(), Map.of("embed", 1L, "retrieve", 2L)));
         ChatProvider mockChat = mock(ChatProvider.class);
-        AskService svc = new AskService(searchService, mockChat, props, projectService);
+        AskService svc = new AskService(searchService, mockChat, props, projectService, NoopTraceRecorder.create());
 
-        AskResponse resp = svc.ask("anything?");
+        AskResponse resp = svc.ask(TestContexts.PUBLIC, "anything?");
 
         assertThat(resp.answer()).contains("No relevant chunks");
         assertThat(resp.sources()).isEmpty();
@@ -82,7 +87,7 @@ class AskServiceTest {
 
     @Test
     void blankQuestionIsRejected() {
-        assertThatThrownBy(() -> askService.ask("  "))
+        assertThatThrownBy(() -> askService.ask(TestContexts.PUBLIC, "  "))
                 .isInstanceOf(IllegalArgumentException.class);
     }
 }

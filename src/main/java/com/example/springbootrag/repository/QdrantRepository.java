@@ -2,6 +2,7 @@ package com.example.springbootrag.repository;
 
 import com.example.springbootrag.config.EmbeddingProperties;
 import com.example.springbootrag.model.SearchHit;
+import com.example.springbootrag.security.SearchContext;
 import io.qdrant.client.QdrantClient;
 import io.qdrant.client.grpc.Collections.Distance;
 import io.qdrant.client.grpc.Collections.VectorParams;
@@ -25,12 +26,16 @@ import java.util.concurrent.ExecutionException;
 import static io.qdrant.client.PointIdFactory.id;
 import static io.qdrant.client.ValueFactory.value;
 import static io.qdrant.client.VectorsFactory.vectors;
+import static io.qdrant.client.ConditionFactory.isEmpty;
 import static io.qdrant.client.ConditionFactory.match;
 import static io.qdrant.client.ConditionFactory.matchKeyword;
 import static io.qdrant.client.WithPayloadSelectorFactory.enable;
 
 @Repository
 public class QdrantRepository {
+
+    /** Payload key holding the chunk's access label, mirroring chunks.allowed_groups. */
+    public static final String ALLOWED_GROUPS = "allowed_groups";
 
     private static final Logger log = LoggerFactory.getLogger(QdrantRepository.class);
 
@@ -76,15 +81,17 @@ public class QdrantRepository {
         }
     }
 
-    /** Upserts one chunk with its project association into Qdrant. */
+    /** Upserts one chunk with its project association and access label into Qdrant. */
     public void upsert(long id, long projectId, String docId, int chunkIndex, String content,
-                       String sourceFile, String headingPath, float[] embedding)
+                       String sourceFile, String headingPath, float[] embedding,
+                       List<String> allowedGroups)
             throws ExecutionException, InterruptedException {
         Map<String, Value> payload = new HashMap<>();
         payload.put("project_id", value(projectId));
         payload.put("doc_id", value(docId));
         payload.put("chunk_index", value((long) chunkIndex));
         payload.put("content", value(content));
+        payload.put(ALLOWED_GROUPS, groupsValue(allowedGroups));
         if (sourceFile != null) {
             payload.put("source_file", value(sourceFile));
         }
@@ -100,13 +107,17 @@ public class QdrantRepository {
     }
 
     /**
-     * Vector search with optional project and doc filters.
-     * Empty lists mean that filter is absent. Project uses integer match; doc uses keyword match.
-     * Both active: must satisfy BOTH (AND); within each group it is an OR over the values.
+     * Vector search with optional project and doc filters, always filtered by access labels.
+     * Empty lists mean that optional filter is absent. Project uses integer match; doc and group
+     * use keyword match. Groups are a MUST clause with a nested should-over-values, so a caller
+     * with no groups matches nothing - the same fail-closed rule as the SQL side.
      */
-    public List<SearchHit> search(float[] queryEmbedding, int topK,
+    public List<SearchHit> search(SearchContext ctx, float[] queryEmbedding, int topK,
                                   List<Long> projectIds, List<String> docIds)
             throws ExecutionException, InterruptedException {
+        if (ctx.readsNothing()) {
+            return List.of();     // an empty should-clause would match everything, not nothing
+        }
         List<Float> vec = new ArrayList<>(queryEmbedding.length);
         for (float f : queryEmbedding) vec.add(f);
 
@@ -118,25 +129,28 @@ public class QdrantRepository {
 
         boolean hasProject = projectIds != null && !projectIds.isEmpty();
         boolean hasDoc = docIds != null && !docIds.isEmpty();
-        if (hasProject || hasDoc) {
-            io.qdrant.client.grpc.Points.Filter.Builder filter =
+        io.qdrant.client.grpc.Points.Filter.Builder filter =
+                io.qdrant.client.grpc.Points.Filter.newBuilder();
+        io.qdrant.client.grpc.Points.Filter.Builder gf =
+                io.qdrant.client.grpc.Points.Filter.newBuilder();
+        for (String g : ctx.groups()) gf.addShould(matchKeyword(ALLOWED_GROUPS, g));
+        filter.addMust(io.qdrant.client.grpc.Points.Condition.newBuilder()
+                .setFilter(gf.build()).build());
+        if (hasProject) {
+            io.qdrant.client.grpc.Points.Filter.Builder pf =
                     io.qdrant.client.grpc.Points.Filter.newBuilder();
-            if (hasProject) {
-                io.qdrant.client.grpc.Points.Filter.Builder pf =
-                        io.qdrant.client.grpc.Points.Filter.newBuilder();
-                for (Long pid : projectIds) pf.addShould(match("project_id", pid));
-                filter.addMust(io.qdrant.client.grpc.Points.Condition.newBuilder()
-                        .setFilter(pf.build()).build());
-            }
-            if (hasDoc) {
-                io.qdrant.client.grpc.Points.Filter.Builder df =
-                        io.qdrant.client.grpc.Points.Filter.newBuilder();
-                for (String d : docIds) df.addShould(matchKeyword("doc_id", d));
-                filter.addMust(io.qdrant.client.grpc.Points.Condition.newBuilder()
-                        .setFilter(df.build()).build());
-            }
-            search.setFilter(filter.build());
+            for (Long pid : projectIds) pf.addShould(match("project_id", pid));
+            filter.addMust(io.qdrant.client.grpc.Points.Condition.newBuilder()
+                    .setFilter(pf.build()).build());
         }
+        if (hasDoc) {
+            io.qdrant.client.grpc.Points.Filter.Builder df =
+                    io.qdrant.client.grpc.Points.Filter.newBuilder();
+            for (String d : docIds) df.addShould(matchKeyword("doc_id", d));
+            filter.addMust(io.qdrant.client.grpc.Points.Condition.newBuilder()
+                    .setFilter(df.build()).build());
+        }
+        search.setFilter(filter.build());
 
         List<ScoredPoint> points = client.searchAsync(search.build()).get();
 
@@ -150,7 +164,8 @@ public class QdrantRepository {
                     payload.get("content").getStringValue(),
                     payload.containsKey("source_file") ? payload.get("source_file").getStringValue() : null,
                     payload.containsKey("heading_path") ? payload.get("heading_path").getStringValue() : null,
-                    p.getScore()));
+                    p.getScore(),
+                    null));
         }
         return hits;
     }
@@ -162,6 +177,37 @@ public class QdrantRepository {
                         .addMust(match("project_id", projectId))
                         .addMust(matchKeyword("doc_id", docId))
                         .build()).get();
+    }
+
+    /**
+     * Stamps an access label on points that have none - the Qdrant half of the schema.sql
+     * backfill, for the corpus that was imported before access control existed.
+     *
+     * <p>Uses Qdrant's is_empty condition, which matches missing, null, and [] alike, so it only
+     * ever touches unlabelled points: a chunk deliberately restricted to one group is left alone
+     * and running this twice changes nothing.
+     *
+     * @return how many points were updated, as reported by Qdrant
+     */
+    public long backfillAllowedGroups(List<String> groups) throws ExecutionException, InterruptedException {
+        io.qdrant.client.grpc.Points.SetPayloadPoints request =
+                io.qdrant.client.grpc.Points.SetPayloadPoints.newBuilder()
+                        .setCollectionName(collection)
+                        .putPayload(ALLOWED_GROUPS, groupsValue(groups))
+                        .setPointsSelector(io.qdrant.client.grpc.Points.PointsSelector.newBuilder()
+                                .setFilter(io.qdrant.client.grpc.Points.Filter.newBuilder()
+                                        .addMust(isEmpty(ALLOWED_GROUPS))
+                                        .build())
+                                .build())
+                        .setWait(true)
+                        .build();
+        return client.setPayloadAsync(request, java.time.Duration.ofMinutes(2)).get().getOperationId();
+    }
+
+    private static Value groupsValue(List<String> groups) {
+        List<Value> values = new ArrayList<>();
+        for (String g : groups) values.add(value(g));
+        return io.qdrant.client.ValueFactory.list(values);
     }
 
     /** Deletes all Qdrant points belonging to the given project. */

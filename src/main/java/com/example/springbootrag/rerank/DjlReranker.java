@@ -53,7 +53,14 @@ public class DjlReranker implements Reranker {
                     .build();
             return criteria.loadModel();
         } catch (Exception e) {
-            throw new IllegalStateException("Failed to load reranker model: " + props.getModel(), e);
+            // The djl:// scheme resolves against DJL's own zoo (https://mlrepo.djl.ai), which only
+            // carries models DJL has pre-traced to TorchScript - it is NOT the HuggingFace Hub.
+            // An id that is missing there fails as "Invalid djl URL", which reads like a syntax
+            // error, so spell out the real cause here.
+            throw new IllegalStateException("Failed to load reranker model: " + props.getModel()
+                    + " - app.rerank.model must name a model published in DJL's own zoo"
+                    + " (https://mlrepo.djl.ai), not an arbitrary HuggingFace id."
+                    + " A missing id surfaces as \"Invalid djl URL\".", e);
         }
     }
 
@@ -77,7 +84,7 @@ public class DjlReranker implements Reranker {
                     .limit(topK)
                     .map(s -> new SearchHit(s.hit().id(), s.hit().docId(),
                             s.hit().chunkIndex(), s.hit().content(),
-                            s.hit().sourceFile(), s.hit().headingPath(), s.score()))
+                            s.hit().sourceFile(), s.hit().headingPath(), s.score(), s.hit().updatedAt()))
                     .toList();
         }
     }

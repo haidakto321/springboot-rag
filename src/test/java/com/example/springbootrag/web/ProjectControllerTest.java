@@ -2,10 +2,13 @@ package com.example.springbootrag.web;
 
 import com.example.springbootrag.service.ProjectService;
 import com.example.springbootrag.web.dto.ProjectSummary;
+import com.example.springbootrag.security.SecurityConfig;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.autoconfigure.web.servlet.WebMvcTest;
 import org.springframework.boot.test.mock.mockito.MockBean;
+import org.springframework.context.annotation.Import;
+import org.springframework.security.test.context.support.WithMockUser;
 import org.springframework.test.web.servlet.MockMvc;
 
 import java.util.List;
@@ -25,6 +28,8 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
 @WebMvcTest(ProjectController.class)
+@Import(SecurityConfig.class)   // exercise the real policy (stateless Basic, CSRF off), not the slice default
+@WithMockUser
 class ProjectControllerTest {
     @Autowired MockMvc mvc;
     @MockBean ProjectService svc;

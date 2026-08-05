@@ -1,0 +1,225 @@
+corpus:
+  projectId: 5
+  projectName: docmaster
+  docCount: 428
+  chunkCount: 7536
+questions:
+- Which two electronic-invoice formats are used for Germany?
+- From when is e-invoicing mandatory in Germany?
+- Which German forum is referenced for electronic-invoicing standards?
+- Which obsolete Java namespace is still used for the groupId and package names?
+- What documentation approach is endorsed for keeping docs near their source and maintainable?
+- What is the purpose of the System Context diagram in the platform architecture?
+- Why does retrieval-augmented generation need source highlighting?
+- Who is responsible for updating the list of extraordinary access grants?
+- What rating scale does the team skill matrix use to score knowledge levels?
+- Which ad-hoc administrator permissions across the platform are easy to forget and
+  should be reviewed periodically?
+- Which known shortcomings of the Job API and Data API are still open for the invoice
+  services?
+identity:
+  metrics:
+    fts:
+      recall5: 0.182
+      mrr: 0.182
+      hit1: 0.182
+    pgvector:
+      recall5: 0.909
+      mrr: 0.919
+      hit1: 0.909
+    qdrant:
+      recall5: 0.909
+      mrr: 0.919
+      hit1: 0.909
+    hybrid:
+      recall5: 0.909
+      mrr: 0.919
+      hit1: 0.909
+    rerank:
+      recall5: 0.909
+      mrr: 0.919
+      hit1: 0.909
+    graph:
+      recall5: 0.909
+      mrr: 0.919
+      hit1: 0.909
+  found:
+    fts:
+    - From when is e-invoicing mandatory in Germany?
+    - Who is responsible for updating the list of extraordinary access grants?
+    pgvector:
+    - Which two electronic-invoice formats are used for Germany?
+    - From when is e-invoicing mandatory in Germany?
+    - Which German forum is referenced for electronic-invoicing standards?
+    - Which obsolete Java namespace is still used for the groupId and package names?
+    - What documentation approach is endorsed for keeping docs near their source and
+      maintainable?
+    - What is the purpose of the System Context diagram in the platform architecture?
+    - Why does retrieval-augmented generation need source highlighting?
+    - Who is responsible for updating the list of extraordinary access grants?
+    - What rating scale does the team skill matrix use to score knowledge levels?
+    - Which ad-hoc administrator permissions across the platform are easy to forget
+      and should be reviewed periodically?
+    - Which known shortcomings of the Job API and Data API are still open for the
+      invoice services?
+    qdrant:
+    - Which two electronic-invoice formats are used for Germany?
+    - From when is e-invoicing mandatory in Germany?
+    - Which German forum is referenced for electronic-invoicing standards?
+    - Which obsolete Java namespace is still used for the groupId and package names?
+    - What documentation approach is endorsed for keeping docs near their source and
+      maintainable?
+    - What is the purpose of the System Context diagram in the platform architecture?
+    - Why does retrieval-augmented generation need source highlighting?
+    - Who is responsible for updating the list of extraordinary access grants?
+    - What rating scale does the team skill matrix use to score knowledge levels?
+    - Which ad-hoc administrator permissions across the platform are easy to forget
+      and should be reviewed periodically?
+    - Which known shortcomings of the Job API and Data API are still open for the
+      invoice services?
+    hybrid:
+    - Which two electronic-invoice formats are used for Germany?
+    - From when is e-invoicing mandatory in Germany?
+    - Which German forum is referenced for electronic-invoicing standards?
+    - Which obsolete Java namespace is still used for the groupId and package names?
+    - What documentation approach is endorsed for keeping docs near their source and
+      maintainable?
+    - What is the purpose of the System Context diagram in the platform architecture?
+    - Why does retrieval-augmented generation need source highlighting?
+    - Who is responsible for updating the list of extraordinary access grants?
+    - What rating scale does the team skill matrix use to score knowledge levels?
+    - Which ad-hoc administrator permissions across the platform are easy to forget
+      and should be reviewed periodically?
+    - Which known shortcomings of the Job API and Data API are still open for the
+      invoice services?
+    rerank:
+    - Which two electronic-invoice formats are used for Germany?
+    - From when is e-invoicing mandatory in Germany?
+    - Which German forum is referenced for electronic-invoicing standards?
+    - Which obsolete Java namespace is still used for the groupId and package names?
+    - What documentation approach is endorsed for keeping docs near their source and
+      maintainable?
+    - What is the purpose of the System Context diagram in the platform architecture?
+    - Why does retrieval-augmented generation need source highlighting?
+    - Who is responsible for updating the list of extraordinary access grants?
+    - What rating scale does the team skill matrix use to score knowledge levels?
+    - Which ad-hoc administrator permissions across the platform are easy to forget
+      and should be reviewed periodically?
+    - Which known shortcomings of the Job API and Data API are still open for the
+      invoice services?
+    graph:
+    - Which two electronic-invoice formats are used for Germany?
+    - From when is e-invoicing mandatory in Germany?
+    - Which German forum is referenced for electronic-invoicing standards?
+    - Which obsolete Java namespace is still used for the groupId and package names?
+    - What documentation approach is endorsed for keeping docs near their source and
+      maintainable?
+    - What is the purpose of the System Context diagram in the platform architecture?
+    - Why does retrieval-augmented generation need source highlighting?
+    - Who is responsible for updating the list of extraordinary access grants?
+    - What rating scale does the team skill matrix use to score knowledge levels?
+    - Which ad-hoc administrator permissions across the platform are easy to forget
+      and should be reviewed periodically?
+    - Which known shortcomings of the Job API and Data API are still open for the
+      invoice services?
+djl:
+  metrics:
+    fts:
+      recall5: 0.182
+      mrr: 0.182
+      hit1: 0.182
+    pgvector:
+      recall5: 0.909
+      mrr: 0.919
+      hit1: 0.909
+    qdrant:
+      recall5: 0.909
+      mrr: 0.919
+      hit1: 0.909
+    hybrid:
+      recall5: 0.909
+      mrr: 0.919
+      hit1: 0.909
+    rerank:
+      recall5: 0.909
+      mrr: 0.909
+      hit1: 0.909
+    graph:
+      recall5: 0.909
+      mrr: 0.909
+      hit1: 0.909
+  found:
+    fts:
+    - From when is e-invoicing mandatory in Germany?
+    - Who is responsible for updating the list of extraordinary access grants?
+    pgvector:
+    - Which two electronic-invoice formats are used for Germany?
+    - From when is e-invoicing mandatory in Germany?
+    - Which German forum is referenced for electronic-invoicing standards?
+    - Which obsolete Java namespace is still used for the groupId and package names?
+    - What documentation approach is endorsed for keeping docs near their source and
+      maintainable?
+    - What is the purpose of the System Context diagram in the platform architecture?
+    - Why does retrieval-augmented generation need source highlighting?
+    - Who is responsible for updating the list of extraordinary access grants?
+    - What rating scale does the team skill matrix use to score knowledge levels?
+    - Which ad-hoc administrator permissions across the platform are easy to forget
+      and should be reviewed periodically?
+    - Which known shortcomings of the Job API and Data API are still open for the
+      invoice services?
+    qdrant:
+    - Which two electronic-invoice formats are used for Germany?
+    - From when is e-invoicing mandatory in Germany?
+    - Which German forum is referenced for electronic-invoicing standards?
+    - Which obsolete Java namespace is still used for the groupId and package names?
+    - What documentation approach is endorsed for keeping docs near their source and
+      maintainable?
+    - What is the purpose of the System Context diagram in the platform architecture?
+    - Why does retrieval-augmented generation need source highlighting?
+    - Who is responsible for updating the list of extraordinary access grants?
+    - What rating scale does the team skill matrix use to score knowledge levels?
+    - Which ad-hoc administrator permissions across the platform are easy to forget
+      and should be reviewed periodically?
+    - Which known shortcomings of the Job API and Data API are still open for the
+      invoice services?
+    hybrid:
+    - Which two electronic-invoice formats are used for Germany?
+    - From when is e-invoicing mandatory in Germany?
+    - Which German forum is referenced for electronic-invoicing standards?
+    - Which obsolete Java namespace is still used for the groupId and package names?
+    - What documentation approach is endorsed for keeping docs near their source and
+      maintainable?
+    - What is the purpose of the System Context diagram in the platform architecture?
+    - Why does retrieval-augmented generation need source highlighting?
+    - Who is responsible for updating the list of extraordinary access grants?
+    - What rating scale does the team skill matrix use to score knowledge levels?
+    - Which ad-hoc administrator permissions across the platform are easy to forget
+      and should be reviewed periodically?
+    - Which known shortcomings of the Job API and Data API are still open for the
+      invoice services?
+    rerank:
+    - Which two electronic-invoice formats are used for Germany?
+    - From when is e-invoicing mandatory in Germany?
+    - Which German forum is referenced for electronic-invoicing standards?
+    - Which obsolete Java namespace is still used for the groupId and package names?
+    - What documentation approach is endorsed for keeping docs near their source and
+      maintainable?
+    - What is the purpose of the System Context diagram in the platform architecture?
+    - Why does retrieval-augmented generation need source highlighting?
+    - Who is responsible for updating the list of extraordinary access grants?
+    - What rating scale does the team skill matrix use to score knowledge levels?
+    - Which ad-hoc administrator permissions across the platform are easy to forget
+      and should be reviewed periodically?
+    graph:
+    - Which two electronic-invoice formats are used for Germany?
+    - From when is e-invoicing mandatory in Germany?
+    - Which German forum is referenced for electronic-invoicing standards?
+    - Which obsolete Java namespace is still used for the groupId and package names?
+    - What documentation approach is endorsed for keeping docs near their source and
+      maintainable?
+    - What is the purpose of the System Context diagram in the platform architecture?
+    - Why does retrieval-augmented generation need source highlighting?
+    - Who is responsible for updating the list of extraordinary access grants?
+    - What rating scale does the team skill matrix use to score knowledge levels?
+    - Which ad-hoc administrator permissions across the platform are easy to forget
+      and should be reviewed periodically?

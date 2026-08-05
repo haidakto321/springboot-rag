@@ -18,7 +18,7 @@
 		<java.version>21</java.version>
 		<!-- Default excluded JUnit groups for the normal build. Override to empty to run eval tests:
 		     ./mvnw test "-Dgroups=eval" "-DexcludedGroups=" -->
-		<excludedGroups>eval,eval-judge</excludedGroups>
+		<excludedGroups>eval,eval-judge,eval-wiki,eval-feedback</excludedGroups>
 		<qdrant.client.version>1.15.0</qdrant.client.version>
 		<springdoc.version>2.8.4</springdoc.version>
 		<mockwebserver.version>4.12.0</mockwebserver.version>
@@ -63,6 +63,17 @@
 		<dependency>
 			<groupId>org.springframework.boot</groupId>
 			<artifactId>spring-boot-starter-jdbc</artifactId>
+		</dependency>
+		<!-- Permission-aware retrieval (docs/RAG-MASTERY.md section 1): the principal that drives
+		     the access filter must come from a real filter chain, not from a request parameter. -->
+		<dependency>
+			<groupId>org.springframework.boot</groupId>
+			<artifactId>spring-boot-starter-security</artifactId>
+		</dependency>
+		<dependency>
+			<groupId>org.springframework.security</groupId>
+			<artifactId>spring-security-test</artifactId>
+			<scope>test</scope>
 		</dependency>
 		<dependency>
 			<groupId>org.springframework.boot</groupId>

@@ -1,6 +1,7 @@
 package com.example.springbootrag.repository;
 
 import com.example.springbootrag.model.SearchHit;
+import com.example.springbootrag.security.SearchContext;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Repository;
 
@@ -20,8 +21,11 @@ public class PgFtsRepository {
      * Postgres native full-text search ranked by ts_rank.
      * Uses websearch_to_tsquery: web-search-style syntax (OR, "phrase", -negation).
      * Empty projectIds / docIds list means that filter is absent.
+     *
+     * <p>The access-label filter from {@code ctx} is applied INSIDE this query, so a row the
+     * caller may not read never reaches ranking, fusion, the reranker, or a log line.
      */
-    public List<SearchHit> search(String query, int topK,
+    public List<SearchHit> search(SearchContext ctx, String query, int topK,
                                   List<Long> projectIds, List<String> docIds) {
         String projectClause = DocFilter.active(projectIds)
                 ? " AND project_id IN (" + DocFilter.placeholders(projectIds.size()) + ")"
@@ -32,14 +36,16 @@ public class PgFtsRepository {
         List<Object> args = new ArrayList<>();
         args.add(query);
         args.add(query);
+        args.addAll(ctx.groups());
         if (DocFilter.active(projectIds)) args.addAll(projectIds);
         if (DocFilter.active(docIds)) args.addAll(docIds);
         args.add(topK);
         return jdbc.query(
-                "SELECT id, doc_id, chunk_index, content, source_file, heading_path, " +
+                "SELECT id, doc_id, chunk_index, content, source_file, heading_path, updated_at, " +
                         "       ts_rank(tsv, websearch_to_tsquery('english', ?)) AS rank " +
                         "FROM chunks " +
-                        "WHERE tsv @@ websearch_to_tsquery('english', ?)" + projectClause + docClause + " " +
+                        "WHERE tsv @@ websearch_to_tsquery('english', ?)" +
+                        " AND" + DocFilter.groupClause(ctx.groups()) + projectClause + docClause + " " +
                         "ORDER BY rank DESC LIMIT ?",
                 (rs, rowNum) -> new SearchHit(
                         rs.getLong("id"),
@@ -48,7 +54,8 @@ public class PgFtsRepository {
                         rs.getString("content"),
                         rs.getString("source_file"),
                         rs.getString("heading_path"),
-                        rs.getDouble("rank")),
+                        rs.getDouble("rank"),
+                        PgVectorRepository.toInstant(rs.getTimestamp("updated_at"))),
                 args.toArray());
     }
 }

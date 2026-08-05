@@ -22,6 +22,19 @@ spring:
       request-timeout: 600000   # 10 minutes; -1 would disable the timeout entirely
 
 app:
+  # Two fake users in different groups - the smallest setup that can prove permission-aware
+  # retrieval works (docs/RAG-MASTERY.md section 1). Plain-text passwords and an in-memory
+  # directory are SANDBOX ONLY; a real system swaps this whole block for an identity provider.
+  security:
+    default-group: public          # stamped on ingest when no groups are named
+    backfill-qdrant-groups: true   # label pre-ACL Qdrant points at startup, like schema.sql does for Postgres
+    users:
+      - username: alice
+        password: alice
+        groups: [public, hr]
+      - username: haiks
+        password: 123123
+        groups: [public, eng]
   embedding:
     provider: ollama
     model: nomic-embed-text
@@ -37,10 +50,24 @@ app:
     port: 6334
     collection: chunks
   rerank:
-    provider: ""          # set to "djl" to enable the real bge-reranker cross-encoder
-    model: BAAI/bge-reranker-base
+    provider: ""          # set to "djl" to enable the real cross-encoder
+    # Must exist in DJL's own zoo (https://mlrepo.djl.ai), not just on HuggingFace - djl:// needs
+    # a pre-traced TorchScript build. Heavier alternative: BAAI/bge-reranker-v2-m3.
+    model: cross-encoder/mmarco-mMiniLMv2-L12-H384-v1
     candidates: 50        # hybrid candidates fed to the reranker before trimming to topK
     maxLength: 512
+  graph:
+    enabled: true
+    # structural | semantic | both.
+    # structural (default): link/hierarchy edges only - fast, no LLM.
+    # semantic | both: entity extraction runs ONE LLM (app.chat.model) call PER CHUNK at
+    #   ingest AND one extraction call per graph query. Opt in when you want orphan
+    #   reconnection via shared entities; expect much slower ingest on large corpora.
+    edges: structural
+    neighbor-hops: 1
+    candidates: 50
+    extract-model: ""      # RESERVED - not yet wired; extraction currently uses app.chat.model
+    min-mentions: 1
 
 management:
   endpoints:

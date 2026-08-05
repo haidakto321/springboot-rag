@@ -42,7 +42,7 @@ public class RrfFusion {
                 .map(e -> {
                     SearchHit h = byId.get(e.getKey());
                     return new SearchHit(h.id(), h.docId(), h.chunkIndex(), h.content(),
-                            h.sourceFile(), h.headingPath(), e.getValue());
+                            h.sourceFile(), h.headingPath(), e.getValue(), h.updatedAt());
                 })
                 .toList();
     }

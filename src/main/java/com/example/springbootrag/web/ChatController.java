@@ -1,5 +1,7 @@
 package com.example.springbootrag.web;
 
+import com.example.springbootrag.security.CurrentUser;
+import com.example.springbootrag.security.SearchContext;
 import com.example.springbootrag.service.ChatService;
 import com.example.springbootrag.service.ProjectService;
 import com.example.springbootrag.web.dto.AskResponse;
@@ -30,11 +32,14 @@ public class ChatController {
     private final ChatService chatService;
     private final ObjectMapper mapper;
     private final ProjectService projectService;
+    private final CurrentUser currentUser;
 
-    public ChatController(ChatService chatService, ObjectMapper mapper, ProjectService projectService) {
+    public ChatController(ChatService chatService, ObjectMapper mapper, ProjectService projectService,
+                          CurrentUser currentUser) {
         this.chatService = chatService;
         this.mapper = mapper;
         this.projectService = projectService;
+        this.currentUser = currentUser;
     }
 
     @PostMapping(value = "/chat/stream", produces = "application/x-ndjson")
@@ -44,12 +49,25 @@ public class ChatController {
         }
         // Resolve project scope before the stream starts so any bad projectId fails fast (400/500).
         List<Long> scope = projectService.resolveScope(req.projectId(), req.group());
+        // The identity MUST be captured on the request thread: the body below runs on an async
+        // thread where the SecurityContext thread-local is no longer populated, and resolving it
+        // there would either fail or, worse, pick up whatever that pooled thread last held.
+        SearchContext ctx = currentUser.context();
         return out -> {
             try {
-                List<AskResponse.Source> sources =
-                        chatService.chatStream(req.messages(), scope, req.docIds(),
-                                token -> writeFrame(out, Map.of("type", "token", "text", token)));
-                writeFrame(out, Map.of("type", "sources", "sources", sources));
+                ChatService.StreamOutcome outcome =
+                        chatService.chatStream(ctx, req.messages(), scope, req.docIds(), req.think(),
+                                token -> writeFrame(out, Map.of("type", "token", "text", token)),
+                                reasoning -> writeFrame(out, Map.of("type", "reasoning", "text", reasoning)));
+                writeFrame(out, Map.of("type", "sources", "sources", outcome.sources()));
+                // Hands the client the id of the trace row for this answer, so the debug view can
+                // show exactly the request the user is looking at rather than "the latest one".
+                writeFrame(out, Map.of("type", "trace", "requestId", outcome.requestId().toString()));
+                // The tokens are already on the wire, so a failed grounding check can only be
+                // reported, not applied. The UI turns this into a warning on the answer.
+                if (!outcome.verdict().allowed()) {
+                    writeFrame(out, Map.of("type", "guard", "reason", outcome.verdict().reason()));
+                }
                 writeFrame(out, Map.of("type", "done"));
             } catch (Exception e) {
                 // Response is already committed (200), so report the failure as a frame.

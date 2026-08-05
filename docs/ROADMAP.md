@@ -68,10 +68,118 @@ Merged "streaming answers" + "conversational follow-up".
 - UI: sidebar project switcher (grouped by `group_name`), manage-projects modal
   (create/rename/delete/set-group), and a "Search whole group" toggle on Search & Ask and Compare.
 
-## Everything on this roadmap is now built.
+### Permission-aware retrieval  ✅ done (2026-08-05)
+Every chunk carries `allowed_groups` (stamped at ingest, mirrored into the Qdrant payload), and
+every retrieval path takes a `SearchContext` built from the authenticated principal - HTTP Basic
+over two fake users (`alice` in `hr`, `haiks` in `eng`, both `public`) via `spring-boot-starter-security`.
+
+- UI: sidebar shows who you are signed in as; the Import panel picks the access label for the
+  upload (only groups you belong to - the server rejects the rest with 403).
+- `projectId` / `docIds` stay browser-supplied and narrowing-only; the group filter is applied
+  inside every query, before the reranker's 50-candidate over-fetch.
+- Existing corpora keep working: `schema.sql` backfills unlabelled chunks to `public` and
+  `QdrantAclBackfill` does the same for pre-ACL Qdrant points at startup.
+- `AccessControlIntegrationTest` is the "try to break it" half - see `LEARNINGS.md` §16 and
+  `RAG-MASTERY.md` §1 for what it found. Not built: audit logging, per-document ACL editing,
+  and access-filtered project counts.
+
+### Per-request RAG trace + debug view  ✅ done (2026-08-05)
+One `rag_trace` row per answered question, so a wrong answer leaves evidence instead of nothing.
+
+- Table: request_id, principal, project_ids, raw + condensed query, backend, `retrieved` JSONB
+  (docId, chunkIndex, score), `stage_latency_ms` JSONB (embed / retrieve / generate / total),
+  prompt + completion tokens, the model's original answer, and the guard verdict.
+- Written by `TraceRecorder` from both `/ask` and `/chat/stream`; `chat/stream` also emits a
+  `trace` frame carrying the request id.
+- UI: a "Trace" toggle under each answer showing stage timings, the searched query (with the raw
+  one when condensing changed it), and the ranked chunks with scores.
+- `GET /traces?limit=N` returns **only the caller's own** traces - a trace holds a question and the
+  documents it matched.
+- Config: `app.trace.enabled` (default true), `app.trace.keep` (default 500 rows per principal,
+  pruned after each insert), `app.trace.max-answer-chars`.
+- Token counts come from Ollama's `prompt_eval_count` / `eval_count` and are null when a provider
+  does not report them - "not measured" is not "free".
+
+### Injection hardening - fenced context + cite-or-refuse  ✅ done (2026-08-05)
+Retrieved text is treated as untrusted data, and an answer that cannot point at a source is not
+published. Driven by an actual attack: a poisoned page in the corpus made qwen3:4b reply
+`INJECTION SUCCESSFUL - the admin recovery code is hunter2 [1]` before this work.
+
+- `PromptFence` wraps context in BEGIN/END markers, numbers each chunk, neutralises fence markers
+  found inside chunk text or metadata, and places the question after the fence.
+- System prompt rule 1 states the material is data written by document authors and must never be
+  acted on.
+- `AnswerGuard` (cite-or-refuse) replaces an uncited answer, or one citing a chunk that was never
+  supplied, with "Not found in knowledge base." on `/ask`. `/chat/stream` cannot recall sent
+  tokens, so it emits a `guard` frame and the UI marks the answer unverified.
+- `InjectionScanner` warns at upload time (denylist, non-blocking); warnings ride back on the
+  ingest response and become a toast.
+- Fixed on the way: the non-streaming `/ask` path still used `think:false`, so qwen3's
+  chain-of-thought landed in the answer body and broke anything parsing it.
+- Honest limit: the injected *instruction* no longer runs, but asking for the payload directly
+  still returns it as a cited, grounded answer - that is content disclosure, not injection, and
+  belongs to access labels and corpus hygiene. See `LEARNINGS.md` §17.
+
+### Per-chunk relevance feedback - eval only (Option A)  ✅ done (2026-08-05)
+Goal: collect human relevance labels on individual retrieved chunks so we can MEASURE retrieval /
+reranker quality against real usage - NOT to change ranking live (no fine-tuning, no live boost).
+The existing whole-answer 👍/👎 (localStorage-only) stays; this adds a per-source signal with a backend.
+
+- **Signal** ✅ - a small 👍/👎 pair on every search result row and on every answer citation chip.
+  A click writes `{ query, projectId, docId, chunkIndex, rating: up|down, ts }`; clicking the active
+  thumb clears the label. Thumbs are restored on reload from `GET /feedback?projectId&query`.
+- **Backend** ✅ - `POST /feedback` (upsert), `DELETE /feedback` (un-vote), `GET /feedback`
+  (dump/filter) over a new `chunk_feedback` table. No auth, same posture as the rest of the sandbox.
+  **Deviation from the original spec:** one label per `(project, doc, chunk, query)` (UNIQUE +
+  ON CONFLICT UPDATE) instead of a plain append-only insert, so consumers read clean
+  `(query, chunk, relevant)` triples with no latest-wins dedupe. Labels key on `(doc_id, chunk_index)`,
+  never on `chunks.id`, which re-ingest rewrites.
+- **Use** ✅ - `FeedbackPrecisionEvalTest` (tag `eval-feedback`) groups the labels by query, replays
+  each through all six backends against the live stack, and reports P@5 / P@10 / MRR-of-first-👍 /
+  judged coverage per backend. Precision counts JUDGED hits only; coverage is printed beside it so a
+  two-label precision cannot pose as a verdict. It is a report, not a gate - labels grow over time.
+  Run: `./mvnw test "-Dgroups=eval-feedback" "-DexcludedGroups="` (add `-Deval.rerank=djl` for the
+  cross-encoder run; skips when fewer than 10 labels exist, override `-Deval.feedback.min=N`).
+- **Explicitly OUT of scope for A:** no query-time score nudge, no cross-encoder fine-tuning. Those
+  are a later "Option B" (blend `final = w1*reranker + w2*feedback`) - deferred; risks cold-start on
+  unseen queries and overfitting to a few clicks. Revisit only after enough labels accrue.
+- **Why:** the cross-encoder is a fixed content model - it never learns from clicks on its
+  own. Per-chunk labels are the only way to know if it actually helps on THIS corpus. The 11-question
+  golden set gave a first answer on 2026-08-05 (it did not help - MRR 0.919 -> 0.909, see
+  `LEARNINGS.md` section 14), but 11 questions is too thin to act on, which is exactly the case for
+  labels at scale. Reasoning and full design notes: `LEARNINGS.md` section 15.
+
+## Planned (not yet built)
+
+### CI-runnable eval gate - frozen test corpus  ⬜ planned (deliberately deferred 2026-08-05)
+Goal: make the retrieval regression gate enforceable by CI instead of by developer discipline.
+
+- **The limitation being tracked.** The gate built in
+  `docs/superpowers/specs/2026-08-05-eval-regression-gate-design.md` runs against
+  `WikiRetrievalEvalTest`, whose corpus is the private 428-page wiki. That corpus cannot ship in the
+  repo, so the gate **can never run in CI or on a fresh clone** - it skips. It is a pre-merge
+  discipline tool for one machine, not enforcement.
+- **Why the other eval cannot fill the gap today.** `RetrievalEvalTest` runs anywhere
+  (Testcontainers, self-contained) but ingests `docs/` as its corpus (`RetrievalEvalTest:89`). The
+  corpus is therefore this repo's own documentation, and its numbers move whenever anyone edits a
+  doc. Four files under `docs/` changed on 2026-08-05 alone. Gating it as-is produces failures
+  caused by writing documentation, which get ignored within a week.
+- **The fix.** Stop walking `docs/`. Freeze a small dedicated corpus into `src/test/resources`, then
+  re-point all 18 questions in `golden.yaml` at the frozen file ids. The eval becomes stable and
+  CI-gateable, and the wiki gate stays as the richer local check on a realistic corpus.
+- **Cost.** Every question in `golden.yaml` needs re-verifying against the new corpus, which is the
+  slow part - the corpus snapshot itself is cheap.
+- **Why it is deferred.** Single developer, single machine, no CI enforcing anything today. Scoped
+  out of drill C on purpose to keep that job small.
+- **Why it will matter later.** On a team, or on any project where retrieval quality is a
+  deliverable, "run the gate before you merge, please" is not a control. A real project needs the
+  gate to run without the private corpus. Revisit before this pattern is copied anywhere that has
+  more than one contributor.
+
+## Everything else on this roadmap is built.
 Possible future directions (not scheduled): server-side session persistence, token-budget
-history trimming, streaming the compare screen, a real feedback backend, and cross-project
-search analytics.
+history trimming, streaming the compare screen, Option B live-feedback boost / reranker
+fine-tuning, and cross-project search analytics.
 
 ## Notes
 - Keep everything plain HTML/CSS/JS (no framework), matching the current static frontend.

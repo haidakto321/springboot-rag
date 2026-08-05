@@ -1,11 +1,15 @@
 package com.example.springbootrag.web;
 
+import com.example.springbootrag.guard.InjectionScanner;
 import com.example.springbootrag.model.DocumentSummary;
 import com.example.springbootrag.repository.PgVectorRepository;
+import com.example.springbootrag.security.CurrentUser;
 import com.example.springbootrag.service.IngestService;
 import com.example.springbootrag.service.ProjectService;
 import com.example.springbootrag.web.dto.ChunkView;
 import com.example.springbootrag.web.dto.IngestResponse;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.http.MediaType;
 import org.springframework.web.bind.annotation.*;
 import org.springframework.web.multipart.MultipartFile;
@@ -20,37 +24,45 @@ import java.util.List;
 @RestController
 public class DocumentController {
 
+    private static final Logger log = LoggerFactory.getLogger(DocumentController.class);
+
     private static final long MAX_BYTES = 2 * 1024 * 1024;
 
     private final IngestService ingestService;
     private final PgVectorRepository pgVector;
     private final ProjectService projectService;
+    private final CurrentUser currentUser;
 
     public DocumentController(IngestService ingestService,
                               PgVectorRepository pgVector,
-                              ProjectService projectService) {
+                              ProjectService projectService,
+                              CurrentUser currentUser) {
         this.ingestService = ingestService;
         this.pgVector = pgVector;
         this.projectService = projectService;
+        this.currentUser = currentUser;
     }
 
     // ---- Legacy endpoints (scoped to Default project) ------------------------------------
 
     @PostMapping(value = "/documents", consumes = MediaType.MULTIPART_FORM_DATA_VALUE)
-    public IngestResponse upload(@RequestParam("file") MultipartFile file) {
+    public IngestResponse upload(@RequestParam("file") MultipartFile file,
+                                 @RequestParam(required = false) List<String> groups) {
+        currentUser.requireOwnGroups(groups);
         UploadResult u = parseUpload(file);
-        int stored = ingestService.ingestMarkdown(u.docId(), u.sourceFile(), u.text());
-        return new IngestResponse(u.docId(), stored);
+        int stored = ingestService.ingestMarkdown(projectService.defaultProjectId(),
+                u.docId(), u.sourceFile(), u.text(), null, groups);
+        return new IngestResponse(u.docId(), stored, scanForInjection(u));
     }
 
     @GetMapping("/documents")
     public List<DocumentSummary> list() {
-        return pgVector.listDocuments(projectService.defaultProjectId());
+        return pgVector.listDocuments(currentUser.context(), projectService.defaultProjectId());
     }
 
     @GetMapping("/documents/{docId}/chunks")
     public List<ChunkView> chunks(@PathVariable String docId) {
-        return pgVector.listChunks(projectService.defaultProjectId(), docId);
+        return pgVector.listChunks(currentUser.context(), projectService.defaultProjectId(), docId);
     }
 
     @DeleteMapping("/documents/{docId}")
@@ -60,18 +72,25 @@ public class DocumentController {
 
     // ---- Project-scoped endpoints --------------------------------------------------------
 
+    /**
+     * {@code groups} is the access label for every chunk of this document; omitted means the
+     * configured default group. Unknown group names are rejected by IngestService, so a typo
+     * cannot produce a document that is silently invisible to everyone.
+     */
     @PostMapping(value = "/projects/{projectId}/documents", consumes = MediaType.MULTIPART_FORM_DATA_VALUE)
     public IngestResponse uploadToProject(@PathVariable long projectId,
-                                          @RequestParam("file") MultipartFile file) {
+                                          @RequestParam("file") MultipartFile file,
+                                          @RequestParam(required = false) List<String> groups) {
         if (!projectService.exists(projectId)) throw new IllegalArgumentException("project not found: " + projectId);
+        currentUser.requireOwnGroups(groups);
         UploadResult u = parseUpload(file);
-        int stored = ingestService.ingestMarkdown(projectId, u.docId(), u.sourceFile(), u.text());
-        return new IngestResponse(u.docId(), stored);
+        int stored = ingestService.ingestMarkdown(projectId, u.docId(), u.sourceFile(), u.text(), null, groups);
+        return new IngestResponse(u.docId(), stored, scanForInjection(u));
     }
 
     @GetMapping("/projects/{projectId}/documents")
     public List<DocumentSummary> listForProject(@PathVariable long projectId) {
-        return pgVector.listDocuments(projectId);
+        return pgVector.listDocuments(currentUser.context(), projectId);
     }
 
     @DeleteMapping("/projects/{projectId}/documents/{docId}")
@@ -82,7 +101,7 @@ public class DocumentController {
     @GetMapping("/projects/{projectId}/documents/{docId}/chunks")
     public List<ChunkView> chunksForProject(@PathVariable long projectId,
                                             @PathVariable String docId) {
-        return pgVector.listChunks(projectId, docId);
+        return pgVector.listChunks(currentUser.context(), projectId, docId);
     }
 
     // ---- Shared upload logic -------------------------------------------------------------
@@ -105,6 +124,19 @@ public class DocumentController {
     }
 
     private record UploadResult(String docId, String sourceFile, String text) {}
+
+    /**
+     * Warn, do not block. The scan is a denylist and will both miss careful attacks and fire on
+     * legitimate pages about prompt injection, so refusing the upload would be wrong - but the
+     * moment of upload is the one moment a human is looking at this document.
+     */
+    private List<String> scanForInjection(UploadResult u) {
+        List<String> warnings = InjectionScanner.scan(u.text());
+        if (!warnings.isEmpty()) {
+            log.warn("document '{}' contains prompt-injection patterns: {}", u.docId(), warnings);
+        }
+        return warnings;
+    }
 
     /* Strict UTF-8 decode: malformed bytes are a client error, not replacement chars. */
     private static String decodeUtf8(MultipartFile file) {

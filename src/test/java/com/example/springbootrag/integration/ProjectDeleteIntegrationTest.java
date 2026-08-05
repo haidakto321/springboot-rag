@@ -5,6 +5,7 @@ import com.example.springbootrag.model.SearchHit;
 import com.example.springbootrag.service.IngestService;
 import com.example.springbootrag.service.ProjectService;
 import com.example.springbootrag.service.SearchService;
+import com.example.springbootrag.security.TestContexts;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
@@ -24,7 +25,9 @@ import java.util.List;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
-@SpringBootTest
+// edges=structural: no ChatProvider stub here, so pin the mode to avoid a real-Ollama
+// call from the app-wide "both" default.
+@SpringBootTest(properties = "app.graph.edges=structural")
 @Testcontainers
 class ProjectDeleteIntegrationTest {
 
@@ -85,7 +88,7 @@ class ProjectDeleteIntegrationTest {
         ingestService.ingestMarkdown(projectId, "d", "d.md", "# T\n\npressure content");
 
         // Verify the chunk is searchable in Qdrant before delete.
-        List<SearchHit> before = searchService.search("qdrant", "pressure", 10,
+        List<SearchHit> before = searchService.search(TestContexts.PUBLIC, "qdrant", "pressure", 10,
                 List.of(projectId), List.of());
         assertThat(before).as("qdrant should return hit before delete").isNotEmpty();
 
@@ -99,7 +102,7 @@ class ProjectDeleteIntegrationTest {
 
         // Assert Qdrant no longer returns the doc - unscoped search on "pressure",
         // docId "d" from the deleted project must not appear.
-        List<SearchHit> after = searchService.search("qdrant", "pressure", 10,
+        List<SearchHit> after = searchService.search(TestContexts.PUBLIC, "qdrant", "pressure", 10,
                 List.of(), List.of());
         boolean docStillPresent = after.stream()
                 .anyMatch(h -> "d".equals(h.docId()));

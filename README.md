@@ -128,8 +128,8 @@ Swagger UI: http://localhost:8085/swagger-ui.html
 
 ## Endpoints
 - `POST /ingest` - ingest a document `{ "docId": "...", "text": "..." }`
-- `GET /search?q=...&type=fts|pgvector|qdrant|hybrid|rerank&topK=10` - optional `projectId=<id>` or `group=true` to scope results
-- `GET /compare?q=...&topK=10` - all backends side by side (scores + timing), including the `rerank` column; accepts optional `projectId` / `group=true`
+- `GET /search?q=...&type=fts|pgvector|qdrant|hybrid|rerank|graph&topK=10` - optional `projectId=<id>` or `group=true` to scope results
+- `GET /compare?q=...&topK=10` - all backends side by side (scores + timing), including the `rerank` and `graph` columns; accepts optional `projectId` / `group=true`
 - `DELETE /docs/{docId}`
 - `GET /actuator/health`
 
@@ -139,15 +139,55 @@ cross-encoder, then trims to `topK`. By default the reranker is a no-op `Identit
 app and tests stay light and offline (no model download).
 
 To enable the real cross-encoder, set `app.rerank.provider=djl` (in `application.yml` or as
-`--app.rerank.provider=djl`). The first run downloads the `BAAI/bge-reranker-base` model **and** the
-native PyTorch libraries (hundreds of MB) via DJL, then runs locally/offline after that.
+`--app.rerank.provider=djl`). The first run downloads the model (about 470 MB) **and** the native
+PyTorch libraries via DJL, then runs locally/offline after that. DJL falls back to the CPU engine
+when there is no supported CUDA build, so each query costs `app.rerank.candidates` CPU forward
+passes.
+
+> `app.rerank.model` must name a model published in **DJL's own zoo** (<https://mlrepo.djl.ai>),
+> not an arbitrary HuggingFace id - `djl://` needs a pre-traced TorchScript build. An id that is
+> missing there fails with the misleading message `Invalid djl URL`. The only other cross-encoder
+> in that catalog today is `BAAI/bge-reranker-v2-m3` (stronger, but roughly 2.2 GB).
 
 | property | default | meaning |
 |---|---|---|
-| `app.rerank.provider` | `""` | `djl` = real bge-reranker; anything else = `IdentityReranker` |
-| `app.rerank.model` | `BAAI/bge-reranker-base` | HuggingFace cross-encoder id |
+| `app.rerank.provider` | `""` | `djl` = real cross-encoder; anything else = `IdentityReranker` |
+| `app.rerank.model` | `cross-encoder/mmarco-mMiniLMv2-L12-H384-v1` | cross-encoder id, must exist in DJL's zoo |
 | `app.rerank.candidates` | `50` | hybrid candidates fed to the reranker before trimming to `topK` |
-| `app.rerank.maxLength` | `512` | tokenizer max sequence length |
+| `app.rerank.maxLength` | `512` | tokenizer max sequence length (currently not applied - see `docs/implementation-notes.md`) |
+
+## Graph retrieval (`type=graph`, GraphRAG)
+
+`graph` seeds with `hybrid`, then expands over a knowledge graph before reranking, so it can
+surface pages that keyword/vector search miss - especially **orphan pages** (no inbound links)
+reconnected through a shared entity. Two edge sources, selected by `app.graph.edges`:
+
+- **structural** (default): parse the wiki's own markdown links + `.order` hierarchy into
+  `doc_edge`. Free, instant, no LLM. Retrieval hops from seed pages to linked pages.
+- **semantic** / **both**: additionally run entity extraction so pages that mention the same
+  entity are connected even without an explicit link (this is what reconnects orphans).
+
+> **Cost warning:** `semantic` and `both` run **one LLM call (`app.chat.model`) per chunk at
+> ingest** and one extraction call per graph query. On a large corpus (e.g. a few hundred wiki
+> pages) that is thousands of calls - expect much slower imports. The default is `structural`
+> precisely to avoid this surprise; opt into the entity layer explicitly when you want it.
+
+Enable the entity layer via `application.yml` or a flag: `--app.graph.edges=both`. Extraction is
+best-effort - if the chat model is unavailable, ingest still succeeds (just without entities).
+`graph` also carries a per-document **recency tiebreak**: among equally-relevant chunks the newer
+document (by git commit date, populated by the bulk importer) ranks first.
+
+| property | default | meaning |
+|---|---|---|
+| `app.graph.enabled` | `true` | master switch for graph expansion |
+| `app.graph.edges` | `structural` | `structural` \| `semantic` \| `both` |
+| `app.graph.neighbor-hops` | `1` | graph traversal depth |
+| `app.graph.candidates` | `50` | seed candidates gathered before rerank |
+| `app.graph.min-mentions` | `1` | drop entities mentioned fewer than N times at query match |
+| `app.graph.extract-model` | `""` | RESERVED - not yet wired; extraction uses `app.chat.model` |
+
+Bulk-import an Azure DevOps wiki clone (structural edges + git-date recency) with the
+`WikiImporter` dev component; the gated `WikiImporterManualTest` shows the entry point.
 
 ## Knowledge base
 
@@ -190,6 +230,36 @@ ollama serve          # runs on localhost:11434
 ./mvnw test "-Dgroups=eval" "-DexcludedGroups="        # retrieval metrics (top-K recall, MRR, hit@1)
 ./mvnw test "-Dgroups=eval-judge" "-DexcludedGroups="  # faithfulness smoke report (LLM judge, yes/no per answer)
 ```
+
+Wiki corpus eval (real 428-page corpus, live stack - NOT Testcontainers):
+```bash
+./mvnw test "-Dgroups=eval-wiki" "-DexcludedGroups="
+```
+Prereqs: Postgres + Qdrant up, Ollama with nomic-embed-text, and the wiki already imported into
+a project named "docmaster" (override with `-Deval.wiki.project=<name>`). The test is read-only
+and skips itself when the corpus is absent. Add `-Deval.rerank=djl` to run with the real
+cross-encoder instead of the no-op reranker (first run downloads about 470 MB; see the
+Reranking section above, and `docs/LEARNINGS.md` section 14 for what that comparison measured).
+
+This eval is a **regression gate**, not only a report: it fails when a backend drops below
+`src/test/resources/eval/baseline-wiki.yaml` by more than 0.02 on recall@5, MRR, or hit@1, or when
+any question the baseline found is no longer found at all. That second rule matters more than it
+sounds - the 2026-08-05 cross-encoder regression left recall@5 and hit@1 completely unmoved and
+shifted MRR by only 0.010, because the question it lost had been at rank 9, outside both windows.
+Each reranker variant has its own baseline section, since `-Deval.rerank=djl` legitimately changes
+the expected numbers.
+
+After re-importing the wiki the baseline is stale by construction, because chunk ids shift. The
+gate detects that from the recorded doc and chunk counts and tells you to regenerate, instead of
+reporting six fake backend regressions:
+
+```bash
+./mvnw test "-Dgroups=eval-wiki" "-DexcludedGroups=" "-Deval.baseline.update=true"
+```
+
+That rewrites the current variant's section, leaves the other variant untouched, and skips the
+assertions for that run. Review the resulting diff before committing it: accepting a lower baseline
+should always be a deliberate, visible act.
 
 ## Run in WSL2 (no Docker Desktop)
 

@@ -67,3 +67,114 @@ END;
 CREATE OR REPLACE TRIGGER trg_chunks_default_project
     BEFORE INSERT ON chunks
     FOR EACH ROW EXECUTE FUNCTION fn_chunks_default_project();
+
+-- ---- GraphRAG structural graph (Phase 1) ----
+
+ALTER TABLE chunks ADD COLUMN IF NOT EXISTS updated_at TIMESTAMPTZ;
+
+CREATE TABLE IF NOT EXISTS doc_edge (
+    id         BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+    project_id BIGINT NOT NULL,
+    src_doc    VARCHAR(255) NOT NULL,
+    dst_doc    VARCHAR(255) NOT NULL,
+    kind       VARCHAR(32)  NOT NULL,   -- 'link' | 'hierarchy'
+    created_at TIMESTAMP DEFAULT now(),
+    UNIQUE (project_id, src_doc, dst_doc, kind)
+);
+
+CREATE INDEX IF NOT EXISTS idx_doc_edge_dst ON doc_edge (project_id, dst_doc);
+
+DO '
+BEGIN
+    ALTER TABLE doc_edge ADD CONSTRAINT fk_doc_edge_project
+        FOREIGN KEY (project_id) REFERENCES projects(id) ON DELETE CASCADE;
+EXCEPTION WHEN duplicate_object THEN NULL;
+END
+';
+
+-- ---- GraphRAG semantic layer (Phase 2) ----
+
+CREATE TABLE IF NOT EXISTS entity (
+    id            BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+    project_id    BIGINT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+    name_norm     TEXT NOT NULL,
+    name_display  TEXT NOT NULL,
+    type          VARCHAR(64),
+    mention_count INT NOT NULL DEFAULT 0,
+    created_at    TIMESTAMP DEFAULT now(),
+    UNIQUE (project_id, name_norm)
+);
+
+CREATE TABLE IF NOT EXISTS chunk_entity (
+    chunk_id  BIGINT NOT NULL REFERENCES chunks(id) ON DELETE CASCADE,
+    entity_id BIGINT NOT NULL REFERENCES entity(id) ON DELETE CASCADE,
+    PRIMARY KEY (chunk_id, entity_id)
+);
+
+CREATE TABLE IF NOT EXISTS entity_edge (
+    id         BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+    project_id BIGINT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+    src_entity BIGINT NOT NULL REFERENCES entity(id) ON DELETE CASCADE,
+    dst_entity BIGINT NOT NULL REFERENCES entity(id) ON DELETE CASCADE,
+    relation   VARCHAR(128) NOT NULL,
+    weight     DOUBLE PRECISION NOT NULL DEFAULT 1.0,
+    UNIQUE (project_id, src_entity, dst_entity, relation)
+);
+
+CREATE INDEX IF NOT EXISTS idx_chunk_entity_entity ON chunk_entity (entity_id);
+CREATE INDEX IF NOT EXISTS idx_entity_edge_src ON entity_edge (project_id, src_entity);
+CREATE INDEX IF NOT EXISTS idx_entity_name ON entity (project_id, name_norm);
+
+-- ---- Access labels (RAG-MASTERY section 1) ----
+-- Stamped at ingest, filtered INSIDE every retrieval query. NULL means "written before access
+-- control existed"; the one-time backfill below hands those to the 'public' group. After that,
+-- a chunk with an empty array is readable by NOBODY - the array overlap operator (&&) is false
+-- for both NULL and '{}', so the default is deny, not allow.
+ALTER TABLE chunks ADD COLUMN IF NOT EXISTS allowed_groups TEXT[];
+
+UPDATE chunks SET allowed_groups = ARRAY['public'] WHERE allowed_groups IS NULL;
+
+CREATE INDEX IF NOT EXISTS idx_chunks_allowed_groups ON chunks USING gin (allowed_groups);
+
+-- ---- Per-request RAG trace (RAG-MASTERY section 6) ----
+-- One row per answered question. When an answer is wrong nothing throws, so the only way to debug
+-- it is to record every decision that produced it: which query was really searched, which chunks
+-- came back at what score, and where the time went.
+-- The variable-shaped parts are JSONB: the retrieved list and the stage timings both change shape
+-- as backends change, and neither is ever joined on.
+CREATE TABLE IF NOT EXISTS rag_trace (
+    id                BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+    request_id        UUID NOT NULL UNIQUE,
+    ts                TIMESTAMPTZ NOT NULL DEFAULT now(),
+    principal         VARCHAR(255) NOT NULL,
+    project_ids       BIGINT[],
+    raw_query         TEXT NOT NULL,
+    condensed_query   TEXT,
+    backend           VARCHAR(32) NOT NULL,
+    retrieved         JSONB NOT NULL DEFAULT '[]'::jsonb,   -- [{docId, chunkIndex, score}]
+    stage_latency_ms  JSONB NOT NULL DEFAULT '{}'::jsonb,   -- {embed, retrieve, generate, total}
+    prompt_tokens     INT,
+    completion_tokens INT,
+    answer            TEXT,
+    guard_reason      VARCHAR(32)
+);
+
+CREATE INDEX IF NOT EXISTS idx_rag_trace_principal ON rag_trace (principal, ts DESC);
+
+-- ---- Per-chunk relevance feedback (eval only - never feeds live ranking) ----
+-- Keyed by (doc_id, chunk_index), NOT by chunks.id: re-ingesting a document deletes and
+-- reinserts its rows, so a chunk id is not stable across imports but the pair is.
+-- query_text is capped so the UNIQUE btree index can never exceed the ~2704-byte row limit.
+CREATE TABLE IF NOT EXISTS chunk_feedback (
+    id          BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+    project_id  BIGINT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+    query_text  TEXT NOT NULL CHECK (char_length(query_text) BETWEEN 1 AND 500),
+    doc_id      VARCHAR(255) NOT NULL,
+    chunk_index INT NOT NULL CHECK (chunk_index >= 0),
+    rating      VARCHAR(8) NOT NULL CHECK (rating IN ('up', 'down')),
+    created_at  TIMESTAMPTZ NOT NULL DEFAULT now(),
+    updated_at  TIMESTAMPTZ NOT NULL DEFAULT now(),
+    UNIQUE (project_id, doc_id, chunk_index, query_text)
+);
+
+CREATE INDEX IF NOT EXISTS idx_chunk_feedback_project ON chunk_feedback (project_id, updated_at DESC);

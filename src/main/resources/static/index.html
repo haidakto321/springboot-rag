@@ -48,6 +48,13 @@
             <span class="dot-green"></span><span id="index-host">localhost:8085</span>
         </div>
     </div>
+
+    <!-- Whose access labels are filtering retrieval right now. -->
+    <div class="who-am-i">
+        <div class="index-status-title">Signed in as</div>
+        <div class="who-name" id="who-name">-</div>
+        <div class="who-groups" id="who-groups"></div>
+    </div>
 </aside>
 
 <!-- Main -->
@@ -91,6 +98,11 @@
                     <div class="dropzone-text">Drop a <span class="mono">.md</span> file here</div>
                     <button class="btn-primary btn-browse" id="browse-btn" type="button">Browse files</button>
                     <input type="file" id="file-input" accept=".md" multiple hidden>
+                </div>
+                <!-- Access label stamped on every chunk of the uploaded document. -->
+                <div class="upload-groups">
+                    <span class="scope-label">Visible to</span>
+                    <div class="scope-chips" id="upload-groups"></div>
                 </div>
                 <!-- One progress row per in-flight upload (added/removed dynamically) -->
                 <div id="upload-list"></div>
@@ -140,6 +152,7 @@
                     <option value="fts">Keyword (FTS)</option>
                     <option value="pgvector">Vector (pgvector)</option>
                     <option value="qdrant">Vector (Qdrant)</option>
+                    <option value="graph">Graph</option>
                 </select>
                 <button class="btn-primary btn-search" type="submit">Search</button>
             </form>
@@ -162,6 +175,9 @@
                 <input type="text" class="q-input" id="chat-q" placeholder="Ask a question..." autocomplete="off" required>
                 <button class="btn-primary btn-ask" type="submit" id="chat-send">Send</button>
             </form>
+            <label class="think-toggle" title="Ask the model to reason first and show its thinking (slower)">
+                <input type="checkbox" id="think-toggle"> Show AI thinking
+            </label>
         </section>
     </div>
 
