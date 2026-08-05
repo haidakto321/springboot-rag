@@ -271,7 +271,11 @@ Verification done: `./mvnw test-compile` green (imports resolve, production comp
 - **CI does not exercise the real model**: `DjlSpikeTest` + `DjlRerankerManualTest` are gated behind `RUN_DJL_SPIKE=true`. Without it they skip, keeping CI fast and network-free.
 - **`compare` now has a 5th column** (`rerank`); the existing integration assertion was updated from 4 to 5 keys.
 
-### Real bge-reranker verification - BLOCKED by network (2026-06-19)
+### Real bge-reranker verification - BLOCKED by network (2026-06-19) - DIAGNOSIS SUPERSEDED
+> **This conclusion was wrong.** The blocker was never network access: `djl://` resolves against
+> DJL's own catalog, and `BAAI/bge-reranker-base` is simply not published there. Kept for the
+> record; see "2026-08-05 - DJL reranker fixed" at the end of this file for the real root cause.
+
 Attempted `RUN_DJL_SPIKE=true` run of `DjlSpikeTest` + `DjlRerankerManualTest`:
 - `huggingface.co` is unreachable from this environment (SSL connection cannot be established; `os error 10054` connection forcibly closed). Regional block.
 - `hf-mirror.com` IS reachable (200) and `HF_ENDPOINT=https://hf-mirror.com` fixes the **tokenizer.json** download (HuggingFaceTokenizer.newInstance then succeeds).
@@ -485,3 +489,141 @@ backend has only ever run as the no-op `IdentityReranker`. The `LEARNINGS.md` §
 cross-encoder is what gives graph expansion its teeth has therefore never actually been testable
 here - it is UNTESTED, not refuted. Fixing `DjlReranker.loadModel()`'s model-URL construction is
 separate work; `DjlReranker.java` was not touched by this task (out of scope, do-not-modify).
+
+> **RESOLVED 2026-08-05** - see the next section. The cause was not the URL construction and not
+> the network; the configured model id was absent from DJL's catalog.
+
+## 2026-08-05 - DJL reranker fixed (root cause: model id, not network, not URL syntax)
+
+### Root cause
+`djl://ai.djl.huggingface.pytorch/<id>` does **not** address the HuggingFace Hub. It addresses
+DJL's own model zoo at `https://mlrepo.djl.ai`, which carries only the models DJL has pre-traced
+to TorchScript - the PyTorch engine cannot consume raw `.safetensors` / `.bin` weights. Traced to
+the exact line by reading the DJL 0.30.0 sources: `RepositoryFactoryImpl:262` throws
+`IllegalArgumentException("Invalid djl URL: " + uri)` in the branch where `zoo.getModelLoader(artifactId)`
+returned `null`. Two branches above it would have said "ModelZoo not found in classpath", so the zoo
+resolved fine - the artifact inside it did not exist.
+
+`HfModelZoo` indexes exactly five NLP applications from `mlrepo.djl.ai`. Its
+`nlp/text_classification` index holds 24 entries, and the two cross-encoders in it are
+`BAAI/bge-reranker-v2-m3` and `cross-encoder/mmarco-mMiniLMv2-L12-H384-v1`.
+**`BAAI/bge-reranker-base` is not among them and never was.** The message "Invalid djl URL" reads
+like a syntax error, which is what sent the 2026-06-19 diagnosis toward a regional network block.
+
+Why that older diagnosis looked plausible and was still wrong: the *tokenizer* really does come
+from the HuggingFace Hub (`HuggingFaceTokenizer.newInstance(id)`), and it really did need the
+`hf-mirror.com` workaround. So one model id was being fed to two different registries with
+different catalogs, and only the zoo half was failing. In the 2026-08-05 environment
+`huggingface.co` is reachable again, the tokenizer loads with no mirror, and the zoo lookup still
+failed - which is what isolated the real cause.
+
+### Fix
+- `app.rerank.model` default is now `cross-encoder/mmarco-mMiniLMv2-L12-H384-v1` (in both
+  `RerankProperties` and `application.yml`), with the zoo constraint stated in a comment at each.
+- `DjlReranker.loadModel()`'s failure message now names the constraint instead of letting DJL's
+  "Invalid djl URL" stand alone.
+- `DjlSpikeTest` no longer hardcodes a model id; it reads `new RerankProperties().getModel()`.
+  The hardcoded literal was the mechanism of the whole bug - the spike and the configuration were
+  two independently written copies of the same id, so neither could catch the other drifting.
+
+Model choice: `mmarco-mMiniLMv2-L12-H384-v1` is multilingual (the wiki is German and English),
+MS MARCO ranking-trained, and about 470 MB. `BAAI/bge-reranker-v2-m3` is the stronger zoo option
+but is XLM-R-large at roughly 2.2 GB, and DJL selects the **CPU** engine on this box
+(`No matching cuda flavor for win-x86_64 found: cu065`), so every rerank is 50 CPU forward passes
+per query. Swapping is a one-line property change if the quality tradeoff is worth the latency.
+
+### Measured effect - the §14 hypothesis is now TESTED, and it did NOT hold
+Same 11 golden questions, same corpus (`docmaster`, 428 docs / 7,536 chunks), topK=10. The
+identity-reranker baseline was re-run immediately after and reproduced its earlier numbers
+exactly, so this is a clean before/after.
+
+| backend  | recall@5 | MRR (identity) | MRR (cross-encoder) |
+|----------|----------|----------------|---------------------|
+| hybrid   | 0.909    | 0.919          | 0.919 (not reranked) |
+| rerank   | 0.909    | 0.919          | **0.909**           |
+| graph    | 0.909    | 0.919          | **0.909**           |
+
+- `graph vs hybrid` went from `rank differs 0 of 11; top-10 identical 11 of 11` to
+  `rank differs 1 of 11; top-10 identical 0 of 11`.
+- So the cross-encoder DID give graph expansion teeth in the mechanical sense - graph is no longer
+  a byte-identical no-op, the top-10 order now differs on every single question.
+- But the bite is negative. The one hard question ("Which known shortcomings of the Job API and
+  Data API are still open for the invoice services?") sat at rank 9 under hybrid and identity
+  rerank; the cross-encoder pushed it **out of the top 10 entirely** (rank 0) on both `rerank` and
+  `graph`. That single demotion is the whole MRR drop.
+- `rerank` and `graph` produce identical metrics to each other. Graph expansion still contributes
+  nothing the reranker does not already do.
+
+Honest scope of this result: it is one corpus, one golden set of 11, and one reranker model that
+is **not** the model originally intended. A stronger cross-encoder (`bge-reranker-v2-m3`) is
+untried here, and MS MARCO passage ranking is arguably out of domain for a German-language
+internal tech wiki. The claim that is now dead is the unconditional one - "a real cross-encoder is
+what gives GraphRAG its teeth" is not something this project has evidence for, and the first real
+measurement points the other way.
+
+### Still open (not fixed here)
+`app.rerank.maxLength` (512) is dead configuration - `DjlReranker` never passes it to
+`HuggingFaceTokenizer`, which is why every run logs
+`maxLength is not explicitly specified, use modelMaxLength: 512`. Harmless today because the
+model's own default is also 512. Left alone deliberately: unrelated to this defect, and one fix at
+a time.
+
+## 2026-08-05 - Retrieval eval regression gate (drill C)
+
+`WikiRetrievalEvalTest` now asserts against `src/test/resources/eval/baseline-wiki.yaml` instead of
+only printing. Spec: `docs/superpowers/specs/2026-08-05-eval-regression-gate-design.md`.
+
+### Why the wiki eval and not the self-corpus eval
+`RetrievalEvalTest` ingests `docs/` (`RetrievalEvalTest:89`), so its corpus is this repo's own
+documentation and its numbers move whenever anyone edits a doc - four files under `docs/` changed on
+2026-08-05 alone. Gating it produces failures caused by writing documentation, which get ignored
+within a week. The wiki corpus is frozen and reproduced its numbers exactly on a same-day re-run, so
+movement there is attributable to code. The cost of that choice is that the gate can never run in CI
+or on a fresh clone; it is pre-merge discipline for one machine. Tracked in `ROADMAP.md`.
+
+### Two checks, because aggregates alone would have missed the real regression
+Floors on recall@5/MRR/hit@1 with a 0.02 tolerance, PLUS a rule that no question may go from found
+to missed. The second check exists because of a measured case: when the cross-encoder pushed one
+question out of the top 10 on 2026-08-05, recall@5 and hit@1 did not move at all (that question had
+been at rank 9, outside both windows) and MRR moved only 0.010. Any tolerance comfortable enough to
+live with would have hidden it. That case is encoded as a unit test
+(`BaselineComparisonTest.failsOnANewMissEvenWhenEveryAggregateMetricIsWithinTolerance`).
+
+### Why 0.02
+With 11 questions the metrics are quantized: recall@5 and hit@1 move in steps of 1/11 = 0.091, so
+any tolerance below that makes them exact-or-better and only MRR is actually tuned. On the MRR
+scale, a question slipping rank 1 to 2 costs 0.045 (fails), rank 9 to 10 costs 0.001 (passes).
+Measured noise is currently zero, so 0.02 is headroom against nondeterminism that has not appeared,
+not against observed variance.
+
+### Variant derived from the bean, not the flag
+The baseline has one section per reranker variant, keyed by the active `Reranker` bean's simple
+class name rather than by `-Deval.rerank`. Deriving it from the flag would let
+`app.rerank.provider=djl` set in `application.yml` write djl numbers into the identity section.
+
+### Corpus fingerprint
+The baseline records project id, name, doc count, and chunk count. A re-import shifts chunk ids and
+moves every number for reasons that are not regressions; without the fingerprint that surfaces as
+six simultaneous backend failures that read exactly like a real defect. The gate compares the
+fingerprint first and, on mismatch, reports only that with the regeneration command. It is a
+staleness check, not an integrity check: a corpus edited in place that preserves both counts is not
+detected.
+
+### Writes go to the source tree
+`EvalBaselineStore.write` targets `src/test/resources/eval/baseline-wiki.yaml`, not the classpath
+copy under `target/`. Writing to the classpath copy would be discarded by the next build and the
+update would silently do nothing. Metrics are rounded to 3 decimals on write to keep the committed
+file readable; the rounding error is at most 0.0005 against a 0.02 tolerance and only ever lowers
+the floor.
+
+### What is deliberately not gated
+`FaithfulnessEvalTest` (LLM-judge output needs its own noise study first), `RetrievalEvalTest`, and
+anything in CI. The full golden question list is recorded in the baseline so that adding a question
+is a printed notice rather than a build failure.
+
+### Build note from execution
+A stale incremental compile broke JUnit discovery mid-task with
+`NoClassDefFoundError: GoldenEntry` (unqualified, so the compiled `WikiRetrievalEvalTest.class`
+referenced the type in the default package). `./mvnw clean test` fixed it. Worth knowing: adding
+classes to the `eval` package while running targeted `-Dtest=` builds can leave `target/test-classes`
+inconsistent, and the symptom looks like a code defect rather than a build-state one.

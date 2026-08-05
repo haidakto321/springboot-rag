@@ -86,11 +86,38 @@ The existing whole-answer 👍/👎 (localStorage-only) stays; this adds a per-s
 - **Explicitly OUT of scope for A:** no query-time score nudge, no cross-encoder fine-tuning. Those
   are a later "Option B" (blend `final = w1*reranker + w2*feedback`) - deferred; risks cold-start on
   unseen queries and overfitting to a few clicks. Revisit only after enough labels accrue.
-- **Why now-ish:** the reranker (`bge-reranker`) is a fixed content model - it never learns from
-  clicks on its own. Per-chunk labels are the only way to know if it actually helps on THIS corpus,
-  and the wiki import (428 docs) finally gives a realistic corpus to measure on.
+- **Why now-ish:** the cross-encoder is a fixed content model - it never learns from clicks on its
+  own. Per-chunk labels are the only way to know if it actually helps on THIS corpus. The 11-question
+  golden set gave a first answer on 2026-08-05 (it did not help - MRR 0.919 -> 0.909, see
+  `LEARNINGS.md` section 14), but 11 questions is too thin to act on, which is exactly the case for
+  labels at scale.
 - UI note: keep it low-clutter - a small thumb per chip, not a big widget. See LEARNINGS §on
   feedback vs reranking for the reasoning.
+
+### CI-runnable eval gate - frozen test corpus  ⬜ planned (deliberately deferred 2026-08-05)
+Goal: make the retrieval regression gate enforceable by CI instead of by developer discipline.
+
+- **The limitation being tracked.** The gate built in
+  `docs/superpowers/specs/2026-08-05-eval-regression-gate-design.md` runs against
+  `WikiRetrievalEvalTest`, whose corpus is the private 428-page wiki. That corpus cannot ship in the
+  repo, so the gate **can never run in CI or on a fresh clone** - it skips. It is a pre-merge
+  discipline tool for one machine, not enforcement.
+- **Why the other eval cannot fill the gap today.** `RetrievalEvalTest` runs anywhere
+  (Testcontainers, self-contained) but ingests `docs/` as its corpus (`RetrievalEvalTest:89`). The
+  corpus is therefore this repo's own documentation, and its numbers move whenever anyone edits a
+  doc. Four files under `docs/` changed on 2026-08-05 alone. Gating it as-is produces failures
+  caused by writing documentation, which get ignored within a week.
+- **The fix.** Stop walking `docs/`. Freeze a small dedicated corpus into `src/test/resources`, then
+  re-point all 18 questions in `golden.yaml` at the frozen file ids. The eval becomes stable and
+  CI-gateable, and the wiki gate stays as the richer local check on a realistic corpus.
+- **Cost.** Every question in `golden.yaml` needs re-verifying against the new corpus, which is the
+  slow part - the corpus snapshot itself is cheap.
+- **Why it is deferred.** Single developer, single machine, no CI enforcing anything today. Scoped
+  out of drill C on purpose to keep that job small.
+- **Why it will matter later.** On a team, or on any project where retrieval quality is a
+  deliverable, "run the gate before you merge, please" is not a control. A real project needs the
+  gate to run without the private corpus. Revisit before this pattern is copied anywhere that has
+  more than one contributor.
 
 ## Everything else on this roadmap is built.
 Possible future directions (not scheduled): server-side session persistence, token-budget

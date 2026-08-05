@@ -139,15 +139,22 @@ cross-encoder, then trims to `topK`. By default the reranker is a no-op `Identit
 app and tests stay light and offline (no model download).
 
 To enable the real cross-encoder, set `app.rerank.provider=djl` (in `application.yml` or as
-`--app.rerank.provider=djl`). The first run downloads the `BAAI/bge-reranker-base` model **and** the
-native PyTorch libraries (hundreds of MB) via DJL, then runs locally/offline after that.
+`--app.rerank.provider=djl`). The first run downloads the model (about 470 MB) **and** the native
+PyTorch libraries via DJL, then runs locally/offline after that. DJL falls back to the CPU engine
+when there is no supported CUDA build, so each query costs `app.rerank.candidates` CPU forward
+passes.
+
+> `app.rerank.model` must name a model published in **DJL's own zoo** (<https://mlrepo.djl.ai>),
+> not an arbitrary HuggingFace id - `djl://` needs a pre-traced TorchScript build. An id that is
+> missing there fails with the misleading message `Invalid djl URL`. The only other cross-encoder
+> in that catalog today is `BAAI/bge-reranker-v2-m3` (stronger, but roughly 2.2 GB).
 
 | property | default | meaning |
 |---|---|---|
-| `app.rerank.provider` | `""` | `djl` = real bge-reranker; anything else = `IdentityReranker` |
-| `app.rerank.model` | `BAAI/bge-reranker-base` | HuggingFace cross-encoder id |
+| `app.rerank.provider` | `""` | `djl` = real cross-encoder; anything else = `IdentityReranker` |
+| `app.rerank.model` | `cross-encoder/mmarco-mMiniLMv2-L12-H384-v1` | cross-encoder id, must exist in DJL's zoo |
 | `app.rerank.candidates` | `50` | hybrid candidates fed to the reranker before trimming to `topK` |
-| `app.rerank.maxLength` | `512` | tokenizer max sequence length |
+| `app.rerank.maxLength` | `512` | tokenizer max sequence length (currently not applied - see `docs/implementation-notes.md`) |
 
 ## Graph retrieval (`type=graph`, GraphRAG)
 
@@ -231,7 +238,28 @@ Wiki corpus eval (real 428-page corpus, live stack - NOT Testcontainers):
 Prereqs: Postgres + Qdrant up, Ollama with nomic-embed-text, and the wiki already imported into
 a project named "docmaster" (override with `-Deval.wiki.project=<name>`). The test is read-only
 and skips itself when the corpus is absent. Add `-Deval.rerank=djl` to run with the real
-cross-encoder instead of the no-op reranker.
+cross-encoder instead of the no-op reranker (first run downloads about 470 MB; see the
+Reranking section above, and `docs/LEARNINGS.md` section 14 for what that comparison measured).
+
+This eval is a **regression gate**, not only a report: it fails when a backend drops below
+`src/test/resources/eval/baseline-wiki.yaml` by more than 0.02 on recall@5, MRR, or hit@1, or when
+any question the baseline found is no longer found at all. That second rule matters more than it
+sounds - the 2026-08-05 cross-encoder regression left recall@5 and hit@1 completely unmoved and
+shifted MRR by only 0.010, because the question it lost had been at rank 9, outside both windows.
+Each reranker variant has its own baseline section, since `-Deval.rerank=djl` legitimately changes
+the expected numbers.
+
+After re-importing the wiki the baseline is stale by construction, because chunk ids shift. The
+gate detects that from the recorded doc and chunk counts and tells you to regenerate, instead of
+reporting six fake backend regressions:
+
+```bash
+./mvnw test "-Dgroups=eval-wiki" "-DexcludedGroups=" "-Deval.baseline.update=true"
+```
+
+That rewrites the current variant's section, leaves the other variant untouched, and skips the
+assertions for that run. Review the resulting diff before committing it: accepting a lower baseline
+should always be a deliberate, visible act.
 
 ## Run in WSL2 (no Docker Desktop)
 
