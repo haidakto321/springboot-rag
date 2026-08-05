@@ -513,16 +513,36 @@ Lessons:
 - **Structural edges are nearly free, so ship them** - worst case they tie hybrid, and they cost
   nothing at query time. The semantic entity layer is where the "forgotten feature bridged by a
   shared entity" story lives, but it is a real ingest-cost decision, not a default.
-- **The reranker matters as much as the graph - but this is a hypothesis, not a measured result.**
-  With an identity (no-op) reranker, expansion just appends low-scoring neighbors that never rise;
-  a real cross-encoder is what should let a genuinely relevant neighbor overtake the seed.
-  **Status: untested, not refuted.** `app.rerank.provider=djl` cannot currently load its model on
-  this machine - `DjlReranker.loadModel()` fails before any download starts, a pre-existing defect
-  unrelated to this eval work (recorded in `docs/implementation-notes.md`) - so the `rerank`
-  backend has only ever run as `IdentityReranker`, and this claim has never actually been
-  exercised. The `-Deval.rerank=djl` flag itself IS verified end to end (the eval prints
-  `reranker=DjlReranker` before the model load fails), so re-running this exact comparison is one
-  command away once the model-loading defect is fixed.
+- **"A real cross-encoder is what gives GraphRAG its teeth" - measured 2026-08-05, and it did not
+  hold.** This was carried for a month as a plausible hypothesis: with an identity (no-op)
+  reranker, expansion only appends low-scoring neighbors that never rise, so a real cross-encoder
+  should be what lets a relevant neighbor overtake the seed. It could not be tested because
+  `app.rerank.provider=djl` would not load a model at all. That defect is now fixed (the configured
+  model id was simply absent from DJL's zoo catalog - see `docs/implementation-notes.md`,
+  2026-08-05), so the comparison finally ran on the same 11 golden questions:
+
+  | run                                    | rerank MRR | graph MRR | graph vs hybrid            |
+  |----------------------------------------|------------|-----------|----------------------------|
+  | `IdentityReranker` (baseline)          | 0.919      | 0.919     | top-10 identical 11 of 11  |
+  | real cross-encoder (`-Deval.rerank=djl`) | 0.909    | 0.909     | top-10 identical **0 of 11** |
+
+  The mechanical half of the hypothesis was right: with a real cross-encoder the graph backend
+  stops being a byte-identical clone of hybrid, and the top-10 order now differs on every question.
+  The useful half was wrong. Quality went **down**, not up: the single hard question that hybrid
+  ranked 9th got pushed out of the top 10 entirely, and that one demotion is the whole MRR drop.
+  `rerank` and `graph` also score identically to each other, so graph expansion still adds nothing
+  the reranker does not already do.
+
+  > Lesson: a reranker reorders, it does not retrieve. It can only demote a correct-but-unloved
+  > result that plain retrieval had already found. "More sophisticated component" is not a
+  > direction of improvement, it is a change that has to be measured - and an untested plausible
+  > mechanism can survive in your notes for a month simply because the thing that would have
+  > falsified it was broken.
+
+  Scope, honestly: one corpus, 11 questions, and the reranker is
+  `cross-encoder/mmarco-mMiniLMv2-L12-H384-v1` (MS MARCO ranking, multilingual, CPU) - **not** the
+  originally intended `BAAI/bge-reranker-base`, which DJL never published. The stronger
+  `BAAI/bge-reranker-v2-m3` is a one-line swap and is still untried.
 
 **Feasibility check (2026-07-06): the semantic entity layer is hardware-bound, not just "opt-in".**
 Tried to populate the entity tables (`edges=both`) by re-importing the wiki. Measured on the dev

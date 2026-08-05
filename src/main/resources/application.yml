@@ -37,8 +37,10 @@ app:
     port: 6334
     collection: chunks
   rerank:
-    provider: ""          # set to "djl" to enable the real bge-reranker cross-encoder
-    model: BAAI/bge-reranker-base
+    provider: ""          # set to "djl" to enable the real cross-encoder
+    # Must exist in DJL's own zoo (https://mlrepo.djl.ai), not just on HuggingFace - djl:// needs
+    # a pre-traced TorchScript build. Heavier alternative: BAAI/bge-reranker-v2-m3.
+    model: cross-encoder/mmarco-mMiniLMv2-L12-H384-v1
     candidates: 50        # hybrid candidates fed to the reranker before trimming to topK
     maxLength: 512
   graph:
