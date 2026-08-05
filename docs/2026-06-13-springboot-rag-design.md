@@ -3,7 +3,7 @@
 **Date:** 2026-06-13
 **Status:** Draft for review
 **Type:** Standalone self-study / research sandbox (NOT part of real project)
-**Location:** `D:\project-fpt\springboot-rag` (sibling to `real project`, `rag-python`)
+**Location:** a standalone repo, kept beside the author's other RAG experiments
 
 ---
 

@@ -13,9 +13,11 @@
 Two coupled goals:
 
 - **Part A - Sandbox RAG roadmap.** Decide the sequence of modern RAG methods to add to this learning sandbox, each as a new comparable backend behind `/compare`. Purpose is learning, not production.
-- **Part B - Real-project pipeline shape.** Sketch the architecture of the real project (an incident knowledge base) at a high level: `upload -> parse-to-markdown -> extract-to-JSON -> index -> RAG search`. The sandbox is the de-risking vehicle: methods are proven here on local models before they go into the real project on Azure OpenAI.
+- **Part B - Real-project pipeline shape.** Sketch the architecture of the real project (an document knowledge base) at a high level: `upload -> parse-to-markdown -> extract-to-JSON -> index -> RAG search`. The sandbox is the de-risking vehicle: methods are proven here on local models before they go into the real project on Azure OpenAI.
 
-> **Naming note:** the real target project is referred to throughout as **"the real project"**. Concrete library / API / parser names in Part B are **illustrative placeholders only** - they show the concept, the exact tool per stage is decided later.
+> **Naming note:** the target system is described generically on purpose - it is referred to
+> throughout as **"the real project"**, and no internal names, domains, table names or class
+> names from it appear anywhere in this repo. Concrete library / API / parser names in Part B are **illustrative placeholders only** - they show the concept, the exact tool per stage is decided later.
 
 **Why this is one spec:** Part B defines *what methods matter*; Part A *sequences learning them*. They share one contract (model-access abstraction). Deep implementation of each method - especially Graph RAG - is expected to get its own follow-up spec + plan.
 
@@ -49,7 +51,7 @@ Each step = one new comparable method, plugged into existing `SearchService` and
 |---|--------|-------------|-----------|--------------------------|
 | 0 | Vector / FTS / Hybrid-RRF | done (v1) | - | baseline |
 | 1 | **Reranker** | cross-encoder reorders top-N (e.g. `bge-reranker` via ONNX runtime or Ollama-served) | new `Reranker` interface wrapping any backend | precision lift: dumb top-50 -> smart top-10 |
-| 2 | **Metadata filtering** | structured fields (system, severity, date) stored + applied as `WHERE` / Qdrant payload filter | new column / payload + filter param | retrieval is not only similarity: "payment-system incidents, last 30 days" |
+| 2 | **Metadata filtering** | structured fields (source system, category, date) stored + applied as `WHERE` / Qdrant payload filter | new column / payload + filter param | retrieval is not only similarity: "payment-system incidents, last 30 days" |
 | 3 | **Query transform** | HyDE + query rewrite (local LLM expands / rephrases the query before embed) | new `QueryTransformer` step before embedding | recall lift on vague / paraphrased queries |
 | 4 | **Graph RAG** | extract entities + relations (LightRAG dual-level: local detail + global summary), retrieve a subgraph | new graph store + `GraphRepository` | relationship reasoning: "incidents sharing a root cause", cause chains |
 
@@ -77,7 +79,7 @@ Every method follows the v1 pattern that already works:
 
 ## Part B - Real-project pipeline shape
 
-High-level architecture of the real project (incident knowledge base). Backed by Azure OpenAI. Architecture altitude only.
+High-level architecture of the real project (document knowledge base). Backed by Azure OpenAI. Architecture altitude only.
 
 ### B.1 Flow
 
@@ -96,7 +98,7 @@ High-level architecture of the real project (incident knowledge base). Backed by
 |-------|-----|----------------------------------|-------|
 | Upload | accept file, store raw, queue job | Spring + object store | async job, do not block on parse |
 | Parse | PDF / docx -> clean markdown | Azure Document Intelligence, or marker / docling / RAG-Anything | parse quality is the #1 RAG quality driver. Garbage parse -> garbage RAG |
-| Extract | markdown -> structured incident JSON | Azure OpenAI (LLM structured output) | schema = incident: `{title, system, severity, date, symptom, root_cause, resolution, ...}` |
+| Extract | markdown -> structured document JSON | Azure OpenAI (LLM structured output) | schema = incident: `{title, system, severity, date, symptom, root_cause, resolution, ...}` |
 | Index | chunk + enrich + embed + store JSON metadata (+ graph) | Azure embeddings + the sandbox tables | this is where the sandbox methods land |
 | Retrieve | hybrid + rerank + filter (+ graph) -> answer | the sandbox methods, Azure swap | incident search + "similar / prevent" |
 
@@ -113,7 +115,7 @@ What content goes where:
 | Content | FTS (keyword) | Vector (embed) | Filter | Graph |
 |---------|---------------|----------------|--------|-------|
 | Markdown chunks (prose) | primary | primary | - | - |
-| JSON fields (system, severity, date) | optional | no | primary | nodes |
+| JSON fields (source system, category, date) | optional | no | primary | nodes |
 | JSON key text (root_cause, symptom, resolution) | enrich | enrich | partial | yes |
 
 **Pattern (recommended):** primary searchable content = markdown chunks. **Enrich** each chunk's indexed text by appending key JSON fields (e.g. `root_cause`, `symptom`). Then FTS-index **and** embed that one enriched text. Reason: the extract step surfaces buried facts - you want "memory leak" hittable even if the prose mentioned it once. The JSON structured fields are *also* stored separately and reused as filter metadata and as graph nodes.
