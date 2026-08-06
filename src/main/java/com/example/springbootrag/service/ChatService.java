@@ -85,6 +85,19 @@ public class ChatService {
                                     boolean think,
                                     Consumer<String> onToken,
                                     Consumer<String> onReasoning) {
+        return chatStream(ctx, history, projectIds, docIds, think,
+                com.example.springbootrag.repository.MetadataFilter.none(), onToken, onReasoning);
+    }
+
+    /** Same, narrowed by structured record metadata. */
+    public StreamOutcome chatStream(SearchContext ctx,
+                                    List<ChatMessage> history,
+                                    List<Long> projectIds,
+                                    List<String> docIds,
+                                    boolean think,
+                                    com.example.springbootrag.repository.MetadataFilter filter,
+                                    Consumer<String> onToken,
+                                    Consumer<String> onReasoning) {
         java.util.UUID requestId = java.util.UUID.randomUUID();
         long start = System.nanoTime();
         if (history == null || history.isEmpty()) {
@@ -109,8 +122,9 @@ public class ChatService {
 
         List<Long> pScope = projectIds == null ? List.of() : projectIds;
         List<String> dScope = docIds == null ? List.of() : docIds;
+        // Retrieval runs on the condensed query; the filter is the caller's and applies unchanged.
         SearchService.TracedSearch search = searchService.searchTraced(ctx, "rerank", retrievalQuery,
-                props.getContextChunks(), pScope, dScope);
+                props.getContextChunks(), pScope, dScope, filter);
         List<SearchHit> hits = search.hits();
         Map<String, Long> stages = new LinkedHashMap<>(search.stageLatencyMs());
         if (hits.isEmpty()) {

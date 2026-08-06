@@ -53,10 +53,15 @@ public class ChatController {
         // thread where the SecurityContext thread-local is no longer populated, and resolving it
         // there would either fail or, worse, pick up whatever that pooled thread last held.
         SearchContext ctx = currentUser.context();
+        // Parsed here, on the request thread, so a malformed filter is a clean 400 rather than an
+        // error frame inside an already-committed 200 response.
+        com.example.springbootrag.repository.MetadataFilter filter =
+                SearchController.metadataFilter(req.docType(), req.filters());
         return out -> {
             try {
                 ChatService.StreamOutcome outcome =
                         chatService.chatStream(ctx, req.messages(), scope, req.docIds(), req.think(),
+                                filter,
                                 token -> writeFrame(out, Map.of("type", "token", "text", token)),
                                 reasoning -> writeFrame(out, Map.of("type", "reasoning", "text", reasoning)));
                 writeFrame(out, Map.of("type", "sources", "sources", outcome.sources()));

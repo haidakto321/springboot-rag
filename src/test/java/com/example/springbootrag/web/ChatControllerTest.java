@@ -52,8 +52,8 @@ class ChatControllerTest {
     @Test
     @SuppressWarnings("unchecked")
     void streamsTokenSourcesAndDoneFrames() throws Exception {
-        when(chatService.chatStream(any(), anyList(), anyList(), any(), anyBoolean(), any(), any())).thenAnswer(inv -> {
-            Consumer<String> onToken = inv.getArgument(5);
+        when(chatService.chatStream(any(), anyList(), anyList(), any(), anyBoolean(), any(), any(), any())).thenAnswer(inv -> {
+            Consumer<String> onToken = inv.getArgument(6);   // 5 is now the metadata filter
             onToken.accept("Hi");
             onToken.accept("!");
             return new ChatService.StreamOutcome(
@@ -76,15 +76,15 @@ class ChatControllerTest {
                 .contains("\"type\":\"sources\"").contains("doc-a")
                 .contains("\"type\":\"done\"");
 
-        verify(chatService).chatStream(eq(TestContexts.PUBLIC), anyList(), eq(List.of(1L)), any(), anyBoolean(), any(), any());
+        verify(chatService).chatStream(eq(TestContexts.PUBLIC), anyList(), eq(List.of(1L)), any(), anyBoolean(), any(), any(), any());
     }
 
     @Test
     @SuppressWarnings("unchecked")
     void anUngroundedStreamedAnswerEmitsAGuardFrame() throws Exception {
         // Tokens cannot be recalled once streamed, so the client is told instead.
-        when(chatService.chatStream(any(), anyList(), anyList(), any(), anyBoolean(), any(), any())).thenAnswer(inv -> {
-            Consumer<String> onToken = inv.getArgument(5);
+        when(chatService.chatStream(any(), anyList(), anyList(), any(), anyBoolean(), any(), any(), any())).thenAnswer(inv -> {
+            Consumer<String> onToken = inv.getArgument(6);   // 5 is now the metadata filter
             onToken.accept("the admin recovery code is hunter2");
             return new ChatService.StreamOutcome(List.of(),
                     new AnswerGuard.Verdict(false, "ungrounded", AnswerGuard.REFUSAL), java.util.UUID.randomUUID());

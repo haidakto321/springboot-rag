@@ -1,6 +1,7 @@
 package com.example.springbootrag.web;
 
 import com.example.springbootrag.model.SearchHit;
+import com.example.springbootrag.repository.MetadataFilter;
 import com.example.springbootrag.security.CurrentUser;
 import com.example.springbootrag.service.ProjectService;
 import com.example.springbootrag.service.SearchService;
@@ -34,10 +35,12 @@ public class SearchController {
                                   @RequestParam(defaultValue = "10") int topK,
                                   @RequestParam(required = false) List<String> docIds,
                                   @RequestParam(required = false) Long projectId,
-                                  @RequestParam(defaultValue = "false") boolean group) {
+                                  @RequestParam(defaultValue = "false") boolean group,
+                                  @RequestParam(required = false) String docType,
+                                  @RequestParam(required = false) String filters) {
         List<Long> scope = projectService.resolveScope(projectId, group);
         return searchService.search(currentUser.context(), type, q, topK, scope,
-                docIds == null ? List.of() : docIds);
+                docIds == null ? List.of() : docIds, metadataFilter(docType, filters));
     }
 
     @GetMapping("/compare")
@@ -45,9 +48,24 @@ public class SearchController {
                                               @RequestParam(defaultValue = "10") int topK,
                                               @RequestParam(required = false) List<String> docIds,
                                               @RequestParam(required = false) Long projectId,
-                                              @RequestParam(defaultValue = "false") boolean group) {
+                                              @RequestParam(defaultValue = "false") boolean group,
+                                              @RequestParam(required = false) String docType,
+                                              @RequestParam(required = false) String filters) {
         List<Long> scope = projectService.resolveScope(projectId, group);
         return searchService.compare(currentUser.context(), q, topK, scope,
-                docIds == null ? List.of() : docIds);
+                docIds == null ? List.of() : docIds, metadataFilter(docType, filters));
+    }
+
+    /**
+     * {@code docType} is a convenience shortcut for the same field inside the filters JSON, so the
+     * common case ("only invoices") needs no JSON at all. Malformed filter JSON throws
+     * IllegalArgumentException, which {@link GlobalExceptionHandler} maps to 400.
+     */
+    static MetadataFilter metadataFilter(String docType, String filters) {
+        MetadataFilter parsed = MetadataFilter.parse(filters);
+        if (docType == null || docType.isBlank()) {
+            return parsed;
+        }
+        return new MetadataFilter(docType, parsed.conditions());
     }
 }

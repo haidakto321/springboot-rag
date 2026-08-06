@@ -8,6 +8,7 @@ import com.example.springbootrag.model.SearchHit;
 import com.example.springbootrag.rerank.FakeReranker;
 import com.example.springbootrag.repository.DocEdgeRepository;
 import com.example.springbootrag.repository.EntityRepository;
+import com.example.springbootrag.repository.MetadataFilter;
 import com.example.springbootrag.repository.PgFtsRepository;
 import com.example.springbootrag.repository.PgVectorRepository;
 import com.example.springbootrag.repository.QdrantRepository;
@@ -42,8 +43,8 @@ class SearchServiceRerankTest {
 
         when(embeddings.embed("q")).thenReturn(new float[]{0.1f});
         // Same list from both arms so hybrid order is deterministic: 1,2,3
-        when(fts.search(any(SearchContext.class), eq("q"), eq(50), anyList(), any())).thenReturn(List.of(hit(1), hit(2), hit(3)));
-        when(pgVector.search(any(SearchContext.class), eq(new float[]{0.1f}), eq(50), anyList(), any())).thenReturn(List.of(hit(1), hit(2), hit(3)));
+        when(fts.search(any(SearchContext.class), eq("q"), eq(50), anyList(), any(), any(MetadataFilter.class))).thenReturn(List.of(hit(1), hit(2), hit(3)));
+        when(pgVector.search(any(SearchContext.class), eq(new float[]{0.1f}), eq(50), anyList(), any(), any(MetadataFilter.class))).thenReturn(List.of(hit(1), hit(2), hit(3)));
 
         RerankProperties props = new RerankProperties();
         props.setCandidates(50);

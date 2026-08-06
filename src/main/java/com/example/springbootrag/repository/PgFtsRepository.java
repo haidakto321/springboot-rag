@@ -27,25 +27,39 @@ public class PgFtsRepository {
      */
     public List<SearchHit> search(SearchContext ctx, String query, int topK,
                                   List<Long> projectIds, List<String> docIds) {
+        return search(ctx, query, topK, projectIds, docIds, MetadataFilter.none());
+    }
+
+    /**
+     * Same query, additionally narrowed by structured record metadata. The filter predicate is
+     * part of THIS query - filtering afterwards would return fewer than topK hits and look
+     * exactly like bad recall.
+     */
+    public List<SearchHit> search(SearchContext ctx, String query, int topK,
+                                  List<Long> projectIds, List<String> docIds,
+                                  MetadataFilter filter) {
         String projectClause = DocFilter.active(projectIds)
                 ? " AND project_id IN (" + DocFilter.placeholders(projectIds.size()) + ")"
                 : "";
         String docClause = DocFilter.active(docIds)
                 ? " AND doc_id IN (" + DocFilter.placeholders(docIds.size()) + ")"
                 : "";
+        FilterSql.Fragment meta = FilterSql.render(filter);
         List<Object> args = new ArrayList<>();
         args.add(query);
         args.add(query);
         args.addAll(ctx.groups());
         if (DocFilter.active(projectIds)) args.addAll(projectIds);
         if (DocFilter.active(docIds)) args.addAll(docIds);
+        args.addAll(meta.args());   // placeholder order: query, groups, projects, docs, metadata, topK
         args.add(topK);
         return jdbc.query(
                 "SELECT id, doc_id, chunk_index, content, source_file, heading_path, updated_at, " +
                         "       ts_rank(tsv, websearch_to_tsquery('english', ?)) AS rank " +
                         "FROM chunks " +
                         "WHERE tsv @@ websearch_to_tsquery('english', ?)" +
-                        " AND" + DocFilter.groupClause(ctx.groups()) + projectClause + docClause + " " +
+                        " AND" + DocFilter.groupClause(ctx.groups()) + projectClause + docClause +
+                        meta.sql() + " " +
                         "ORDER BY rank DESC LIMIT ?",
                 (rs, rowNum) -> new SearchHit(
                         rs.getLong("id"),

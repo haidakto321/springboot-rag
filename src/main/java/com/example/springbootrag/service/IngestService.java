@@ -9,6 +9,7 @@ import com.example.springbootrag.graph.EntityExtractor;
 import com.example.springbootrag.graph.ExtractedGraph;
 import com.example.springbootrag.graph.WikiLinkParser;
 import com.example.springbootrag.repository.DocEdgeRepository;
+import com.example.springbootrag.repository.DocumentRegistry;
 import com.example.springbootrag.repository.EntityRepository;
 import com.example.springbootrag.repository.PgVectorRepository;
 import com.example.springbootrag.repository.QdrantRepository;
@@ -34,6 +35,7 @@ public class IngestService {
     private final EntityRepository entityRepo;
     private final GraphProperties graphProps;
     private final SecurityProperties securityProps;
+    private final DocumentRegistry documentRegistry;
     // Hard ceiling per chunk so an atomic table/code block can never exceed the embedding
     // model's context window (nomic-embed-text runs at ~2048 tokens under Ollama). Dense
     // tables (IDs, numbers, pipes) tokenize near 1 char/token, so 2000 chars stays under
@@ -51,7 +53,8 @@ public class IngestService {
                          EntityExtractor entityExtractor,
                          EntityRepository entityRepo,
                          GraphProperties graphProps,
-                         SecurityProperties securityProps) {
+                         SecurityProperties securityProps,
+                         DocumentRegistry documentRegistry) {
         this.embeddings = embeddings;
         this.pgVector = pgVector;
         this.qdrant = qdrant;
@@ -61,6 +64,7 @@ public class IngestService {
         this.entityRepo = entityRepo;
         this.graphProps = graphProps;
         this.securityProps = securityProps;
+        this.documentRegistry = documentRegistry;
     }
 
     // ---- Legacy wrappers (resolve default project) ----------------------------------------
@@ -132,19 +136,39 @@ public class IngestService {
      */
     public int ingestChunks(long projectId, String docId, String sourceFile, List<Chunk> chunks,
                             Instant updatedAt, List<String> allowedGroups) {
+        return ingestChunks(projectId, docId, sourceFile, chunks, updatedAt, allowedGroups, null, null);
+    }
+
+    /**
+     * Record-aware ingest. {@code perChunkMetadataJson}, when non-null, must be the same size as
+     * {@code chunks} - a list that no longer lines up would attach one field group's provenance to
+     * another's text, which is silent and unfindable, so it is a loud failure instead.
+     *
+     * <p>Callers that pass metadata must run {@link #capToBudget} themselves first: capping can
+     * split one block into several, and the metadata list has to be built against the capped list.
+     */
+    public int ingestChunks(long projectId, String docId, String sourceFile, List<Chunk> chunks,
+                            Instant updatedAt, List<String> allowedGroups,
+                            String docType, List<String> perChunkMetadataJson) {
         if (docId == null || docId.isBlank()) {
             throw new IllegalArgumentException("docId is required");
         }
         List<String> groups = resolveGroups(allowedGroups);
         chunks = capToBudget(chunks);
+        if (perChunkMetadataJson != null && perChunkMetadataJson.size() != chunks.size()) {
+            throw new IllegalStateException("metadata list size (" + perChunkMetadataJson.size()
+                    + ") does not match chunk count (" + chunks.size() + ")");
+        }
         delete(projectId, docId);
-        for (Chunk chunk : chunks) {
+        for (int i = 0; i < chunks.size(); i++) {
+            Chunk chunk = chunks.get(i);
+            String meta = perChunkMetadataJson == null ? null : perChunkMetadataJson.get(i);
             float[] vec = embeddings.embed(chunk.text());
             long id = pgVector.insert(projectId, docId, chunk.position(), chunk.text(),
-                    sourceFile, chunk.headingPath(), vec, updatedAt, groups);
+                    sourceFile, chunk.headingPath(), vec, updatedAt, groups, docType, meta);
             try {
                 qdrant.upsert(id, projectId, docId, chunk.position(), chunk.text(),
-                        sourceFile, chunk.headingPath(), vec, groups);
+                        sourceFile, chunk.headingPath(), vec, groups, docType, meta);
             } catch (ExecutionException | InterruptedException e) {
                 throw new IllegalStateException("Qdrant upsert failed", e);
             }
@@ -180,14 +204,28 @@ public class IngestService {
         return cleaned;
     }
 
+    /**
+     * Removes a document from every store that holds part of it.
+     *
+     * <p>Qdrant goes FIRST on purpose: it is the fallible store, so if it fails the Postgres rows
+     * survive and the delete can be retried. The other order loses the rows and orphans the
+     * vectors forever - see LEARNINGS section 13, which stated the rule while the code did the
+     * opposite.
+     *
+     * <p>Inbound edges go too. Feedback labels and traces deliberately do not: labels are eval
+     * evidence keyed by (doc_id, chunk_index) and a record can come back on the next sync, and a
+     * trace is a record of what was actually answered.
+     */
     public void delete(long projectId, String docId) {
-        pgVector.deleteByDocId(projectId, docId);
         try {
             qdrant.deleteByDocId(projectId, docId);
         } catch (ExecutionException | InterruptedException e) {
             throw new IllegalStateException("Qdrant delete failed", e);
         }
+        pgVector.deleteByDocId(projectId, docId);
         docEdges.deleteBySrcDoc(projectId, docId);
+        docEdges.deleteByDstDoc(projectId, docId);
+        documentRegistry.delete(projectId, docId);
         entityRepo.gcOrphanEntities(projectId);
     }
 
@@ -198,7 +236,7 @@ public class IngestService {
      * {@code MAX_CHUNK_CHARS} is split at whitespace (hard-cut for a single giant token) and the
      * whole list is renumbered so chunk indexes stay contiguous.
      */
-    static List<Chunk> capToBudget(List<Chunk> chunks) {
+    public static List<Chunk> capToBudget(List<Chunk> chunks) {
         boolean anyOver = false;
         for (Chunk c : chunks) {
             if (c.text().length() > MAX_CHUNK_CHARS) { anyOver = true; break; }

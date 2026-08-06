@@ -11,6 +11,7 @@ import com.example.springbootrag.rerank.Reranker;
 import com.example.springbootrag.repository.DocEdgeRepository;
 import com.example.springbootrag.repository.EntityRepository;
 import com.example.springbootrag.repository.PgFtsRepository;
+import com.example.springbootrag.repository.MetadataFilter;
 import com.example.springbootrag.repository.PgVectorRepository;
 import com.example.springbootrag.repository.QdrantRepository;
 import com.example.springbootrag.security.SearchContext;
@@ -91,14 +92,26 @@ public class SearchService {
      */
     public List<SearchHit> search(SearchContext ctx, String type, String query, int topK,
                                   List<Long> projectIds, List<String> docIds) {
+        return search(ctx, type, query, topK, projectIds, docIds, MetadataFilter.none());
+    }
+
+    /**
+     * Same, additionally narrowed by structured record metadata.
+     *
+     * <p>{@code filter} is a caller preference and can only narrow, like projectIds and docIds.
+     * It composes with the access labels in {@code ctx}, never replaces them.
+     */
+    public List<SearchHit> search(SearchContext ctx, String type, String query, int topK,
+                                  List<Long> projectIds, List<String> docIds,
+                                  MetadataFilter filter) {
         validateTopK(topK);
         return switch (type) {
-            case "fts" -> fts.search(ctx, query, topK, projectIds, docIds);
-            case "pgvector" -> pgVector.search(ctx, embeddings.embed(query), topK, projectIds, docIds);
-            case "qdrant" -> qdrantSearch(ctx, embeddings.embed(query), topK, projectIds, docIds);
-            case "hybrid" -> hybrid(ctx, query, embeddings.embed(query), topK, projectIds, docIds);
-            case "rerank" -> rerank(ctx, query, embeddings.embed(query), topK, projectIds, docIds);
-            case "graph" -> graph(ctx, query, embeddings.embed(query), topK, projectIds, docIds);
+            case "fts" -> fts.search(ctx, query, topK, projectIds, docIds, filter);
+            case "pgvector" -> pgVector.search(ctx, embeddings.embed(query), topK, projectIds, docIds, filter);
+            case "qdrant" -> qdrantSearch(ctx, embeddings.embed(query), topK, projectIds, docIds, filter);
+            case "hybrid" -> hybrid(ctx, query, embeddings.embed(query), topK, projectIds, docIds, filter);
+            case "rerank" -> rerank(ctx, query, embeddings.embed(query), topK, projectIds, docIds, filter);
+            case "graph" -> graph(ctx, query, embeddings.embed(query), topK, projectIds, docIds, filter);
             default -> throw new IllegalArgumentException("unknown type: " + type);
         };
     }
@@ -112,6 +125,13 @@ public class SearchService {
      */
     public TracedSearch searchTraced(SearchContext ctx, String type, String query, int topK,
                                      List<Long> projectIds, List<String> docIds) {
+        return searchTraced(ctx, type, query, topK, projectIds, docIds, MetadataFilter.none());
+    }
+
+    /** Traced search, additionally narrowed by structured record metadata. */
+    public TracedSearch searchTraced(SearchContext ctx, String type, String query, int topK,
+                                     List<Long> projectIds, List<String> docIds,
+                                     MetadataFilter filter) {
         validateTopK(topK);
         Map<String, Long> stages = new LinkedHashMap<>();
         long t0 = System.nanoTime();
@@ -120,12 +140,12 @@ public class SearchService {
         stages.put("embed", msSince(t0, afterEmbed));
 
         List<SearchHit> hits = switch (type) {
-            case "fts" -> fts.search(ctx, query, topK, projectIds, docIds);
-            case "pgvector" -> pgVector.search(ctx, qvec, topK, projectIds, docIds);
-            case "qdrant" -> qdrantSearch(ctx, qvec, topK, projectIds, docIds);
-            case "hybrid" -> hybrid(ctx, query, qvec, topK, projectIds, docIds);
-            case "rerank" -> rerank(ctx, query, qvec, topK, projectIds, docIds);
-            case "graph" -> graph(ctx, query, qvec, topK, projectIds, docIds);
+            case "fts" -> fts.search(ctx, query, topK, projectIds, docIds, filter);
+            case "pgvector" -> pgVector.search(ctx, qvec, topK, projectIds, docIds, filter);
+            case "qdrant" -> qdrantSearch(ctx, qvec, topK, projectIds, docIds, filter);
+            case "hybrid" -> hybrid(ctx, query, qvec, topK, projectIds, docIds, filter);
+            case "rerank" -> rerank(ctx, query, qvec, topK, projectIds, docIds, filter);
+            case "graph" -> graph(ctx, query, qvec, topK, projectIds, docIds, filter);
             default -> throw new IllegalArgumentException("unknown type: " + type);
         };
         stages.put("retrieve", msSince(afterEmbed, System.nanoTime()));
@@ -150,16 +170,23 @@ public class SearchService {
      */
     public Map<String, BackendResult> compare(SearchContext ctx, String query, int topK,
                                               List<Long> projectIds, List<String> docIds) {
+        return compare(ctx, query, topK, projectIds, docIds, MetadataFilter.none());
+    }
+
+    /** Same comparison, with one metadata filter applied identically to every backend. */
+    public Map<String, BackendResult> compare(SearchContext ctx, String query, int topK,
+                                              List<Long> projectIds, List<String> docIds,
+                                              MetadataFilter filter) {
         validateTopK(topK);
         float[] qvec = embeddings.embed(query);
 
         Map<String, BackendResult> out = new LinkedHashMap<>();
-        out.put("fts", timed(() -> fts.search(ctx, query, topK, projectIds, docIds)));
-        out.put("pgvector", timed(() -> pgVector.search(ctx, qvec, topK, projectIds, docIds)));
-        out.put("qdrant", timed(() -> qdrantSearch(ctx, qvec, topK, projectIds, docIds)));
-        out.put("hybrid", timed(() -> hybrid(ctx, query, qvec, topK, projectIds, docIds)));
-        out.put("rerank", timed(() -> rerank(ctx, query, qvec, topK, projectIds, docIds)));
-        out.put("graph", timed(() -> graph(ctx, query, qvec, topK, projectIds, docIds)));
+        out.put("fts", timed(() -> fts.search(ctx, query, topK, projectIds, docIds, filter)));
+        out.put("pgvector", timed(() -> pgVector.search(ctx, qvec, topK, projectIds, docIds, filter)));
+        out.put("qdrant", timed(() -> qdrantSearch(ctx, qvec, topK, projectIds, docIds, filter)));
+        out.put("hybrid", timed(() -> hybrid(ctx, query, qvec, topK, projectIds, docIds, filter)));
+        out.put("rerank", timed(() -> rerank(ctx, query, qvec, topK, projectIds, docIds, filter)));
+        out.put("graph", timed(() -> graph(ctx, query, qvec, topK, projectIds, docIds, filter)));
         return out;
     }
 
@@ -173,9 +200,10 @@ public class SearchService {
     }
 
     private List<SearchHit> hybrid(SearchContext ctx, String query, float[] queryEmbedding, int topK,
-                                   List<Long> projectIds, List<String> docIds) {
-        List<SearchHit> keyword = fts.search(ctx, query, topK, projectIds, docIds);
-        List<SearchHit> vector = pgVector.search(ctx, queryEmbedding, topK, projectIds, docIds);
+                                   List<Long> projectIds, List<String> docIds,
+                                   MetadataFilter filter) {
+        List<SearchHit> keyword = fts.search(ctx, query, topK, projectIds, docIds, filter);
+        List<SearchHit> vector = pgVector.search(ctx, queryEmbedding, topK, projectIds, docIds, filter);
         return rrf.fuse(List.of(keyword, vector), topK);
     }
 
@@ -185,14 +213,20 @@ public class SearchService {
      * no debug view can ever print - a chunk the caller may not read.
      */
     private List<SearchHit> rerank(SearchContext ctx, String query, float[] queryEmbedding, int topK,
-                                   List<Long> projectIds, List<String> docIds) {
-        List<SearchHit> candidates = hybrid(ctx, query, queryEmbedding, rerankProps.getCandidates(), projectIds, docIds);
+                                   List<Long> projectIds, List<String> docIds,
+                                   MetadataFilter filter) {
+        // The over-fetch is ALREADY filtered. Filtering after the trim drops matching documents
+        // that the candidate window happened not to reach - silently, and only sometimes.
+        List<SearchHit> candidates = hybrid(ctx, query, queryEmbedding, rerankProps.getCandidates(),
+                projectIds, docIds, filter);
         return reranker.rerank(query, candidates, topK);
     }
 
     private List<SearchHit> graph(SearchContext ctx, String query, float[] queryEmbedding, int topK,
-                                  List<Long> projectIds, List<String> docIds) {
-        List<SearchHit> seed = hybrid(ctx, query, queryEmbedding, graphProps.getCandidates(), projectIds, docIds);
+                                  List<Long> projectIds, List<String> docIds,
+                                  MetadataFilter filter) {
+        List<SearchHit> seed = hybrid(ctx, query, queryEmbedding, graphProps.getCandidates(),
+                projectIds, docIds, filter);
         if (seed.isEmpty()) {
             return seed;   // fallback: nothing to expand from
         }
@@ -209,7 +243,7 @@ public class SearchService {
             if (!neighborDocs.isEmpty()) {
                 // Graph expansion walks doc_edge, which carries no access label - the label check
                 // happens here, when the neighbour's chunks are loaded.
-                for (SearchHit h : pgVector.chunksByDocIds(ctx, projectId, neighborDocs)) {
+                for (SearchHit h : pgVector.chunksByDocIds(ctx, projectId, neighborDocs, filter)) {
                     byId.putIfAbsent(h.id(), h);
                 }
             }
@@ -224,7 +258,7 @@ public class SearchService {
                 List<Long> expanded = new java.util.ArrayList<>(matched);
                 expanded.addAll(entityRepo.neighborEntityIds(projectId, matched));
                 List<Long> chunkIds = entityRepo.chunkIdsForEntities(expanded);
-                for (SearchHit h : pgVector.chunksByIds(ctx, chunkIds)) {
+                for (SearchHit h : pgVector.chunksByIds(ctx, chunkIds, filter)) {
                     byId.putIfAbsent(h.id(), h);
                 }
             }
@@ -245,9 +279,10 @@ public class SearchService {
     }
 
     private List<SearchHit> qdrantSearch(SearchContext ctx, float[] queryEmbedding, int topK,
-                                          List<Long> projectIds, List<String> docIds) {
+                                          List<Long> projectIds, List<String> docIds,
+                                          MetadataFilter filter) {
         try {
-            return qdrant.search(ctx, queryEmbedding, topK, projectIds, docIds);
+            return qdrant.search(ctx, queryEmbedding, topK, projectIds, docIds, filter);
         } catch (ExecutionException | InterruptedException e) {
             throw new IllegalStateException("Qdrant search failed", e);
         }

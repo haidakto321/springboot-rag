@@ -803,6 +803,113 @@ lever that matters on this hardware is the answer model, not the vector store.
 
 ---
 
+## 19. Structured filtering over extracted records (the filter is part of the query)
+
+Written 2026-08-06, while wiring `POST /projects/{id}/records` and the `filters` DSL.
+
+### The setup
+
+An upstream pipeline does upload -> parse -> extraction and hands the search layer **JSON records**:
+nested, with arrays, one schema per document type, and the set of types open - a tenant can upload
+a type nobody configured. Retrieval then has to answer "invoices from Q2 for customer X that
+mention late payment", which is a structured filter and a semantic query at once.
+
+### Extraction output is noisy, and the noise must not be embedded
+
+Fields arrive wrapped with provenance:
+
+```json
+{"customer": {"value": "ACME Corp", "confidence": 0.82,
+              "grounding": {"page": 2, "bbox": [12,44,90,60]}}}
+```
+
+A generic flatten embeds `customer.confidence: 0.82` and `customer.bbox: 12,44,90,60`. Coordinates
+and scores are the worst possible embedding input: no meaning, they dilute the vector, and digit
+strings match other digit strings. So the renderer detects the wrapper and splits it - value to
+text, provenance to metadata.
+
+The detection rule **fails open**: an object counts as a wrapper only when it has exactly one
+value-ish key and every other key is known provenance. An unrecognised key means "not a wrapper",
+because silently dropping a real extracted field is far worse than one noisy line of text.
+
+The grounding turns out to be a feature, not just noise to discard: `page` and `bbox` on the chunk
+mean a citation can point at a region of the source PDF, and `_page` becomes a filter.
+
+### Low confidence must not remove data from the index
+
+The tempting move is a `min-confidence` threshold at ingest. It is wrong: a dropped field is a
+question that can never be answered, and nobody outside can tell why the search missed. Instead
+every field is indexed and confidence is exposed - per field in `prov`, and aggregated per chunk as
+`conf.min` / `conf.avg`. A caller who wants only trustworthy hits filters on it. A threshold is a
+caller's policy, not a property of the index.
+
+Fields with no reported confidence get **no key at all** - not 0 (invisible to every threshold
+filter) and not 1.0 (a fabricated guarantee).
+
+### Two hashes, because "changed" has two meanings
+
+Re-extraction jitters a confidence from 0.82 to 0.83 without changing a single value. Hashing the
+raw record would re-embed the whole corpus to produce byte-identical vectors. So:
+
+- `content_hash` = sha256 of the **rendered text** -> drives re-embedding
+- `raw_hash` = sha256 of the **raw record** -> drives a metadata-only refresh
+
+Three outcomes, all verified live: identical record -> `skipped`; provenance-only change ->
+`metadata-refreshed` (a payload UPDATE, zero embedding calls); value change -> `indexed`.
+
+### Where a filter goes wrong quietly
+
+Four ways, all of which look like "bad recall" rather than a bug:
+
+1. **Post-filtering the results.** You asked for topK, filtered afterwards, and got fewer. The
+   predicate belongs inside the SQL and inside the Qdrant request.
+2. **Filtering after the reranker over-fetch trims.** `rerank` over-fetches 50 candidates then cuts
+   to 10. Filter after that and a matching document that sat at rank 55 is gone - sometimes. The
+   integration test seeds 60 wrong-customer decoys and one match precisely to catch this.
+3. **Graph expansion skipping the filter.** Expansion walks `doc_edge`, which carries no metadata,
+   so the check has to happen when the neighbour's chunks are loaded - the same rule access labels
+   already follow.
+4. **An empty filter that matches nothing.** `LEARNINGS` §13 recorded this for the doc-id filter and
+   it is a standing trap: "no filter" must render no predicate at all.
+
+### Qdrant parses dots in payload keys - so metadata is stored nested
+
+The natural design is flat dotted keys: `{"customer.name": "ACME"}`. Qdrant reads the dot in a
+filter key as a **path separator**, so that key can never be matched, while Postgres would match it
+happily - the two stores would silently disagree. Metadata is therefore stored as three nested
+trees, `values` / `prov` / `conf`, and each translator splits a dotted filter path its own way:
+`metadata #>> '{values,customer,name}'` in Postgres, `values.customer.name` in Qdrant.
+
+A related limit found the same way: Qdrant's `Range` is numeric only, so a `date` range on that
+backend throws instead of applying. A filter that quietly does nothing is worse than an error.
+
+### Metadata keys must be paths, not leaf names (found live, not by a test)
+
+The first implementation stored each field under its **leaf name**, so a line item's SKU landed at
+`values.sku` while every filter addressed `values.lineItems[].sku`. Every unit and integration test
+passed - they all filtered on top-level fields. The first live query against a line item returned
+nothing.
+
+Two fixes: store values and provenance nested under the **full path**, and let each non-header
+chunk inherit the record-level scalars so "ACME invoices whose line item is B-2" can be answered by
+the line-item chunk itself. The array index is deliberately dropped from the metadata path
+(`lineItems[3].sku` -> `values.lineItems.sku`): each element is already its own chunk, so a filter
+path does not depend on which element matched.
+
+> Lesson: tests written from the same mental model as the code share its blind spots. The live
+> query is not a formality at the end - it is the only check that did not inherit your assumptions.
+
+### Measured
+
+On a 3-record / 8-chunk sandbox project, `/compare` with and without a customer filter: qdrant
+25 ms -> 7 ms, fts 5 ms -> 2 ms, hybrid 4 ms -> 4 ms, and hit counts 8 -> 3. **That is noise, not
+evidence** - the corpus is far too small for the retrieve stage to mean anything, and the honest
+version of this measurement needs a corpus with records at wiki scale. What it does confirm is
+behaviour: identical hit sets across pgvector and Qdrant under the same filter, and the filter
+surviving the rerank over-fetch and graph expansion.
+
+---
+
 ## Where to go next
 `docs/ROADMAP.md` lists what's built and what's queued - notably **condense-question retrieval**
 (fixes vague follow-ups), snippet windowing, and token-budget history trimming. Each is a small

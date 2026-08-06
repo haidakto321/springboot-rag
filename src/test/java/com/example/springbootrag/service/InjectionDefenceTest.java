@@ -5,6 +5,7 @@ import com.example.springbootrag.config.ChatProperties;
 import com.example.springbootrag.guard.AnswerGuard;
 import com.example.springbootrag.guard.PromptFence;
 import com.example.springbootrag.model.SearchHit;
+import com.example.springbootrag.repository.MetadataFilter;
 import com.example.springbootrag.security.SearchContext;
 import com.example.springbootrag.security.TestContexts;
 import com.example.springbootrag.web.dto.AskResponse;
@@ -80,7 +81,7 @@ class InjectionDefenceTest {
         when(projectService.defaultProjectId()).thenReturn(1L);
 
         String poisoned = poisonedPage();
-        when(searchService.searchTraced(any(SearchContext.class), eq("rerank"), anyString(), anyInt(), anyList(), anyList()))
+        when(searchService.searchTraced(any(SearchContext.class), eq("rerank"), anyString(), anyInt(), anyList(), anyList(), any(MetadataFilter.class)))
                 .thenReturn(new SearchService.TracedSearch(List.of(
                         new SearchHit(1, "Expense-Policy", 1, poisoned, "Expense-Policy.md",
                                 "# Expense reimbursement policy > ## Administrative notice", 0.9, null),

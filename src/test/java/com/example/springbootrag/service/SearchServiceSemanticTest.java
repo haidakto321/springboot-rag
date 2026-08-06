@@ -8,6 +8,7 @@ import com.example.springbootrag.graph.EntityExtractor;
 import com.example.springbootrag.model.SearchHit;
 import com.example.springbootrag.repository.DocEdgeRepository;
 import com.example.springbootrag.repository.EntityRepository;
+import com.example.springbootrag.repository.MetadataFilter;
 import com.example.springbootrag.repository.PgFtsRepository;
 import com.example.springbootrag.repository.PgVectorRepository;
 import com.example.springbootrag.repository.QdrantRepository;
@@ -39,8 +40,8 @@ class SearchServiceSemanticTest {
         ChatProvider chat = mock(ChatProvider.class);
 
         // seed hybrid = a chunk in the well-known doc A
-        when(fts.search(any(SearchContext.class), anyString(), anyInt(), anyList(), anyList())).thenReturn(List.of(hit(1, "A")));
-        when(vec.search(any(SearchContext.class), any(float[].class), anyInt(), anyList(), anyList())).thenReturn(List.of(hit(1, "A")));
+        when(fts.search(any(SearchContext.class), anyString(), anyInt(), anyList(), anyList(), any(MetadataFilter.class))).thenReturn(List.of(hit(1, "A")));
+        when(vec.search(any(SearchContext.class), any(float[].class), anyInt(), anyList(), anyList(), any(MetadataFilter.class))).thenReturn(List.of(hit(1, "A")));
         when(edges.neighbors(anyLong(), anyList())).thenReturn(List.of());   // no structural link (orphan)
 
         // query mentions PaymentsService -> matches entity 10 -> chunk 99 lives in orphan doc B
@@ -49,7 +50,7 @@ class SearchServiceSemanticTest {
         when(entities.matchEntityIds(anyLong(), anyList(), anyInt())).thenReturn(List.of(10L));
         when(entities.neighborEntityIds(anyLong(), eq(List.of(10L)))).thenReturn(List.of());
         when(entities.chunkIdsForEntities(anyList())).thenReturn(List.of(99L));
-        when(vec.chunksByIds(any(SearchContext.class), eq(List.of(99L)))).thenReturn(List.of(hit(99, "B")));
+        when(vec.chunksByIds(any(SearchContext.class), eq(List.of(99L)), any(MetadataFilter.class))).thenReturn(List.of(hit(99, "B")));
 
         GraphProperties gp = new GraphProperties();
         gp.setEdges("both");

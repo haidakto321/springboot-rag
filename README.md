@@ -164,10 +164,10 @@ Existing corpora keep working after an upgrade: `schema.sql` backfills unlabelle
 ## Endpoints
 
 **Search and answers**
-- `GET /search?q=...&type=fts|pgvector|qdrant|hybrid|rerank|graph&topK=10` - optional `projectId=<id>`, `group=true`, `docIds=a&docIds=b`
-- `GET /compare?q=...&topK=10` - all six backends side by side (scores + timing)
-- `GET /ask?q=...` - one-shot RAG answer with citations
-- `POST /chat/stream` - streaming multi-turn RAG, NDJSON frames: `token`, `reasoning`, `sources`, `trace`, `guard`, `done`, `error`
+- `GET /search?q=...&type=fts|pgvector|qdrant|hybrid|rerank|graph&topK=10` - optional `projectId=<id>`, `group=true`, `docIds=a&docIds=b`, `docType=invoice`, `filters=<json>`
+- `GET /compare?q=...&topK=10` - all six backends side by side (scores + timing); same `docType` / `filters` params
+- `GET /ask?q=...` - one-shot RAG answer with citations; same `docType` / `filters` params
+- `POST /chat/stream` - streaming multi-turn RAG, NDJSON frames: `token`, `reasoning`, `sources`, `trace`, `guard`, `done`, `error`; `docType` / `filters` in the body
 
 **Documents and projects**
 - `POST /projects/{id}/documents` - multipart `.md` upload; optional `groups=hr&groups=public` sets the access label
@@ -176,6 +176,12 @@ Existing corpora keep working after an upgrade: `schema.sql` backfills unlabelle
 - `POST /projects`, `GET /projects`, `PATCH /projects/{id}`, `DELETE /projects/{id}`, `GET /groups`
 - Legacy flat routes target the Default project: `POST /ingest`, `POST /documents`, `GET /documents`, `DELETE /documents/{docId}`, `DELETE /docs/{docId}`
 
+**Extracted records** (see "Record search" below)
+- `POST /projects/{id}/records` - index one extracted JSON record; returns `indexed`, `metadata-refreshed`, or `skipped`
+- `DELETE /projects/{id}/records/{docId}` - removes it from Postgres, Qdrant, the edge graph, and the registry
+- `PUT /projects/{id}/profiles/{docType}` - optional render profile for a document type
+- `GET /projects/{id}/profiles`, `GET /projects/{id}/profiles/{docType}`
+
 **Feedback, traces, identity**
 - `POST /feedback` - one relevance label per `(project, doc, chunk, query)`; `DELETE /feedback` clears it; `GET /feedback?projectId&query&limit` dumps them
 - `GET /traces?limit=10` - the `rag_trace` rows behind your recent answers (your own only)
@@ -183,6 +189,62 @@ Existing corpora keep working after an upgrade: `schema.sql` backfills unlabelle
 - `GET /actuator/health` - the only unauthenticated route
 
 See `docs/ARCHITECTURE.md` for what each of these actually does step by step.
+
+## Record search (extracted JSON, not markdown)
+
+For the case where an upstream pipeline already did upload -> parse -> extraction and hands you a
+**JSON record plus metadata**. Document types differ per tenant and the set is open, so nothing
+here needs a schema up front.
+
+```bash
+curl -u alice:alice -X POST localhost:8085/projects/1/records \
+  -H 'Content-Type: application/json' -d '{
+    "docId": "INV-5575", "docType": "invoice", "groups": ["public"],
+    "record": {
+      "invoiceNumber": "5575",
+      "customer": {"value": "ACME Corp", "confidence": 0.82,
+                   "grounding": {"page": 2, "bbox": [12,44,90,60]}},
+      "lineItems": [{"sku": "A-1", "description": "Widget assembly"}]
+    }}'
+```
+
+- **Wrapped values are unwrapped.** `confidence`, `page`, and `bbox` become filterable metadata and
+  a deep-linkable citation; they never enter the embedded text, where scores and coordinates would
+  only dilute the vector.
+- **Every field is indexed regardless of confidence.** A threshold is the caller's policy - filter
+  on `conf.min` when you want only trustworthy hits.
+- **Chunking**: top-level scalars form a header chunk, each nested object a section chunk, each
+  array element its own chunk carrying its JSON path as breadcrumb plus the record's scalars.
+- **Re-posting is cheap**: identical record -> `skipped`; only a confidence changed ->
+  `metadata-refreshed` (no embedding call); a value changed -> `indexed`.
+
+Filter with dotted paths over the stored `values` / `prov` / `conf` trees:
+
+```bash
+curl -u alice:alice -G localhost:8085/search --data-urlencode q='late payment' \
+  --data-urlencode 'docType=invoice' \
+  --data-urlencode 'filters={"filters":[
+      {"path":"values.customer","op":"eq","value":"ACME Corp"},
+      {"path":"conf.min","op":"range","gte":0.7,"type":"number"}]}'
+```
+
+Ops: `eq`, `in`, `range` (`gte`/`gt`/`lte`/`lt`), `exists`; add `"type":"number"` or `"type":"date"`
+to cast. Filters AND together, apply inside every backend query, and compose with - never replace -
+your access labels. Known limit: a `date` range is unsupported on the `qdrant` backend and fails
+loudly rather than silently matching everything.
+
+**Render profiles** are optional per `(project, docType)` configuration - which paths to embed,
+what to call them, which are filter-only:
+
+```bash
+curl -u alice:alice -X PUT localhost:8085/projects/1/profiles/invoice \
+  -H 'Content-Type: application/json' \
+  -d '{"exclude":["rawOcrText"],"labels":{"issueDate":"Invoice date"},
+       "filterOnly":["internal.batchId"]}'
+```
+
+No profile means generic rendering, so an unconfigured document type is searchable the moment it
+lands. Editing a profile bumps its version and re-indexes only that document type.
 
 ## Reranking (`type=rerank`)
 `rerank` over-fetches hybrid candidates (`app.rerank.candidates`, default 50), reorders them with a

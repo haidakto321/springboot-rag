@@ -86,6 +86,18 @@ public class QdrantRepository {
                        String sourceFile, String headingPath, float[] embedding,
                        List<String> allowedGroups)
             throws ExecutionException, InterruptedException {
+        upsert(id, projectId, docId, chunkIndex, content, sourceFile, headingPath, embedding,
+                allowedGroups, null, null);
+    }
+
+    /**
+     * Record-aware upsert: the metadata object's top-level keys (values, prov, conf) become
+     * nested payload keys, so a dotted filter path matches Qdrant's own path syntax.
+     */
+    public void upsert(long id, long projectId, String docId, int chunkIndex, String content,
+                       String sourceFile, String headingPath, float[] embedding,
+                       List<String> allowedGroups, String docType, String metadataJson)
+            throws ExecutionException, InterruptedException {
         Map<String, Value> payload = new HashMap<>();
         payload.put("project_id", value(projectId));
         payload.put("doc_id", value(docId));
@@ -97,6 +109,12 @@ public class QdrantRepository {
         }
         if (headingPath != null) {
             payload.put("heading_path", value(headingPath));
+        }
+        if (docType != null) {
+            payload.put("doc_type", value(docType));
+        }
+        if (metadataJson != null && !metadataJson.isBlank() && !"{}".equals(metadataJson)) {
+            payload.putAll(JsonPayload.toQdrant(metadataJson));
         }
         PointStruct point = PointStruct.newBuilder()
                 .setId(id(id))
@@ -114,6 +132,14 @@ public class QdrantRepository {
      */
     public List<SearchHit> search(SearchContext ctx, float[] queryEmbedding, int topK,
                                   List<Long> projectIds, List<String> docIds)
+            throws ExecutionException, InterruptedException {
+        return search(ctx, queryEmbedding, topK, projectIds, docIds, MetadataFilter.none());
+    }
+
+    /** Same query, additionally narrowed by structured record metadata. */
+    public List<SearchHit> search(SearchContext ctx, float[] queryEmbedding, int topK,
+                                  List<Long> projectIds, List<String> docIds,
+                                  MetadataFilter metadataFilter)
             throws ExecutionException, InterruptedException {
         if (ctx.readsNothing()) {
             return List.of();     // an empty should-clause would match everything, not nothing
@@ -150,6 +176,14 @@ public class QdrantRepository {
             filter.addMust(io.qdrant.client.grpc.Points.Condition.newBuilder()
                     .setFilter(df.build()).build());
         }
+        // Metadata narrowing happens here, inside the search request, for the same reason the
+        // access label does: anything applied after the fact is not a filter, it is a truncation.
+        for (io.qdrant.client.grpc.Points.Condition c : FilterQdrant.conditions(metadataFilter)) {
+            filter.addMust(c);
+        }
+        for (io.qdrant.client.grpc.Points.Condition c : FilterQdrant.mustNotConditions(metadataFilter)) {
+            filter.addMustNot(c);
+        }
         search.setFilter(filter.build());
 
         List<ScoredPoint> points = client.searchAsync(search.build()).get();
@@ -168,6 +202,25 @@ public class QdrantRepository {
                     null));
         }
         return hits;
+    }
+
+    /** Rewrites the metadata payload keys of one chunk's point, leaving its vector alone. */
+    public void updateMetadata(long projectId, String docId, int chunkIndex, String metadataJson)
+            throws ExecutionException, InterruptedException {
+        io.qdrant.client.grpc.Points.SetPayloadPoints request =
+                io.qdrant.client.grpc.Points.SetPayloadPoints.newBuilder()
+                        .setCollectionName(collection)
+                        .putAllPayload(JsonPayload.toQdrant(metadataJson))
+                        .setPointsSelector(io.qdrant.client.grpc.Points.PointsSelector.newBuilder()
+                                .setFilter(io.qdrant.client.grpc.Points.Filter.newBuilder()
+                                        .addMust(match("project_id", projectId))
+                                        .addMust(matchKeyword("doc_id", docId))
+                                        .addMust(match("chunk_index", (long) chunkIndex))
+                                        .build())
+                                .build())
+                        .setWait(true)
+                        .build();
+        client.setPayloadAsync(request, java.time.Duration.ofMinutes(1)).get();
     }
 
     /** Deletes all Qdrant points for the given project+doc combination. */

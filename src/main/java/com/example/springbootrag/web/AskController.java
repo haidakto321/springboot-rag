@@ -26,8 +26,11 @@ public class AskController {
     @GetMapping("/ask")
     public AskResponse ask(@RequestParam String q,
                            @RequestParam(required = false) Long projectId,
-                           @RequestParam(defaultValue = "false") boolean group) {
+                           @RequestParam(defaultValue = "false") boolean group,
+                           @RequestParam(required = false) String docType,
+                           @RequestParam(required = false) String filters) {
         List<Long> scope = projectService.resolveScope(projectId, group);
-        return askService.ask(currentUser.context(), q, scope);
+        return askService.ask(currentUser.context(), q, scope,
+                SearchController.metadataFilter(docType, filters));
     }
 }

@@ -48,4 +48,12 @@ public class DocEdgeRepository {
     public void deleteBySrcDoc(long projectId, String srcDoc) {
         jdbc.update("DELETE FROM doc_edge WHERE project_id = ? AND src_doc = ?", projectId, srcDoc);
     }
+
+    /**
+     * Removes edges POINTING AT this doc. Without it a deleted document stays reachable by graph
+     * expansion: the hop succeeds, the chunk load returns nothing, and the neighbour is a ghost.
+     */
+    public void deleteByDstDoc(long projectId, String dstDoc) {
+        jdbc.update("DELETE FROM doc_edge WHERE project_id = ? AND dst_doc = ?", projectId, dstDoc);
+    }
 }

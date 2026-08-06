@@ -3,6 +3,7 @@ package com.example.springbootrag.service;
 import com.example.springbootrag.chat.ChatProvider;
 import com.example.springbootrag.config.ChatProperties;
 import com.example.springbootrag.model.SearchHit;
+import com.example.springbootrag.repository.MetadataFilter;
 import com.example.springbootrag.security.SearchContext;
 import com.example.springbootrag.web.dto.AskResponse;
 import com.example.springbootrag.security.TestContexts;
@@ -52,7 +53,7 @@ class AskServiceTest {
 
     @Test
     void buildsNumberedContextAndReturnsSources() {
-        when(searchService.searchTraced(any(SearchContext.class), eq("rerank"), anyString(), anyInt(), eq(List.of(1L)), anyList())).thenReturn(new SearchService.TracedSearch(List.of(
+        when(searchService.searchTraced(any(SearchContext.class), eq("rerank"), anyString(), anyInt(), eq(List.of(1L)), anyList(), any(MetadataFilter.class))).thenReturn(new SearchService.TracedSearch(List.of(
                 new SearchHit(1, "doc-a", 0, "chunk one text", "a.md", "# A > ## S", 0.9, null),
                 new SearchHit(2, "doc-b", 3, "chunk two text", "b.md", null, 0.7, null)), Map.of("embed", 1L, "retrieve", 2L)));
 
@@ -74,7 +75,7 @@ class AskServiceTest {
 
     @Test
     void emptyRetrievalShortCircuitsWithoutCallingLlm() {
-        when(searchService.searchTraced(any(SearchContext.class), eq("rerank"), anyString(), anyInt(), anyList(), anyList())).thenReturn(new SearchService.TracedSearch(List.of(), Map.of("embed", 1L, "retrieve", 2L)));
+        when(searchService.searchTraced(any(SearchContext.class), eq("rerank"), anyString(), anyInt(), anyList(), anyList(), any(MetadataFilter.class))).thenReturn(new SearchService.TracedSearch(List.of(), Map.of("embed", 1L, "retrieve", 2L)));
         ChatProvider mockChat = mock(ChatProvider.class);
         AskService svc = new AskService(searchService, mockChat, props, projectService, NoopTraceRecorder.create());
 

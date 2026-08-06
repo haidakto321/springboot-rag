@@ -929,3 +929,131 @@ measurement. Recorded in LEARNINGS section 18 and used to seed RAG-MASTERY secti
 No metrics or alerting, no aggregate latency view, no export to CloudWatch-shaped tooling, and the
 per-answer panel is the only UI. Scorecard row 6 was scored 2 on that basis: this is evidence
 capture, not observability.
+
+---
+
+## Record search - metadata shape (2026-08-06)
+
+Spec: `docs/superpowers/specs/2026-08-06-record-search-design.md`.
+Plan: `docs/superpowers/plans/2026-08-06-record-search.md`.
+
+### Metadata is nested, not flat dotted keys - a deviation from the spec
+
+The spec wrote metadata keys as flat dotted paths (`"customer.name"`, `"_confidence.min"`).
+**Qdrant parses `.` in a filter key as a nested-path separator**, so a payload key that literally
+contains a dot can never be matched by a filter, and the two stores would disagree about what a
+path means. The stored shape is therefore three nested trees:
+
+```json
+{
+  "values": { "customer": { "name": "ACME" }, "issueDate": "2026-05-02" },
+  "prov":   { "customer": { "confidence": 0.82, "page": 2, "bbox": [12,44,90,60] } },
+  "conf":   { "min": 0.71, "avg": 0.88 }
+}
+```
+
+Filter paths stay dotted in the API (`values.customer.name`, `conf.min`) and each translator
+splits them: Postgres `metadata #>> '{values,customer,name}'`, Qdrant `values.customer.name`.
+Array markers `[]` are dropped from a path, because an array element is its own chunk carrying its
+own scalars - `lineItems[].sku` becomes `values.lineItems.sku`.
+
+### chunks carries the metadata, not a side table
+
+`chunks.metadata JSONB NOT NULL DEFAULT '{}'` plus `chunks.doc_type`. Denormalized per chunk on
+purpose: every filter then becomes a predicate inside the retrieval query with no join, which is
+what keeps the filter enforceable in all six backends rather than a post-filter on results.
+GIN index uses `jsonb_path_ops` (containment only, smaller and faster than the default operator
+class - none of the filters need key-existence search).
+
+### ingestChunks fails loudly on a metadata/chunk size mismatch
+
+`capToBudget` can split one rendered block into several chunks and renumbers the whole list. A
+metadata list built against the pre-cap list would then attach one field group's provenance to
+another group's text - silent, and unfindable later. The 8-arg `ingestChunks` overload throws
+`IllegalStateException` when the sizes differ, and callers that pass metadata must run
+`capToBudget` themselves first.
+
+### Environment note
+
+The dev stack (`docker compose up -d`) must be running for the tests that boot against
+`application.yml` rather than Testcontainers - `GraphPropertiesTest` is the one that fails first
+with "Connection to localhost:5432 refused" when it is not.
+
+### Metadata keys are paths, not leaf names - a bug found live, not by tests
+
+The first renderer stored each field under its **leaf name**: a line item's SKU landed at
+`values.sku` while every filter addresses `values.lineItems[].sku`. All 277 tests passed, because
+every one of them filtered on a top-level field. The first live query against a line item returned
+nothing.
+
+Fix: `RecordRenderer.putPath` stores values and provenance nested under the full path, and every
+non-header block inherits the record-level scalars so "ACME invoices whose line item is B-2" can be
+answered by the line-item chunk itself. The array index is dropped from the metadata path
+(`lineItems[3].sku` -> `values.lineItems.sku`) because each element is already its own chunk, so a
+filter path must not depend on which element matched. `RecordRendererTest` gained four cases that
+would have caught it.
+
+### Confidence policy
+
+Every field is indexed regardless of its score. A `min-confidence` threshold at ingest was
+considered and rejected: a dropped field is a question nobody can ever answer, and the miss is
+invisible from outside. Confidence is exposed instead - per field under `prov`, aggregated per
+chunk as `conf.min` / `conf.avg` - so a threshold becomes a caller's filter. A field with no
+reported confidence gets no key at all: 0 would hide it from every threshold filter and 1.0 would
+be a fabricated guarantee. Non-numeric confidence ("high") is quarantined as `confidence_raw` so it
+cannot poison a numeric range filter.
+
+### Two hashes
+
+`content_hash` covers the rendered text and drives re-embedding; `raw_hash` covers the raw record
+and drives a metadata-only refresh. Without the split, a re-extraction that jitters a confidence
+from 0.82 to 0.83 would re-embed a whole corpus to produce byte-identical vectors. Verified live:
+identical record -> `skipped`, confidence-only change -> `metadata-refreshed` (zero embedding
+calls), value change -> `indexed`.
+
+### Delete ordering fixed while here
+
+`IngestService.delete` deleted Postgres rows before Qdrant points - the opposite of the rule
+`LEARNINGS.md` §13 states. Now Qdrant goes first, so a Qdrant failure leaves the Postgres rows
+intact and retryable instead of orphaning vectors forever. Delete also now clears `doc_edge` rows
+where the document is the **destination** (a dangling inbound edge lets graph expansion hop to a
+document that no longer exists) and the `document` registry row. `chunk_feedback` and `rag_trace`
+are deliberately kept.
+
+### Qdrant limits that shaped the design
+
+- **Dots in payload keys are path separators.** Flat dotted metadata keys would match in Postgres
+  and never in Qdrant, so metadata is stored as nested `values`/`prov`/`conf` trees and each
+  translator splits a dotted filter path its own way.
+- **`Range` is numeric only.** A `date` range on the qdrant backend throws
+  `IllegalArgumentException` rather than silently not applying. Storing dates as epoch numbers is
+  the follow-up if it matters.
+- **`is_null` is the inverse of `exists`,** so `exists` conditions go into `must_not` rather than
+  `must`.
+
+### Accepted gaps (deliberate, from the plan's self-review)
+
+- **Filter warnings are not surfaced per request.** An unknown filter path matches nothing rather
+  than returning a warning, because a warnings envelope on `/search` would break the response
+  contract the existing UI depends on.
+- **`RenderProfile.boundaries` is parsed, stored, and tested but not yet consumed** by the
+  renderer, which uses generic boundaries only. The field is persisted so wiring it later needs no
+  migration.
+- **No UI for records or filters.** The endpoints are curl-level; the existing screens are
+  unchanged.
+- **The latency measurement is not evidence.** Filtered vs unfiltered on a 3-record project
+  (qdrant 25 ms -> 7 ms, hybrid 4 -> 4) is noise at that size. A real number needs records at wiki
+  scale.
+
+### Live verification (2026-08-06)
+
+Ran against the app on port **8086** rather than the usual 8085: an app instance from the previous
+session still held 8085, and starting a second one on a free port was preferable to killing a
+process the user started. Project 12 in the live database holds the verification records
+(`INV-5575`, `INV-5576`, `DN-9001`); projects 10 and 11 are earlier attempts from the same session
+and can be deleted.
+
+Confirmed live: the three ingest outcomes; `docType` narrowing; `values.customer` eq; `conf.min`
+range excluding the 0.44-confidence document; `values.lineItems[].sku` selecting exactly the
+`lineItems[1]` chunks; and stored metadata carrying `page`/`bbox` in `prov` while the embedded text
+contains neither.

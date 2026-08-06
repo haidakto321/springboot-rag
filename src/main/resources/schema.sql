@@ -178,3 +178,49 @@ CREATE TABLE IF NOT EXISTS chunk_feedback (
 );
 
 CREATE INDEX IF NOT EXISTS idx_chunk_feedback_project ON chunk_feedback (project_id, updated_at DESC);
+
+-- ---- Extracted-record support (2026-08-06) ----
+-- doc_type is the render-profile lookup key and a filter field. Deliberately free-form: the set
+-- of document types an extraction pipeline emits is open, so a validated enum would reject the
+-- interesting case (a type nobody configured yet).
+-- metadata holds three nested trees - values (extracted data), prov (confidence/page/bbox),
+-- conf (per-chunk min/avg). Nested rather than flat dotted keys because Qdrant parses '.' in a
+-- filter key as a path separator, and both stores must agree on one shape.
+ALTER TABLE chunks ADD COLUMN IF NOT EXISTS doc_type VARCHAR(128);
+ALTER TABLE chunks ADD COLUMN IF NOT EXISTS metadata JSONB NOT NULL DEFAULT '{}'::jsonb;
+
+CREATE INDEX IF NOT EXISTS idx_chunks_metadata ON chunks USING gin (metadata jsonb_path_ops);
+CREATE INDEX IF NOT EXISTS idx_chunks_doc_type ON chunks (project_id, doc_type);
+
+-- One OPTIONAL rendering configuration per (project, docType). Absent means generic rendering,
+-- which is what makes an unconfigured document type searchable the moment it lands.
+-- version is bumped on every write and participates in the freshness hash, so editing a profile
+-- re-indexes exactly the documents of that type and nothing else.
+CREATE TABLE IF NOT EXISTS render_profile (
+    project_id BIGINT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+    doc_type   VARCHAR(128) NOT NULL,
+    body       JSONB NOT NULL,
+    version    INT NOT NULL DEFAULT 1,
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    PRIMARY KEY (project_id, doc_type)
+);
+
+-- One row per indexed document: what was indexed, from what, and under which settings.
+-- content_hash covers the RENDERED text and drives re-embedding; raw_hash covers the raw record
+-- and drives a cheap metadata refresh when only provenance (a confidence, a bbox) changed.
+-- Splitting them is what stops a re-extraction that jitters a score from re-embedding a corpus
+-- to produce byte-identical vectors.
+CREATE TABLE IF NOT EXISTS document (
+    project_id      BIGINT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+    doc_id          VARCHAR(255) NOT NULL,
+    doc_type        VARCHAR(128),
+    origin          VARCHAR(32) NOT NULL DEFAULT 'record',   -- 'record' | 'upload'
+    content_hash    CHAR(64) NOT NULL,
+    raw_hash        CHAR(64) NOT NULL,
+    embed_model     VARCHAR(128) NOT NULL,
+    profile_version INT,
+    allowed_groups  TEXT[] NOT NULL,
+    chunk_count     INT NOT NULL,
+    indexed_at      TIMESTAMPTZ NOT NULL DEFAULT now(),
+    PRIMARY KEY (project_id, doc_id)
+);

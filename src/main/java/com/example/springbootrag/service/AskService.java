@@ -69,6 +69,13 @@ public class AskService {
      * the prompt - and therefore can never be quoted back to them in an answer.
      */
     public AskResponse ask(SearchContext ctx, String question, List<Long> projectIds) {
+        return ask(ctx, question, projectIds,
+                com.example.springbootrag.repository.MetadataFilter.none());
+    }
+
+    /** Same, narrowed by structured record metadata. */
+    public AskResponse ask(SearchContext ctx, String question, List<Long> projectIds,
+                           com.example.springbootrag.repository.MetadataFilter filter) {
         if (question == null || question.isBlank()) {
             throw new IllegalArgumentException("question is required");
         }
@@ -77,7 +84,7 @@ public class AskService {
 
         // "rerank" = hybrid + reranker; with no reranker configured it degrades to plain hybrid.
         SearchService.TracedSearch search = searchService.searchTraced(ctx, "rerank", question,
-                props.getContextChunks(), projectIds, List.of());
+                props.getContextChunks(), projectIds, List.of(), filter);
         List<SearchHit> hits = search.hits();
         Map<String, Long> stages = new LinkedHashMap<>(search.stageLatencyMs());
         if (hits.isEmpty()) {

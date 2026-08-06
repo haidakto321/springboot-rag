@@ -281,8 +281,82 @@ flowchart TB
     class EMB,W1,W2,EDGE,EX,ENT blue
 ```
 
-**Known gap:** ingest is one-shot. Nothing detects that a source page changed, and deleting a page
-upstream leaves it in the index (`RAG-MASTERY.md` section 7).
+**Known gap:** *markdown* ingest is one-shot. Nothing detects that an uploaded page changed, and
+deleting a page upstream leaves it in the index (`RAG-MASTERY.md` section 7). Record ingest, below,
+does not have this gap.
+
+---
+
+## 6b. Record ingest - extracted JSON instead of markdown
+
+`POST /projects/{id}/records` is the path for an upstream pipeline that already did
+upload -> parse -> extraction. The input is arbitrary nested JSON whose schema differs per document
+type and per tenant, so nothing here requires a schema up front.
+
+```mermaid
+%%{init: {'theme':'base', 'flowchart': {'curve':'stepAfter'}, 'themeVariables': {'fontSize':'13px', 'fontFamily':'Segoe UI, Arial', 'lineColor':'#64748b', 'edgeLabelBackground':'#ffffff'}}}%%
+flowchart TB
+    RQ["<b>POST /projects/{id}/records</b><br/>docId · docType · record · groups[]"] --> RV{"<b>validate</b><br/>docId · docType · object"}
+    RV -->|fail| RE400["<b>400</b> ProblemDetail"]
+    RV --> PROF{"<b>render_profile</b><br/>for this docType?"}
+    PROF -->|yes| REND
+    PROF -->|no, the common case| REND["<b>RecordRenderer</b><br/>header · section · array-element blocks<br/>breadcrumb = JSON path"]
+    REND --> UW["<b>ValueWrapper</b><br/>value → text<br/>confidence · page · bbox → metadata"]
+    UW --> EMPTY{"<b>any text?</b>"}
+    EMPTY -->|no| RE400
+    EMPTY --> HASH["<b>RecordHash</b><br/>content_hash = rendered text<br/>raw_hash = raw record"]
+    HASH --> DEC{"<b>compare with</b><br/>document registry"}
+    DEC -->|all equal| SKIP["<b>skipped</b><br/>zero embedding calls"]
+    DEC -->|text same, raw differs| REFR["<b>metadata-refreshed</b><br/>UPDATE payload in both stores"]
+    DEC -->|text · model · profile · groups differ| ING["<b>indexed</b><br/>capToBudget → embed → write"]
+    ING --> W1[("<b>Postgres</b><br/>chunks + doc_type + metadata")]
+    ING --> W2[("<b>Qdrant</b><br/>vector + nested payload")]
+    W1 --> REG[("<b>document</b><br/>registry row")]
+    W2 --> REG
+
+    classDef blue stroke:#3b82f6,fill:#eff6ff,stroke-width:2px,color:#1e3a8a
+    classDef purple stroke:#8b5cf6,fill:#f5f3ff,stroke-width:2px,color:#4c1d95
+    classDef amber stroke:#f59e0b,fill:#fffbeb,stroke-width:2px,color:#78350f
+    classDef red stroke:#dc2626,fill:#fef2f2,stroke-width:2px,color:#7f1d1d
+    classDef grey stroke:#64748b,fill:#f1f5f9,stroke-width:2px,color:#1e293b
+
+    class RQ,SKIP,REFR grey
+    class RV,PROF,EMPTY,DEC purple
+    class RE400 red
+    class REND,UW,HASH amber
+    class ING,W1,W2,REG blue
+```
+
+**Chunk metadata** is three nested trees per chunk, stored in `chunks.metadata` (JSONB) and mirrored
+into the Qdrant payload:
+
+| Tree | Holds | Example filter path |
+|---|---|---|
+| `values` | the extracted data, nested by its path in the record | `values.customer.name` |
+| `prov` | what the extractor said about it: `confidence`, `page`, `bbox`, `span` | `prov.customer.confidence` |
+| `conf` | per-chunk aggregate over numeric confidences | `conf.min` |
+
+Nested rather than flat dotted keys because Qdrant parses a dot inside a payload key as a path
+separator - a flat `"customer.name"` key would match in Postgres and never in Qdrant.
+
+**Delete** (`DELETE /projects/{id}/records/{docId}`, and `IngestService.delete` generally) removes:
+Qdrant points **first** (the fallible store, so a failure is retryable), then Postgres chunks,
+`doc_edge` rows in **both** directions, the `document` registry row, and orphaned entities.
+`chunk_feedback` and `rag_trace` rows are kept on purpose - labels are eval evidence and traces are
+a record of what was actually answered.
+
+### Where a metadata filter is enforced
+
+| Backend | Enforcement point |
+|---|---|
+| `fts`, `pgvector` | `FilterSql` fragment appended to the WHERE clause of the retrieval query |
+| `qdrant` | `FilterQdrant` conditions added to the search request's `must` / `must_not` |
+| `hybrid` | both arms filtered before RRF fusion |
+| `rerank` | the **over-fetch** is filtered, before the trim to topK |
+| `graph` | seed filtered, and the neighbour chunk load filtered too, so expansion cannot bypass it |
+
+A filter narrows only. `allowed_groups` stays a separate AND term in every one of those queries: a
+filter is a caller preference, a label is a boundary.
 
 ---
 
@@ -295,6 +369,10 @@ upstream leaves it in the index (`RAG-MASTERY.md` section 7).
 | Labelling a document with a group you are not in | `403` | `CurrentUser.requireOwnGroups` |
 | Unknown `type`, `topK` outside 1..100, blank docId, unknown group, bad rating, oversized query | `400` ProblemDetail | `GlobalExceptionHandler` |
 | Upload not `.md`, over 2 MB, or invalid UTF-8 | `400` | `DocumentController.parseUpload` |
+| Record with no docType, non-object record, or one that renders to no text | `400` | `RecordIngestService.ingest` |
+| Malformed filter JSON, unknown op, `range` with no bound, `in` with an empty list, illegal path segment | `400` | `MetadataFilter.parse` / `FilterSql.segments` |
+| Filter path that does not exist in any record | matches nothing (not an error - schemas differ per tenant) | `FilterSql` |
+| `date` range filter on the `qdrant` backend | `400` - Qdrant `Range` is numeric only | `FilterQdrant.numericRange` |
 | Feedback on a chunk you cannot read | `400` (deliberately identical to "not found") | `FeedbackController.requireVisible` |
 | Ollama down / model missing | `503` | `ChatUnavailableException` |
 | Qdrant down at startup | app still boots, Qdrant backends fail per call | `QdrantRepository.ensureCollection` |

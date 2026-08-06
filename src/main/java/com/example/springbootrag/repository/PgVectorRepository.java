@@ -27,15 +27,37 @@ public class PgVectorRepository {
     public long insert(long projectId, String docId, int chunkIndex, String content,
                        String sourceFile, String headingPath, float[] embedding,
                        java.time.Instant updatedAt, List<String> allowedGroups) {
+        return insert(projectId, docId, chunkIndex, content, sourceFile, headingPath, embedding,
+                updatedAt, allowedGroups, null, null);
+    }
+
+    /**
+     * Record-aware insert. {@code metadataJson} is the values/prov/conf object for this chunk;
+     * null or blank stores an empty object, which is what the markdown path does.
+     */
+    public long insert(long projectId, String docId, int chunkIndex, String content,
+                       String sourceFile, String headingPath, float[] embedding,
+                       java.time.Instant updatedAt, List<String> allowedGroups,
+                       String docType, String metadataJson) {
         String groupsLiteral = toArrayLiteral(allowedGroups);
         return jdbc.queryForObject(
-                "INSERT INTO chunks (project_id, doc_id, chunk_index, content, source_file, heading_path, embedding, updated_at, allowed_groups) " +
-                        "VALUES (?, ?, ?, ?, ?, ?, ?::vector, ?, ?::text[]) RETURNING id",
+                "INSERT INTO chunks (project_id, doc_id, chunk_index, content, source_file, heading_path, " +
+                        "embedding, updated_at, allowed_groups, doc_type, metadata) " +
+                        "VALUES (?, ?, ?, ?, ?, ?, ?::vector, ?, ?::text[], ?, ?::jsonb) RETURNING id",
                 Long.class,
                 projectId, docId, chunkIndex, content, sourceFile, headingPath,
                 toVectorLiteral(embedding),
                 updatedAt == null ? null : java.sql.Timestamp.from(updatedAt),
-                groupsLiteral);
+                groupsLiteral, docType,
+                metadataJson == null || metadataJson.isBlank() ? "{}" : metadataJson);
+    }
+
+    /** Rewrites one chunk's metadata without touching its vector. */
+    public void updateMetadata(long projectId, String docId, int chunkIndex, String metadataJson) {
+        jdbc.update("UPDATE chunks SET metadata = ?::jsonb " +
+                        "WHERE project_id = ? AND doc_id = ? AND chunk_index = ?",
+                metadataJson == null || metadataJson.isBlank() ? "{}" : metadataJson,
+                projectId, docId, chunkIndex);
     }
 
     /**
@@ -44,6 +66,13 @@ public class PgVectorRepository {
      */
     public List<SearchHit> search(SearchContext ctx, float[] queryEmbedding, int topK,
                                   List<Long> projectIds, List<String> docIds) {
+        return search(ctx, queryEmbedding, topK, projectIds, docIds, MetadataFilter.none());
+    }
+
+    /** Same query, additionally narrowed by structured record metadata. */
+    public List<SearchHit> search(SearchContext ctx, float[] queryEmbedding, int topK,
+                                  List<Long> projectIds, List<String> docIds,
+                                  MetadataFilter filter) {
         StringBuilder where = new StringBuilder(" WHERE" + DocFilter.groupClause(ctx.groups()));
         List<Object> args = new ArrayList<>();
         args.add(toVectorLiteral(queryEmbedding));
@@ -56,6 +85,9 @@ public class PgVectorRepository {
             where.append(" AND doc_id IN (").append(DocFilter.placeholders(docIds.size())).append(")");
             args.addAll(docIds);
         }
+        FilterSql.Fragment meta = FilterSql.render(filter);
+        where.append(meta.sql());
+        args.addAll(meta.args());
         args.add(topK);
         return jdbc.query(
                 "SELECT id, doc_id, chunk_index, content, source_file, heading_path, updated_at, " +
@@ -78,18 +110,30 @@ public class PgVectorRepository {
      * Used by graph expansion, which must not become a way around the access filter.
      */
     public List<SearchHit> chunksByDocIds(SearchContext ctx, long projectId, List<String> docIds) {
+        return chunksByDocIds(ctx, projectId, docIds, MetadataFilter.none());
+    }
+
+    /**
+     * Same, narrowed by record metadata. Graph expansion uses this, so a neighbour that fails the
+     * caller's filter is dropped here - expansion must not become a way around a filter, exactly
+     * as it must not become a way around an access label.
+     */
+    public List<SearchHit> chunksByDocIds(SearchContext ctx, long projectId, List<String> docIds,
+                                          MetadataFilter filter) {
         if (docIds == null || docIds.isEmpty()) {
             return List.of();
         }
         String placeholders = String.join(",", java.util.Collections.nCopies(docIds.size(), "?"));
+        FilterSql.Fragment meta = FilterSql.render(filter);
         List<Object> args = new ArrayList<>();
         args.addAll(ctx.groups());
         args.add(projectId);
         args.addAll(docIds);
+        args.addAll(meta.args());
         return jdbc.query(
                 "SELECT id, doc_id, chunk_index, content, source_file, heading_path, updated_at " +
                 "FROM chunks WHERE" + DocFilter.groupClause(ctx.groups()) +
-                " AND project_id = ? AND doc_id IN (" + placeholders + ")",
+                " AND project_id = ? AND doc_id IN (" + placeholders + ")" + meta.sql(),
                 (rs, n) -> new SearchHit(
                         rs.getLong("id"), rs.getString("doc_id"), rs.getInt("chunk_index"),
                         rs.getString("content"), rs.getString("source_file"), rs.getString("heading_path"),
@@ -99,16 +143,23 @@ public class PgVectorRepository {
 
     /** Chunks for the given ids, as SearchHits (score 0; rerank rescoring follows). */
     public List<SearchHit> chunksByIds(SearchContext ctx, List<Long> ids) {
+        return chunksByIds(ctx, ids, MetadataFilter.none());
+    }
+
+    /** Same, narrowed by record metadata - the semantic half of graph expansion. */
+    public List<SearchHit> chunksByIds(SearchContext ctx, List<Long> ids, MetadataFilter filter) {
         if (ids == null || ids.isEmpty()) {
             return List.of();
         }
         String placeholders = String.join(",", java.util.Collections.nCopies(ids.size(), "?"));
+        FilterSql.Fragment meta = FilterSql.render(filter);
         List<Object> args = new ArrayList<>(ctx.groups());
         args.addAll(ids);
+        args.addAll(meta.args());
         return jdbc.query(
                 "SELECT id, doc_id, chunk_index, content, source_file, heading_path, updated_at " +
                 "FROM chunks WHERE" + DocFilter.groupClause(ctx.groups()) +
-                " AND id IN (" + placeholders + ")",
+                " AND id IN (" + placeholders + ")" + meta.sql(),
                 (rs, n) -> new SearchHit(
                         rs.getLong("id"), rs.getString("doc_id"), rs.getInt("chunk_index"),
                         rs.getString("content"), rs.getString("source_file"), rs.getString("heading_path"),

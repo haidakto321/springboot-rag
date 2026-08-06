@@ -7,6 +7,7 @@ import com.example.springbootrag.graph.EntityExtractor;
 import com.example.springbootrag.model.SearchHit;
 import com.example.springbootrag.repository.DocEdgeRepository;
 import com.example.springbootrag.repository.EntityRepository;
+import com.example.springbootrag.repository.MetadataFilter;
 import com.example.springbootrag.repository.PgFtsRepository;
 import com.example.springbootrag.repository.PgVectorRepository;
 import com.example.springbootrag.repository.QdrantRepository;
@@ -40,14 +41,14 @@ class SearchServiceGraphTest {
         EntityRepository entityRepo = mock(EntityRepository.class);
 
         // hybrid seed = one hit in doc A
-        when(fts.search(any(SearchContext.class), anyString(), anyInt(), anyList(), anyList()))
+        when(fts.search(any(SearchContext.class), anyString(), anyInt(), anyList(), anyList(), any(MetadataFilter.class)))
                 .thenReturn(List.of(hit(1, "A", null)));
-        when(vec.search(any(SearchContext.class), any(float[].class), anyInt(), anyList(), anyList()))
+        when(vec.search(any(SearchContext.class), any(float[].class), anyInt(), anyList(), anyList(), any(MetadataFilter.class)))
                 .thenReturn(List.of(hit(1, "A", null)));
         // A links to B
         when(edges.neighbors(anyLong(), eq(List.of("A")))).thenReturn(List.of("B"));
         // neighbor pull returns a chunk from B
-        when(vec.chunksByDocIds(any(SearchContext.class), anyLong(), eq(List.of("B"))))
+        when(vec.chunksByDocIds(any(SearchContext.class), anyLong(), eq(List.of("B")), any(MetadataFilter.class)))
                 .thenReturn(List.of(hit(2, "B", null)));
 
         GraphProperties gp = new GraphProperties();
@@ -78,8 +79,8 @@ class SearchServiceGraphTest {
 
         // seed = single hit in doc S (irrelevant to the assertions below)
         SearchHit seedHit = new SearchHit(1, "S", 0, "seed", "S.md", null, 0.05, oldest);
-        when(fts.search(any(SearchContext.class), anyString(), anyInt(), anyList(), anyList())).thenReturn(List.of(seedHit));
-        when(vec.search(any(SearchContext.class), any(float[].class), anyInt(), anyList(), anyList())).thenReturn(List.of(seedHit));
+        when(fts.search(any(SearchContext.class), anyString(), anyInt(), anyList(), anyList(), any(MetadataFilter.class))).thenReturn(List.of(seedHit));
+        when(vec.search(any(SearchContext.class), any(float[].class), anyInt(), anyList(), anyList(), any(MetadataFilter.class))).thenReturn(List.of(seedHit));
 
         // S links to three neighbor docs:
         //  - HIGH: high rerank score but OLDER updatedAt than TIE_B - a pure-recency primary
@@ -90,7 +91,7 @@ class SearchServiceGraphTest {
         SearchHit highHit = new SearchHit(2, "HIGH", 0, "high relevance, older", "HIGH.md", null, 0.9, middle);
         SearchHit tieAHit = new SearchHit(3, "TIE_A", 0, "low relevance, oldest", "TIE_A.md", null, 0.1, oldest);
         SearchHit tieBHit = new SearchHit(4, "TIE_B", 0, "low relevance, newest", "TIE_B.md", null, 0.1, newest);
-        when(vec.chunksByDocIds(any(SearchContext.class), anyLong(), eq(List.of("HIGH", "TIE_A", "TIE_B"))))
+        when(vec.chunksByDocIds(any(SearchContext.class), anyLong(), eq(List.of("HIGH", "TIE_A", "TIE_B")), any(MetadataFilter.class)))
                 .thenReturn(List.of(highHit, tieAHit, tieBHit));
 
         GraphProperties gp = new GraphProperties();
@@ -136,14 +137,14 @@ class SearchServiceGraphTest {
         // seed hit S is relevant to BOTH keyword and vector search (agreement -> higher RRF score)
         // and is older than the neighbor chunk below.
         SearchHit seedHit = new SearchHit(1, "S", 0, "relevant seed", "S.md", null, 0.9, older);
-        when(fts.search(any(SearchContext.class), anyString(), anyInt(), anyList(), anyList())).thenReturn(List.of(seedHit));
-        when(vec.search(any(SearchContext.class), any(float[].class), anyInt(), anyList(), anyList())).thenReturn(List.of(seedHit));
+        when(fts.search(any(SearchContext.class), anyString(), anyInt(), anyList(), anyList(), any(MetadataFilter.class))).thenReturn(List.of(seedHit));
+        when(vec.search(any(SearchContext.class), any(float[].class), anyInt(), anyList(), anyList(), any(MetadataFilter.class))).thenReturn(List.of(seedHit));
 
         // Neighbor chunk is recent but carries a much LOWER relevance score than the seed hit.
         when(edges.neighbors(anyLong(), eq(List.of("S")))).thenReturn(List.of("RECENT"));
         SearchHit recentLowRelevance = new SearchHit(2, "RECENT", 0, "recent, low relevance",
                 "RECENT.md", null, 0.01, newer);
-        when(vec.chunksByDocIds(any(SearchContext.class), anyLong(), eq(List.of("RECENT"))))
+        when(vec.chunksByDocIds(any(SearchContext.class), anyLong(), eq(List.of("RECENT")), any(MetadataFilter.class)))
                 .thenReturn(List.of(recentLowRelevance));
 
         GraphProperties gp = new GraphProperties();

@@ -445,12 +445,12 @@ the point of the exercise.
 | # | Capability | Today (2026-07-28) |
 |---|---|---|
 | 1 | Retrieval filtered by authenticated identity | 2 (was 0) |
-| 2 | Ingestion failure modes catalogued for this corpus | 1 |
+| 2 | Ingestion failure modes catalogued for this corpus | 2 (was 1) |
 | 3 | Eval running on the realistic corpus, as a gate | 2 |
 | 4 | Query routing and transforms beyond condense | 1 |
 | 5 | Injection-resistant prompting, cite-or-refuse | 1 (was 0) |
 | 6 | Per-request trace of the whole chain | 2 (was 0) |
-| 7 | Incremental re-sync and delete propagation | 0 |
+| 7 | Incremental re-sync and delete propagation | 1 (was 0) |
 | 8 | Measured latency / token / cost budget | 1 |
 
 **Row 1 update (2026-08-05): now 2.** Retrieval is filtered by the authenticated principal in every
@@ -470,6 +470,26 @@ provably no longer runs. It stays a 1 because a live probe still extracted the a
 as a cited, grounded answer, streaming can only warn after the tokens are sent, and a
 citing-but-lying injection would pass untouched. A partial defence honestly scored beats a 2 that
 one probe can embarrass.
+
+**Row 2 update (2026-08-06): now 2.** Record ingest catalogues the failure modes of extraction
+output rather than of markdown: wrapper detection that fails open on an unknown key, a loud error
+when a record renders to no text, a size guard that turns a metadata/chunk misalignment into an
+exception instead of misattributed provenance, non-numeric confidence quarantined as
+`confidence_raw`, and a document type nobody configured still being fully searchable. It is a 2 and
+not more because the catalogue is for *this* record shape - a corpus of real tenant extractions
+would surely add to it.
+
+**Row 7 update (2026-08-06): now 1, not 2.** Re-posting a record is now cheap and correct - two
+hashes decide between re-embedding, a metadata-only refresh, and doing nothing, and delete
+propagates to Qdrant, both edge directions, and the registry (`LEARNINGS.md` §19). It stays a 1
+because nothing *detects* upstream change on its own: there is no scheduled sync, no deletion
+detection for records the pipeline stopped sending, and no migration path planned for an embedding
+model change beyond "everything re-indexes".
+
+**Row 4 update (2026-08-06): still 1.** Metadata filtering is now real and enforced inside all six
+backends, which is the retrieval half of query understanding. The *understanding* half is still
+missing: nothing parses "invoices from Q2 for ACME" into that filter, there is no routing between
+backends, and condense-question remains the only query transform.
 
 **Row 3 update (2026-08-05): now 2.** `golden-wiki.yaml` runs against the real corpus and, as of
 drill C, `WikiRetrievalEvalTest` fails when any backend drops more than 0.02 on recall@5/MRR/hit@1
