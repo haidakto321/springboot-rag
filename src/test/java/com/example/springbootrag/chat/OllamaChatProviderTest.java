@@ -60,6 +60,33 @@ class OllamaChatProviderTest {
     }
 
     @Test
+    void anExplicitModelOverridesTheConfiguredOne() throws Exception {
+        server.enqueue(new MockResponse()
+                .setHeader("Content-Type", "application/json")
+                .setBody("""
+                        {"message": {"role": "assistant", "content": "{}"}}
+                        """));
+
+        provider.chat("system", "user", "qwen3:1.7b");
+
+        String body = server.takeRequest().getBody().readUtf8();
+        assertThat(body).contains("\"model\":\"qwen3:1.7b\"");
+    }
+
+    @Test
+    void aBlankModelFallsBackToTheConfiguredOne() throws Exception {
+        server.enqueue(new MockResponse()
+                .setHeader("Content-Type", "application/json")
+                .setBody("""
+                        {"message": {"role": "assistant", "content": "{}"}}
+                        """));
+
+        provider.chat("system", "user", "");
+
+        assertThat(server.takeRequest().getBody().readUtf8()).contains("\"model\":\"test-model\"");
+    }
+
+    @Test
     void missingMessageBecomesChatUnavailable() {
         server.enqueue(new MockResponse()
                 .setHeader("Content-Type", "application/json")

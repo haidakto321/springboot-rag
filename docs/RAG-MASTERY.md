@@ -222,7 +222,11 @@ faithfulness, context relevance, human evaluation, Bedrock Model Evaluation, Sag
 answers from noise.
 
 **Current state here.** Condense-question rewriting is done (`app.chat.condense-followups`),
-which is the single most valuable transform. Nothing else.
+which is the single most valuable transform. **Filter extraction is done too (2026-08-07)**: a
+facet catalogue derived from the metadata actually indexed, one LLM call, output validated against
+that catalogue, and widen-on-empty when the extracted filter matches nothing. Measured by
+`RecordFilterEvalTest` against a committed 210-record corpus (`LEARNINGS.md` section 20). Routing,
+multi-query fan-out, decomposition and HyDE are still absent.
 
 **Concept - route before you retrieve.** Not every question needs retrieval, and not everything
 needs an LLM. Greeting -> canned reply. "How many documents are in project 5?" -> a SQL count,
@@ -240,6 +244,13 @@ not a vector search. Only doc-questions enter the RAG path. Cheapest correct pat
 **Drill.** Add multi-query fan-out behind a config flag, run `golden-wiki.yaml` with the flag
 off and on, keep it only if the numbers move enough to justify the extra LLM call and latency.
 The habit - **flag, measure, keep or delete** - is the entire discipline in one loop.
+
+**What building filter extraction actually taught (2026-08-07).** The catalogue has to be derived
+from indexed data rather than declared in config, or it is silent about exactly the tenant nobody
+configured - and showing the model REAL sample values is what makes it emit `"ACME Corp"` instead
+of `"acme"`. The failure mode to design against is **over-extraction**, not missed extraction: a
+filter the user never asked for turns a findable document into a confident "not found". Hence two
+things the eval scores on purpose - questions that must produce NO filter, and widen-on-empty.
 
 ---
 
@@ -447,7 +458,7 @@ the point of the exercise.
 | 1 | Retrieval filtered by authenticated identity | 2 (was 0) |
 | 2 | Ingestion failure modes catalogued for this corpus | 2 (was 1) |
 | 3 | Eval running on the realistic corpus, as a gate | 2 |
-| 4 | Query routing and transforms beyond condense | 1 |
+| 4 | Query routing and transforms beyond condense | 2 (was 1) |
 | 5 | Injection-resistant prompting, cite-or-refuse | 1 (was 0) |
 | 6 | Per-request trace of the whole chain | 2 (was 0) |
 | 7 | Incremental re-sync and delete propagation | 1 (was 0) |
@@ -463,6 +474,27 @@ chunks with scores, per-stage latency, token counts, and the guard verdict for e
 per-answer debug view in the UI. It is a 2 rather than more because it is storage plus a panel, not
 observability: no metrics, no alerting, no aggregate latency view, and nothing exported to
 CloudWatch-shaped tooling.
+
+**Row 4 update (2026-08-07): now 2.** Scored against the rule written down BEFORE the eval ran -
+"2 only if the eval shows extraction helps, otherwise stay at 1 with the evidence". It helps, and
+not marginally: filter extraction moved condition recall to 0.73 and recall@5 from 0.64 to 1.00 on
+a committed 210-record corpus (`LEARNINGS.md` section 20 for the full table and its caveats -
+the 1.00 is near-tautological and the embeddings are fake).
+
+Three things keep it at 2 rather than higher, all measured rather than assumed:
+- **Routing does not exist.** Every question still enters the RAG path. "How many invoices are in
+  project 5?" is a SQL count and is answered by a vector search.
+- **66 s p50 extraction latency** on this box makes it unusable in front of a person as configured.
+  The lever is built (`app.understand.model`) and unused.
+- **Over-extraction is real**: 1 of 2 deliberately free-text questions got an invented filter. It
+  was caught by widening, which is the mitigation working, not the problem being absent.
+
+Worth recording separately, because it is the more transferable finding: the first eval run scored
+condition recall **0.07** and the cause was a prompt-layout bug of mine, not a model limitation.
+342 unit and integration tests passed straight through it, and through two others - a bare
+comparison op the DSL rejected, and a pre-existing `FilterSql` date-cast bug whose unit test had
+asserted the broken SQL as correct. **The eval was the only thing in the pipeline that did not
+share the code's assumptions.**
 
 **Row 5 update (2026-08-05): now 1, deliberately not 2.** Fenced untrusted context, an explicit
 data-not-instructions rule, and cite-or-refuse enforced in code - and the injected *instruction*
@@ -542,7 +574,14 @@ In order. Each is small, each unlocks the next.
      through every backend, and `AccessControlIntegrationTest` proving that scope parameters, the
      reranker over-fetch, graph expansion, listings, citations, and feedback labels all hold the
      line. Scorecard row 1: 0 -> 2. Findings in `LEARNINGS.md` §16.
-   - **§5 injection hardening: NEXT.** Poisoned page, fenced reference material, cite-or-refuse.
+   - **§5 DONE (2026-08-05):** poisoned page, fenced reference material, cite-or-refuse in code.
+     Scorecard row 5: 0 -> 1 (the instruction stopped running; the content still leaked).
+
+**After those three (2026-08-06 / 08-07).** Record search and the metadata filter DSL (§2, §7), then
+query understanding on top of it (§4). The next move is the user's call; the honest candidates are
+**§7 incremental re-sync** (still a 1), **§8 a real latency budget** (still a 1 - the one live trace
+says generation is 97% of wall clock, so model tiering via `app.understand.model` is the lever to
+measure), and turning `RecordFilterEvalTest` into a gate the way drill C did for the wiki eval.
 
 ---
 

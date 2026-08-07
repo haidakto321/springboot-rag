@@ -910,6 +910,170 @@ surviving the rerank over-fetch and graph expansion.
 
 ---
 
+## 20. Query understanding (turning a question into a filter)
+
+Section 19 built a filter DSL and then required the caller to write the filter. Nobody types
+`{"path":"values.customer","op":"eq","value":"ACME Corp"}` into a chat box. Query understanding is
+the step that reads "unpaid ACME invoices from Q2" and produces that filter itself.
+
+### The catalogue has to come from the data, not from configuration
+
+The obvious design is a config file listing filterable fields per document type. It fails on the
+first tenant nobody configured: the set of document types is OPEN, and a declared catalogue is
+silent about exactly the schema that arrived yesterday. So the catalogue is **derived** - a
+recursive walk over the metadata that is actually indexed, returning each leaf path with sample
+values and a distinct count.
+
+That has a second benefit which matters more than it sounds: the extractor is shown REAL VALUES.
+"customer is one of ACME Corp, GLOBEX Ltd, Initech" is a far stronger prompt than "customer is a
+string", and it is what makes the model produce `"ACME Corp"` rather than `"acme"`.
+
+The catalogue is read under the caller's access labels, and cached per group set. A facet is data
+about data - telling someone that a field called `values.salaryBand` exists is a leak even if they
+can never read a row of it.
+
+### Validate the output; never trust it
+
+The model returns JSON. That JSON is not the filter. It is rebuilt condition by condition through
+`MetadataFilter.parse` against the catalogue, and anything unknown is dropped with a reason:
+
+- an invented path - **the expected case, not the exceptional one**
+- an unknown docType (dropped, while its conditions are kept)
+- a malformed condition, like `range` with no bound, which would otherwise be a 500
+- a value longer than `app.understand.max-value-length`
+
+Two consequences fall out of doing it this way rather than by prompt instruction. Extraction can
+only express what the DSL already allows, so it can never reach the access-label term. And a
+model mistake becomes a dropped condition instead of an exception on the answer path.
+
+> Lesson from section 17, restated: a prompt is a request, code is a control. "Only use the paths
+> below" is in the prompt because it helps, and the validator is in the code because the prompt
+> will be ignored.
+
+### Over-extraction is the failure that hides answers
+
+The tempting metric is "how often did we extract a filter?". Optimise that and the system learns to
+filter on everything, which produces the worst possible failure: a confident "Not found in
+knowledge base" for a document that is sitting right there, wrongly excluded by a filter the user
+never asked for and cannot see.
+
+Two defences, and the golden set scores both:
+
+1. **Widen on empty.** If the filtered retrieval returns nothing, run it again unfiltered and tell
+   the client (`widened: true`, plus a `filter` NDJSON frame on the streaming path). A wrong filter
+   costs one extra query instead of an answer.
+2. **Questions that must NOT produce a filter.** "anything mentioning late payment" has no
+   structured part. An eval containing only extractable questions cannot see over-extraction at
+   all, so `expectNoFilter` and `expectWiden` entries are in the golden file deliberately.
+
+### Extraction reads the raw question, condensation does not apply
+
+The chat path rewrites a follow-up into a standalone query before retrieving. Extraction runs on
+the RAW question instead, because condensation is tuned for retrieval wording and cheerfully drops
+the entity the filter needs - "and their unpaid ones?" condenses to something about unpaid invoices
+with the customer already resolved away.
+
+### An explicit filter from the caller wins outright
+
+Never merged with the extracted one. Merging lets a model silently narrow a scope a human
+deliberately set, and there is no way for that human to tell it happened.
+
+### The prompt's LAYOUT is part of the contract, not decoration
+
+The catalogue has to be rendered into text, and how it is rendered decides whether the feature
+works at all. First version, one line per facet:
+
+```
+- invoice | values.customer | text | examples: ACME Corp, GLOBEX Ltd
+```
+
+qwen3:4b answered `"path": "invoice | values.customer"`. It copied the whole row, because nothing
+in it says which column is the path. Every condition was dropped as an unknown path - correctly,
+and silently. Measured condition recall: **0.07**, with docType accuracy at a perfect 13/13, which
+reads exactly like "small model cannot do structured extraction" and is nothing of the sort.
+
+The fix is boring and worth internalising: **name every field where it appears, never put two
+fields on one line that the model might concatenate, and show a worked example of the output shape**
+- models copy an example far more reliably than they follow a prose rule.
+
+```
+docType: invoice
+  path: values.customer   type: text   examples: ACME Corp, GLOBEX Ltd
+```
+
+### Accept what the model actually returns, where the DSL allows it
+
+Given a corrected prompt, "invoices over 5000" comes back as `{"op":"gt","value":5000}` - a
+reasonable reading of the filter language, and not the one the DSL uses (`{"op":"range","gt":5000}`).
+Rewriting that in the validator is cheaper and more reliable than asking the prompt again for
+something the model keeps not doing. Same principle as section 17: the prompt describes the
+canonical shape, and the code guarantees it.
+
+### The eval is the only test that does not share the code's assumptions
+
+Both bugs above shipped past **35 green unit tests**. Every one of those tests feeds the validator
+hand-written JSON that already has a correct path and a valid op - they were written from the same
+mental model that produced the broken prompt, so they inherited its blind spot. The malformed input
+only exists when a real model reads the real catalogue.
+
+This is section 19's lesson in a new place, and the reason to pay for a slow eval: it is not a
+report card on a finished feature, it is the first thing in the pipeline that can disagree with you.
+
+> Corollary learned the annoying way: an eval that buffers its whole report to the end is
+> indistinguishable from a hung process for 41 minutes. Print per question, with latency.
+
+### Measured (2026-08-07, 15 questions, 210 records, qwen3:4b, fake embeddings)
+
+| | first run (with the prompt bug) | after the fixes |
+|---|---|---|
+| condition precision | 0.50 (1/2 extracted) | **0.79** (11/14) |
+| condition recall | 0.07 (1/15 expected) | **0.73** (11/15) |
+| docType accuracy | 1.00 (13/13) | 1.00 (13/13) |
+| no-filter questions left unfiltered | 1/2 | 1/2 |
+| recall@5 with extraction / without | 0.82 / 0.64 | **1.00 / 0.64** |
+| MRR with extraction / without | 0.72 / 0.59 | **1.00 / 0.59** |
+| extraction p50 | 61.5 s | 66.2 s |
+
+**What the 1.00 does NOT mean.** It is close to tautological and must be read that way: the ground
+truth for a question is "the records matching its expected filter", so once extraction produces
+approximately the expected filter, retrieval returns approximately the ground-truth set and every
+correct document lands at rank 1. Combined with the fake embedding provider, these figures say one
+thing only - **the filter mechanism does what it claims end to end**. They say nothing about
+semantic retrieval quality, and quoting them as a RAG benchmark would be exactly the mistake that
+turned "hybrid beats vector" into folklore before section 11 measured it on a second corpus.
+
+The number that is not tautological is the **0.64 baseline**: without a filter, plain retrieval over
+210 near-identical synthetic records finds the right one about two thirds of the time. Structured
+narrowing is worth a lot precisely where documents differ by field values rather than by wording -
+which is the whole case for records over prose.
+
+**The three questions extraction still misses**, all genuine:
+- `invoices that are open or overdue` - the `in` operator, never produced.
+- `only high confidence invoice data` - `conf.min`, an aggregate the question never names literally.
+- `anything mentioning late payment` - **over-extraction**: the model invents `status = overdue` on
+  a purely free-text question. Widening caught it, which is the mechanism earning its place.
+
+**One golden expectation turned out to be wrong.** `invoices for ACEM Corp` (deliberate typo) was
+written expecting a widen, and instead the model silently corrected it to `ACME Corp` - the prompt
+does say to match sample values exactly, and it did. The right response is to record that the
+expectation was wrong, not to file it as a failure. A golden set is a hypothesis too.
+
+**The latency is the real blocker.** 66 s p50 on CPU makes this unusable in front of a user as
+configured. The lever is already built and already measured as necessary: `app.understand.model`
+pointing at a smaller model. Section 8's finding stands - every latency cost on this box is a model,
+none of it is the vector store.
+
+### Model tiering is only real if the provider can switch models
+
+`app.understand.model` existed in the config for about an hour before it turned out
+`OllamaChatProvider` hardcoded `props.getModel()` in its request body - the knob was read and then
+ignored. A config key that does nothing is worse than no config key, because it is documented.
+Fixed with a `chat(system, user, model)` overload whose default ignores the name, so providers that
+cannot switch per call stay valid.
+
+
+---
+
 ## Where to go next
 `docs/ROADMAP.md` lists what's built and what's queued - notably **condense-question retrieval**
 (fixes vague follow-ups), snippet windowing, and token-budget history trimming. Each is a small

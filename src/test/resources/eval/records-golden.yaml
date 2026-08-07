@@ -1,0 +1,83 @@
+# Golden set for query understanding over the synthetic record corpus (RecordCorpus.generate(42)).
+#
+# expectedFilters is what a correct extraction would produce. expectNoFilter and expectWiden are
+# the two entries that keep the measurement honest: a score that only rewards successful extraction
+# trains toward over-extraction, which is the failure mode that hides answers from people.
+#
+# Paths are dotted and array markers are already gone, matching what FacetRepository derives from
+# the stored metadata (values.packages.weightKg, not values.packages[].weightKg).
+
+- question: "invoices for ACME Corp"
+  expectedDocType: invoice
+  expectedFilters:
+    - {path: values.customer, op: eq, value: "ACME Corp"}
+
+- question: "unpaid invoices for GLOBEX Ltd"
+  expectedDocType: invoice
+  expectedFilters:
+    - {path: values.customer, op: eq, value: "GLOBEX Ltd"}
+    - {path: values.status, op: eq, value: overdue}
+
+- question: "invoices issued in the second quarter of 2026"
+  expectedDocType: invoice
+  expectedFilters:
+    - {path: values.issueDate, op: range, gte: "2026-04-01", lt: "2026-07-01"}
+
+- question: "invoices over 5000"
+  expectedDocType: invoice
+  expectedFilters:
+    - {path: values.total, op: range, gt: 5000}
+
+- question: "invoices that are open or overdue"
+  expectedDocType: invoice
+  expectedFilters:
+    - {path: values.status, op: in, values: [open, overdue]}
+
+- question: "delivery notes shipped by Speedy Freight"
+  expectedDocType: delivery-note
+  expectedFilters:
+    - {path: values.carrier, op: eq, value: "Speedy Freight"}
+
+- question: "what delivery notes do we have"
+  expectedDocType: delivery-note
+  expectedFilters: []
+
+- question: "contracts with Initech"
+  expectedDocType: contract
+  expectedFilters:
+    - {path: values.party, op: eq, value: Initech}
+
+- question: "contracts longer than 12 months"
+  expectedDocType: contract
+  expectedFilters:
+    - {path: values.termMonths, op: range, gt: 12}
+
+- question: "anything mentioning late payment"
+  expectNoFilter: true
+
+- question: "what is in the corpus"
+  expectNoFilter: true
+
+- question: "invoices for ACEM Corp"
+  expectedDocType: invoice
+  expectWiden: true
+
+# February, not a prettier month: it is the only one where this three-way conjunction actually
+# has a record in the generated corpus (INV-0045). A golden entry matching nothing measures nothing.
+- question: "overdue invoices for Umbrella SA in February 2026"
+  expectedDocType: invoice
+  expectedFilters:
+    - {path: values.customer, op: eq, value: "Umbrella SA"}
+    - {path: values.status, op: eq, value: overdue}
+    - {path: values.issueDate, op: range, gte: "2026-02-01", lt: "2026-03-01"}
+
+- question: "only high confidence invoice data"
+  expectedDocType: invoice
+  expectedFilters:
+    - {path: conf.min, op: range, gte: 0.7}
+
+- question: "shipments carried by NordCargo weighing more than 20 kg"
+  expectedDocType: delivery-note
+  expectedFilters:
+    - {path: values.carrier, op: eq, value: NordCargo}
+    - {path: values.packages.weightKg, op: range, gt: 20}

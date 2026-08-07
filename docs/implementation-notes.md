@@ -1057,3 +1057,197 @@ Confirmed live: the three ingest outcomes; `docType` narrowing; `values.customer
 range excluding the 0.44-confidence document; `values.lineItems[].sku` selecting exactly the
 `lineItems[1]` chunks; and stored metadata carrying `page`/`bbox` in `prov` while the embedded text
 contains neither.
+
+## Query understanding (2026-08-07)
+
+Plan: `docs/superpowers/plans/2026-08-06-query-understanding.md`, 9 tasks, executed inline.
+Spec: `docs/superpowers/specs/2026-08-06-query-understanding-design.md`.
+
+### The facet catalogue is derived, never declared
+
+`FacetRepository.facets` walks `chunks.metadata` with a recursive CTE and returns every leaf path
+under the `values` and `conf` trees, with sample values and a distinct count. `prov` is excluded on
+purpose: provenance is filterable, but nobody asks a question about a bounding box.
+
+Three things about that SQL are worth knowing before touching it:
+
+- **The paths it returns are already in the shape a filter uses.** The recursion joins segments
+  with dots and the stored metadata has no array level, so it yields `values.lineItems.sku` - which
+  is exactly what `FilterSql.segments` produces from the API path `values.lineItems[].sku`. A facet
+  is therefore always filterable; the two can't drift.
+- **The sample limit is interpolated, not bound.** A bind parameter is not allowed inside an array
+  slice `[1:n]`, so the value is clamped to 1..20 in Java first and then formatted in.
+- **Deviation from the plan:** the seed term guards with `jsonb_typeof(r.node) = 'object'` instead
+  of the plan's `r.node IS NOT NULL`. `jsonb_each` errors on a scalar, so a tenant whose `values`
+  is not an object would have taken down the whole catalogue query rather than contributing
+  nothing.
+
+Access labels apply to the catalogue like any other read, and the cache key includes the caller's
+groups. A facet is data about data: listing one the caller cannot read is still a leak.
+
+### Model output is validated, not trusted
+
+`ExtractionValidator` rebuilds the model's JSON through `MetadataFilter.parse`, so extraction can
+only ever express what the DSL already allows and can never reach the access-label term. Unknown
+paths, unknown docTypes, oversized values and malformed conditions are dropped with a reason that
+goes into the trace. A hallucinated field is the expected case, not the exceptional one.
+
+The facet type decides the cast, not the model - the type is derived from the data, and a mixed
+column degrades to `text` rather than producing a cast error at query time.
+
+### An explicit caller filter wins outright; it is never merged
+
+Merging would let a model silently narrow a scope the caller deliberately set. When a caller
+supplies a filter, extraction does not run at all - no model call, no `understand` stage in the
+trace.
+
+### Widen on empty
+
+If the filtered retrieval returns nothing and the filter was non-empty, retrieval runs once more
+unfiltered and the response says `widened: true`. A mis-extracted value costs one extra query
+rather than becoming a confident "not found in knowledge base" - the failure mode that hides
+documents from people.
+
+The trace records the filter that was ATTEMPTED plus the widen flag, not the filter that ended up
+applying. "Why did it not find my document?" is answerable only if the wrong filter is still there.
+
+### Deviations from the plan
+
+- **`RagTrace` and `ChatService.StreamOutcome` kept a convenience constructor** at the old arity
+  instead of updating every existing construction site. The plan expected a compile break in
+  `TraceControllerTest` and `AskServiceTest`; a secondary constructor delegating with
+  `(null, false)` says the same thing in one place.
+- **`ChatProvider.chat(system, user, model)` was added** because `OllamaChatProvider` hardcoded
+  `props.getModel()`, so `app.understand.model` would have been read and then silently ignored. The
+  default implementation ignores the model name, so a provider that cannot switch models per call
+  stays valid.
+- **`FilterJson` is new and was not in the plan.** Jackson's default view of `MetadataFilter` emits
+  `conditions` and an `empty` flag, which is not what `MetadataFilter.parse` reads. A client must be
+  able to echo the reported filter straight back as an explicit one, so the two shapes have to
+  match.
+- **`ChatService.chatStream` gained an `onFilter` callback** rather than reporting the filter in the
+  returned outcome. The frame has to reach the client BEFORE the tokens: once the answer is
+  streaming, "by the way, I narrowed your search" arrives too late to change how it is read.
+- **The golden set has no hand-listed doc ids.** `RecordGroundTruth` computes which corpus records
+  a question should match by evaluating its expected filter against the RAW record. Listing ids
+  across 210 generated records would be a transcription exercise that goes stale the moment the
+  generator changes, and ground truth that reuses the code under test proves nothing.
+
+### Two bugs found while building, both by tests that existed for that purpose
+
+- **The ground-truth matcher unwrapped the wrong objects.** It treated any object with a `value`
+  key as an extraction wrapper - but the contract records carry a real business field called
+  `value`, so every contract looked like a wrapper and every other contract field became
+  unreachable. Production's `ValueWrapper.detect` was already stricter (a value key AND nothing else
+  but provenance); the matcher now mirrors it. The corpus keeps that field precisely because it is
+  the adversarial case.
+- **One golden question matched nothing.** "overdue invoices for Umbrella SA in March 2026" is a
+  three-way conjunction that has no record in the generated corpus. Changed to February, which has
+  exactly one (`INV-0045`). A golden entry matching zero documents measures nothing but its own
+  typo, which is why `RecordGroundTruthTest` asserts every filter question matches something.
+
+### The prompt layout was load-bearing, and the eval is the only thing that saw it
+
+The first eval run (2026-08-07, 41 min, 15 live `qwen3:4b` calls) reported **condition recall
+0.07** - 1 matched condition out of 15 expected - while docType accuracy was a perfect 13/13. That
+looked like "a 4B model cannot extract filters". It was not.
+
+The prompt listed each facet as a pipe-delimited row, straight from the plan:
+
+```
+- invoice | values.customer | text | examples: ACME Corp, GLOBEX Ltd
+```
+
+Nothing in that row says which column is the path. Probing the model directly with that exact
+prompt (one call, 60 s, instead of another 41-minute run) returned:
+
+```json
+{"docType": "invoice", "filters": [{"path": "invoice | values.customer", "op": "eq", "value": "ACME Corp"}]}
+```
+
+It copied the whole row into `path`. `ExtractionValidator` then dropped every condition as an
+unknown path - correctly, and silently, because a dropped path is the expected case.
+
+Fixed by naming each field where it appears, grouping by document type so the type never shares a
+line with a path, and adding a worked example of the exact output shape:
+
+```
+docType: invoice
+  path: values.customer   type: text   examples: ACME Corp, GLOBEX Ltd
+```
+
+Re-probed: paths correct on all four sample questions, including the two-condition one.
+`QueryUnderstandingPromptTest` now pins the layout - no docType on a `path:` line, one `docType:`
+heading per group, and the worked example present.
+
+**Second bug the same probe found.** For "invoices over 5000" the model returns
+`{"op":"gt","value":5000}`, but the DSL wants `{"op":"range","gt":5000}`. `gt` is not a valid op, so
+`MetadataFilter.parse` threw and the condition was dropped as malformed. `ExtractionValidator`
+now normalises bare comparison ops (`gt`/`gte`/`lt`/`lte`) into a `range` bound before validating.
+The prompt still describes the canonical shape; the normaliser is the control, following the same
+rule §5 injection hardening established - a prompt is a request, code is a control.
+
+> Lesson: **35 unit tests passed through both bugs.** Every validator test feeds hand-written JSON
+> that already has the right path and the right op, so they test the validator against the same
+> mental model that produced the prompt. Only a real model against a real corpus produced the
+> malformed input. This is `LEARNINGS.md` §19's lesson again in a new place: the eval is not a
+> formality after the feature, it is the first thing that does not share the code's assumptions.
+
+Second consequence, cheaper to state than to discover: **an eval that prints nothing until it
+finishes cannot be distinguished from a hung one.** The eval now prints a line per question with
+its latency as it goes.
+
+### A pre-existing SQL bug the eval flushed out (2026-08-07)
+
+The second eval run died at question 3 with:
+
+```
+ERROR: operator does not exist: timestamp with time zone >= character varying
+(metadata #>> '{values,issueDate}')::timestamptz >= ?
+```
+
+`FilterSql` cast the COLUMN to `timestamptz` and left the bound parameter a string. This is a defect
+in **record search** (commit `b60ba56`), not in query understanding - it was simply unreachable
+until something produced a `date` range, and every filter written by hand until then compared text.
+
+Worse, `FilterSqlTest.dateRangeCastsToTimestamp` asserted `"::timestamptz >= ?"` - it **encoded the
+bug as the expectation**. A unit test that asserts a generated SQL string can only check that the
+string matches what its author believed; only the database can say whether it is valid.
+
+Fixed in `FilterSql`:
+- the bound side gets the same cast as the column side (`?::timestamptz`, `?::numeric`);
+- `eq` and `in` bind their value as text, because `metadata #>> path` always yields text and a JSON
+  number arriving as a Java Integer would render as `text = integer` - the same type error, one
+  question further down the golden set.
+
+Both are now covered by tests that EXECUTE against Postgres
+(`MetadataFilterIntegrationTest.aDateRangeActuallyRunsOnThePostgresBackends` and
+`aNumericEqRunsEvenThoughTheStoredValueIsText`) rather than asserting SQL text.
+
+`FilterQdrant` is unaffected: it already refuses a `date` range loudly.
+
+### Eval results and what they are worth (2026-08-07)
+
+Three runs, each ~30-40 minutes because extraction is one live `qwen3:4b` call per question on CPU:
+
+| | run 1 | run 2 | run 3 |
+|---|---|---|---|
+| outcome | completed, bad numbers | **crashed at Q3** | completed |
+| condition precision | 0.50 | - | 0.79 |
+| condition recall | 0.07 | - | 0.73 |
+| recall@5 with / without | 0.82 / 0.64 | - | 1.00 / 0.64 |
+| what it found | the prompt-layout bug | the `FilterSql` date-cast bug | the honest baseline |
+
+Read the numbers with two caveats stated in the report header and in `LEARNINGS.md` §20: embeddings
+are FAKE, and recall@5 = 1.00 is near-tautological because ground truth is defined as "records
+matching the expected filter". They establish that the filter mechanism works end to end, nothing
+about semantic retrieval quality. The informative figure is the **0.64 unfiltered baseline**.
+
+Still missed, all real: the `in` operator is never produced (`open or overdue`), `conf.min` is never
+inferred from "high confidence", and one free-text question got an invented filter (widening caught
+it). One golden expectation was itself wrong - the deliberate typo `ACEM Corp` was silently
+corrected by the model to `ACME Corp` rather than widening, which the prompt explicitly asks for.
+
+**Not done, deliberately:** no baseline file and no regression gate for this eval. It reports. That
+is the same order drill C followed - measure first, gate once the numbers are trusted - and it is
+recorded in `ROADMAP.md` as the remaining half of the frozen-corpus item.

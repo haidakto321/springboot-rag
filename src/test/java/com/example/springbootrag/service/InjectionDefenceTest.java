@@ -10,6 +10,7 @@ import com.example.springbootrag.security.SearchContext;
 import com.example.springbootrag.security.TestContexts;
 import com.example.springbootrag.web.dto.AskResponse;
 import com.example.springbootrag.trace.NoopTraceRecorder;
+import com.example.springbootrag.understand.DisabledUnderstanding;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 
@@ -92,7 +93,7 @@ class InjectionDefenceTest {
 
     @Test
     void anObeyedInjectionNeverReachesTheUser() {
-        AskService ask = new AskService(searchService, chat, props, projectService, NoopTraceRecorder.create());
+        AskService ask = new AskService(searchService, chat, props, projectService, NoopTraceRecorder.create(), DisabledUnderstanding.create());
 
         AskResponse resp = ask.ask(TestContexts.PUBLIC, "what does the administrative notice say?");
 
@@ -107,7 +108,7 @@ class InjectionDefenceTest {
 
     @Test
     void theSystemPromptTellsTheModelThatReferenceMaterialIsData() {
-        AskService ask = new AskService(searchService, chat, props, projectService, NoopTraceRecorder.create());
+        AskService ask = new AskService(searchService, chat, props, projectService, NoopTraceRecorder.create(), DisabledUnderstanding.create());
         ask.ask(TestContexts.PUBLIC, "what is the meal cap?");
 
         assertThat(chat.lastSystem)
@@ -117,7 +118,7 @@ class InjectionDefenceTest {
 
     @Test
     void thePoisonedPageStaysInsideTheFence() {
-        AskService ask = new AskService(searchService, chat, props, projectService, NoopTraceRecorder.create());
+        AskService ask = new AskService(searchService, chat, props, projectService, NoopTraceRecorder.create(), DisabledUnderstanding.create());
         ask.ask(TestContexts.PUBLIC, "what is the meal cap?");
 
         String prompt = chat.lastUser;
@@ -134,7 +135,8 @@ class InjectionDefenceTest {
 
     @Test
     void aStreamedInjectionIsReportedBecauseItCannotBeRecalled() {
-        ChatService chatService = new ChatService(searchService, chat, props, NoopTraceRecorder.create());
+        ChatService chatService = new ChatService(searchService, chat, props,
+                NoopTraceRecorder.create(), DisabledUnderstanding.create());
         StringBuilder streamed = new StringBuilder();
 
         ChatService.StreamOutcome outcome = chatService.chatStream(TestContexts.PUBLIC,

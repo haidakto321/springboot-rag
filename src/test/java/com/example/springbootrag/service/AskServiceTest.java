@@ -8,6 +8,7 @@ import com.example.springbootrag.security.SearchContext;
 import com.example.springbootrag.web.dto.AskResponse;
 import com.example.springbootrag.security.TestContexts;
 import com.example.springbootrag.trace.NoopTraceRecorder;
+import com.example.springbootrag.understand.DisabledUnderstanding;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 
@@ -48,7 +49,7 @@ class AskServiceTest {
     @BeforeEach
     void setup() {
         when(projectService.defaultProjectId()).thenReturn(1L);
-        askService = new AskService(searchService, chat, props, projectService, NoopTraceRecorder.create());
+        askService = new AskService(searchService, chat, props, projectService, NoopTraceRecorder.create(), DisabledUnderstanding.create());
     }
 
     @Test
@@ -77,7 +78,7 @@ class AskServiceTest {
     void emptyRetrievalShortCircuitsWithoutCallingLlm() {
         when(searchService.searchTraced(any(SearchContext.class), eq("rerank"), anyString(), anyInt(), anyList(), anyList(), any(MetadataFilter.class))).thenReturn(new SearchService.TracedSearch(List.of(), Map.of("embed", 1L, "retrieve", 2L)));
         ChatProvider mockChat = mock(ChatProvider.class);
-        AskService svc = new AskService(searchService, mockChat, props, projectService, NoopTraceRecorder.create());
+        AskService svc = new AskService(searchService, mockChat, props, projectService, NoopTraceRecorder.create(), DisabledUnderstanding.create());
 
         AskResponse resp = svc.ask(TestContexts.PUBLIC, "anything?");
 

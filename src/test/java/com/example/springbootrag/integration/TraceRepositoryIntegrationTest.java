@@ -133,6 +133,31 @@ class TraceRepositoryIntegrationTest {
     }
 
     @Test
+    void appliedFilterAndWidenFlagRoundTrip() {
+        UUID id = UUID.randomUUID();
+        repo.insert(new RagTrace(id, Instant.now(), "alice", List.of(1L), "unpaid ACME invoices",
+                null, "rerank", List.of(), Map.of("understand", 900L, "retrieve", 12L),
+                null, null, "answer", null,
+                "{\"docType\":\"invoice\"}", true));
+
+        RagTrace back = repo.recent("alice", 10).stream()
+                .filter(t -> t.requestId().equals(id)).findFirst().orElseThrow();
+
+        assertThat(back.appliedFilter()).contains("invoice");
+        assertThat(back.filterWidened()).isTrue();
+        assertThat(back.stageLatencyMs()).containsEntry("understand", 900L);
+    }
+
+    @Test
+    void aTraceWithoutAFilterKeepsTheColumnNullAndTheFlagFalse() {
+        repo.insert(trace("alice", "q", null));
+
+        RagTrace read = repo.recent("alice", 1).getFirst();
+        assertThat(read.appliedFilter()).isNull();
+        assertThat(read.filterWidened()).isFalse();
+    }
+
+    @Test
     void nullTokenCountsSurviveAsNullNotZero() {
         // "not reported" and "free" are different facts; recording 0 would invent the second.
         RagTrace t = new RagTrace(UUID.randomUUID(), Instant.now(), "alice", List.of(),

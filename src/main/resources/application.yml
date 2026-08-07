@@ -43,6 +43,13 @@ app:
     model: qwen3:4b
     context-chunks: 5
     condense-followups: true   # rewrite chat follow-ups into a standalone search query before retrieving
+  understand:
+    enabled: true
+    model: ""              # empty = app.chat.model
+    max-conditions: 4
+    facet-samples: 5
+    facet-ttl-seconds: 300
+    max-value-length: 200
   ollama:
     base-url: http://localhost:11434
   qdrant:

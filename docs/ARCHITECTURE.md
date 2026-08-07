@@ -206,20 +206,35 @@ sequenceDiagram
     participant CS as ChatService
     participant S as SearchService
     participant O as Ollama
+    participant QU as QueryUnderstanding
     participant G as AnswerGuard
     participant T as TraceRecorder
 
-    B->>C: POST /chat/stream {messages[], projectId, group, docIds, think}
+    B->>C: POST /chat/stream {messages[], projectId, group, docIds, think, docType, filters}
     C->>C: reject empty messages (400) · resolveScope · CurrentUser.context()
     Note over C: identity is captured HERE, on the request thread -<br/>the streaming body runs on an async thread where<br/>the SecurityContext is gone
-    C->>CS: chatStream(ctx, history, scope, docIds, think, onToken, onReasoning)
+    C->>CS: chatStream(ctx, history, scope, docIds, think, filter, onFilter, onToken, onReasoning)
     CS->>CS: trim history to last 10 · require last turn to be a non-empty user message
     opt follow-up turn and app.chat.condense-followups
         CS->>O: condense(conversation + follow-up) → standalone query
         O-->>CS: retrieval query (falls back to the raw question on failure)
     end
-    CS->>S: searchTraced(ctx, "rerank", retrievalQuery, contextChunks)
+    opt no caller filter and app.understand.enabled
+        CS->>QU: extract(ctx, scope, RAW question)
+        Note over QU: raw, not condensed - condensation drops<br/>the entity the filter needs
+        QU->>QU: FacetCatalogue.forProjects (cached, under the caller's labels)
+        QU->>O: one call: facet list + question → filter JSON
+        O-->>QU: JSON (or prose, or nothing)
+        QU->>QU: ExtractionValidator - rebuild through MetadataFilter.parse,<br/>drop unknown paths / docTypes / malformed conditions
+        QU-->>CS: filter + latency + dropped[] (NEVER throws)
+    end
+    CS->>S: searchTraced(ctx, "rerank", retrievalQuery, contextChunks, filter)
     S-->>CS: hits + {embed, retrieve} ms
+    alt filtered result is empty and the filter was not
+        CS->>S: searchTraced(... MetadataFilter.none())
+        Note over CS: widen - a wrong filter costs one extra query,<br/>not a confident "not found"
+    end
+    CS-->>B: {"type":"filter","applied":{...},"widened":bool} BEFORE any token
     alt no hits
         CS-->>B: token "No relevant chunks found" · trace(guard=no-hits)
     end
@@ -233,7 +248,7 @@ sequenceDiagram
     O-->>CS: final chunk (prompt_eval_count, eval_count)
     CS->>G: check(full answer, chunkCount)
     G-->>CS: verdict cited | ungrounded | bad-citation
-    CS->>T: record(requestId, principal, raw + condensed query, retrieved[], stage ms, tokens, answer, verdict)
+    CS->>T: record(requestId, principal, raw + condensed query, retrieved[], stage ms,<br/>tokens, answer, verdict, applied filter, widened)
     T->>T: INSERT rag_trace, prune to app.trace.keep per principal
     CS-->>B: {"type":"sources"} · {"type":"trace"} · optional {"type":"guard"} · {"type":"done"}
     Note over B: tokens are already rendered, so a failed guard can only<br/>annotate the answer - the UI shows a red "unverified" banner
@@ -379,6 +394,10 @@ filter is a caller preference, a label is a boundary.
 | Qdrant down during search | `500` | `SearchService.qdrantSearch` |
 | Answer with no citation or a fabricated one | `/ask`: replaced by refusal. `/chat/stream`: `guard` frame + UI banner | `AnswerGuard` |
 | Trace insert fails | logged, request unaffected | `TraceRecorder` |
+| Query understanding: model down, timeout, or garbage output | answer proceeds UNFILTERED, reason recorded in `dropped[]` | `QueryUnderstanding.extract` |
+| Query understanding: model invents a path or docType | that condition is dropped, the rest survive | `ExtractionValidator` |
+| Facet catalogue query fails | empty catalogue → no extraction → unfiltered answer | `FacetCatalogue.forProjects` |
+| Extracted filter matches nothing | retrieval retried unfiltered, `widened: true` reported | `AskService` / `ChatService` |
 
 ---
 
@@ -394,6 +413,7 @@ in tests that replay questions against the corpus.
 | recall@5, MRR, hit@1 (real corpus) | `WikiRetrievalEvalTest` (`-Dgroups=eval-wiki`) | live `docmaster` project, `golden-wiki.yaml` | **yes** - fails on a >0.02 drop vs `baseline-wiki.yaml` |
 | Faithfulness (LLM judge) | `FaithfulnessEvalTest` (`-Dgroups=eval-judge`) | generated answers | report |
 | precision@5/@10, MRR of first 👍 | `FeedbackPrecisionEvalTest` (`-Dgroups=eval-feedback`) | human labels in `chunk_feedback` | report |
+| Extraction precision/recall, docType accuracy, widen rate, recall@5/MRR with vs without | `RecordFilterEvalTest` (`-Dgroups=eval-records`) | committed synthetic corpus (`RecordCorpus.generate(42)`) + `records-golden.yaml` | report |
 | Per-request latency and tokens | `rag_trace`, written live | every answer | none (no alerting) |
 
 The metrics that DO exist per request are latency per stage and token counts, in the trace.
@@ -411,6 +431,7 @@ The metrics that DO exist per request are latency per stage and token counts, in
 | Fusion / rerank | `fusion/RrfFusion`, `rerank/IdentityReranker`, `rerank/DjlReranker` |
 | Graph | `repository/DocEdgeRepository`, `repository/EntityRepository`, `graph/*` |
 | RAG answers | `service/AskService`, `service/ChatService` |
+| Query understanding | `understand/FacetCatalogue`, `understand/ExtractionValidator`, `understand/QueryUnderstanding`, `understand/FilterJson`, `repository/FacetRepository`, `web/FacetController` |
 | Injection defence | `guard/PromptFence`, `guard/AnswerGuard`, `guard/InjectionScanner` |
 | Tracing | `trace/RagTrace`, `trace/TraceRecorder`, `trace/TraceRepository`, `web/TraceController` |
 | Human labels | `repository/FeedbackRepository`, `web/FeedbackController` |

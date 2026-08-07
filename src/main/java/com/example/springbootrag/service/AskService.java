@@ -7,8 +7,11 @@ import com.example.springbootrag.guard.PromptFence;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import com.example.springbootrag.model.SearchHit;
+import com.example.springbootrag.repository.MetadataFilter;
 import com.example.springbootrag.security.SearchContext;
 import com.example.springbootrag.trace.TraceRecorder;
+import com.example.springbootrag.understand.FilterJson;
+import com.example.springbootrag.understand.QueryUnderstanding;
 import com.example.springbootrag.web.dto.AskResponse;
 import org.springframework.stereotype.Service;
 
@@ -47,15 +50,17 @@ public class AskService {
     private final ChatProperties props;
     private final ProjectService projectService;
     private final TraceRecorder tracer;
+    private final QueryUnderstanding understanding;
 
     public AskService(SearchService searchService, ChatProvider chat,
                       ChatProperties props, ProjectService projectService,
-                      TraceRecorder tracer) {
+                      TraceRecorder tracer, QueryUnderstanding understanding) {
         this.searchService = searchService;
         this.chat = chat;
         this.props = props;
         this.projectService = projectService;
         this.tracer = tracer;
+        this.understanding = understanding;
     }
 
     /** Single-question entry point: scopes to the default project. */
@@ -75,23 +80,43 @@ public class AskService {
 
     /** Same, narrowed by structured record metadata. */
     public AskResponse ask(SearchContext ctx, String question, List<Long> projectIds,
-                           com.example.springbootrag.repository.MetadataFilter filter) {
+                           com.example.springbootrag.repository.MetadataFilter callerFilter) {
         if (question == null || question.isBlank()) {
             throw new IllegalArgumentException("question is required");
         }
         UUID requestId = UUID.randomUUID();
         long start = System.nanoTime();
 
+        // Extraction runs on the raw question. An explicit caller filter wins outright - merging
+        // the two would let a model silently narrow a scope the caller deliberately set.
+        boolean callerSuppliedFilter = callerFilter != null && !callerFilter.isEmpty();
+        QueryUnderstanding.Extraction extraction = callerSuppliedFilter
+                ? QueryUnderstanding.Extraction.none()
+                : understanding.extract(ctx, projectIds, question);
+        MetadataFilter filter = callerSuppliedFilter ? callerFilter : extraction.filter();
+
         // "rerank" = hybrid + reranker; with no reranker configured it degrades to plain hybrid.
         SearchService.TracedSearch search = searchService.searchTraced(ctx, "rerank", question,
                 props.getContextChunks(), projectIds, List.of(), filter);
+        boolean widened = false;
+        if (search.hits().isEmpty() && !filter.isEmpty()) {
+            // A wrong filter must cost one extra query, not a confident refusal.
+            search = searchService.searchTraced(ctx, "rerank", question,
+                    props.getContextChunks(), projectIds, List.of(), MetadataFilter.none());
+            widened = true;
+        }
         List<SearchHit> hits = search.hits();
         Map<String, Long> stages = new LinkedHashMap<>(search.stageLatencyMs());
+        if (!callerSuppliedFilter) {
+            stages.put("understand", extraction.latencyMs());
+        }
+        String filterJson = FilterJson.toApiString(filter);
         if (hits.isEmpty()) {
             stages.put("total", msSince(start));
             tracer.record(requestId, ctx, projectIds, question, null, "rerank", hits, stages,
-                    null, null, null, "no-hits");
-            return new AskResponse("No relevant chunks found in the knowledge base.", List.of());
+                    null, null, null, "no-hits", filterJson, widened);
+            return new AskResponse("No relevant chunks found in the knowledge base.", List.of(),
+                    FilterJson.toApiShape(filter), widened);
         }
 
         long beforeGenerate = System.nanoTime();
@@ -110,13 +135,13 @@ public class AskService {
         // answer is impossible if the blocked text is thrown away.
         tracer.record(requestId, ctx, projectIds, question, null, "rerank", hits, stages,
                 reply.usage().promptTokens(), reply.usage().completionTokens(),
-                reply.content(), verdict.reason());
+                reply.content(), verdict.reason(), filterJson, widened);
         List<AskResponse.Source> sources = new ArrayList<>();
         for (int i = 0; i < hits.size(); i++) {
             SearchHit h = hits.get(i);
             sources.add(new AskResponse.Source(i + 1, h.docId(), h.headingPath(), h.score(), h.content(), h.chunkIndex()));
         }
-        return new AskResponse(answer, sources);
+        return new AskResponse(answer, sources, FilterJson.toApiShape(filter), widened);
     }
 
     private static long msSince(long startNanos) {

@@ -35,8 +35,9 @@ public class TraceRepository {
         jdbc.update("""
             INSERT INTO rag_trace (request_id, ts, principal, project_ids, raw_query, condensed_query,
                                    backend, retrieved, stage_latency_ms, prompt_tokens,
-                                   completion_tokens, answer, guard_reason)
-            VALUES (?, ?, ?, ?::bigint[], ?, ?, ?, ?::jsonb, ?::jsonb, ?, ?, ?, ?)
+                                   completion_tokens, answer, guard_reason,
+                                   applied_filter, filter_widened)
+            VALUES (?, ?, ?, ?::bigint[], ?, ?, ?, ?::jsonb, ?::jsonb, ?, ?, ?, ?, ?::jsonb, ?)
             ON CONFLICT (request_id) DO NOTHING
             """,
                 t.requestId(),
@@ -51,14 +52,17 @@ public class TraceRepository {
                 t.promptTokens(),
                 t.completionTokens(),
                 t.answer(),
-                t.guardReason());
+                t.guardReason(),
+                t.appliedFilter(),
+                t.filterWidened());
     }
 
     /** Newest first, one principal only. */
     public List<RagTrace> recent(String principal, int limit) {
         return jdbc.query("""
             SELECT request_id, ts, principal, project_ids, raw_query, condensed_query, backend,
-                   retrieved, stage_latency_ms, prompt_tokens, completion_tokens, answer, guard_reason
+                   retrieved, stage_latency_ms, prompt_tokens, completion_tokens, answer,
+                   guard_reason, applied_filter, filter_widened
             FROM rag_trace WHERE principal = ? ORDER BY ts DESC, id DESC LIMIT ?
             """, mapRow(), principal, limit);
     }
@@ -90,7 +94,9 @@ public class TraceRepository {
                 (Integer) rs.getObject("prompt_tokens"),
                 (Integer) rs.getObject("completion_tokens"),
                 rs.getString("answer"),
-                rs.getString("guard_reason"));
+                rs.getString("guard_reason"),
+                rs.getString("applied_filter"),
+                rs.getBoolean("filter_widened"));
     }
 
     private String toJson(Object value) {

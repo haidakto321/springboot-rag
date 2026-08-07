@@ -15,11 +15,13 @@ import org.springframework.web.servlet.mvc.method.annotation.StreamingResponseBo
 import java.io.IOException;
 import java.io.OutputStream;
 import java.io.UncheckedIOException;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 
 /**
  * Streaming multi-turn chat. Responds with newline-delimited JSON frames:
+ *   {"type":"filter","applied":{...},"widened":bool}  - what query understanding decided, first
  *   {"type":"token","text":...}  - one per streamed delta
  *   {"type":"sources","sources":[...]}  - citation chunks
  *   {"type":"done"}  - normal end
@@ -62,6 +64,14 @@ public class ChatController {
                 ChatService.StreamOutcome outcome =
                         chatService.chatStream(ctx, req.messages(), scope, req.docIds(), req.think(),
                                 filter,
+                                // Emitted before the first token: a narrowed search has to be
+                                // visible while the answer is being read, not after it.
+                                applied -> {
+                                    Map<String, Object> frame = new LinkedHashMap<>();
+                                    frame.put("type", "filter");
+                                    frame.putAll(applied);
+                                    writeFrame(out, frame);
+                                },
                                 token -> writeFrame(out, Map.of("type", "token", "text", token)),
                                 reasoning -> writeFrame(out, Map.of("type", "reasoning", "text", reasoning)));
                 writeFrame(out, Map.of("type", "sources", "sources", outcome.sources()));

@@ -17,6 +17,8 @@ import java.util.UUID;
  *                       a migration
  * @param guardReason    the {@code AnswerGuard} verdict reason, so a refused answer is
  *                       distinguishable from a model that had nothing to say
+ * @param appliedFilter  the metadata filter that was actually used, as JSON - null when none was
+ * @param filterWidened  true when the filter matched nothing and retrieval was retried without it
  */
 public record RagTrace(
         UUID requestId,
@@ -31,8 +33,20 @@ public record RagTrace(
         Integer promptTokens,
         Integer completionTokens,
         String answer,
-        String guardReason
+        String guardReason,
+        String appliedFilter,
+        boolean filterWidened
 ) {
+
+    /** A trace from a path that does no filtering: no filter, never widened. */
+    public RagTrace(UUID requestId, Instant ts, String principal, List<Long> projectIds,
+                    String rawQuery, String condensedQuery, String backend,
+                    List<Retrieved> retrieved, Map<String, Long> stageLatencyMs,
+                    Integer promptTokens, Integer completionTokens, String answer,
+                    String guardReason) {
+        this(requestId, ts, principal, projectIds, rawQuery, condensedQuery, backend, retrieved,
+                stageLatencyMs, promptTokens, completionTokens, answer, guardReason, null, false);
+    }
 
     /** One retrieved chunk, identified the same way feedback labels are: doc id plus index. */
     public record Retrieved(String docId, int chunkIndex, double score) {}

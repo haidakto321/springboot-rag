@@ -47,6 +47,19 @@ public class TraceRecorder {
                        String condensedQuery, String backend, List<SearchHit> hits,
                        Map<String, Long> stageLatencyMs, Integer promptTokens,
                        Integer completionTokens, String answer, String guardReason) {
+        return record(requestId, ctx, projectIds, rawQuery, condensedQuery, backend, hits,
+                stageLatencyMs, promptTokens, completionTokens, answer, guardReason, null, false);
+    }
+
+    /**
+     * Same, plus what query understanding decided: the filter that was actually applied, and
+     * whether it had to be dropped because it matched nothing.
+     */
+    public UUID record(UUID requestId, SearchContext ctx, List<Long> projectIds, String rawQuery,
+                       String condensedQuery, String backend, List<SearchHit> hits,
+                       Map<String, Long> stageLatencyMs, Integer promptTokens,
+                       Integer completionTokens, String answer, String guardReason,
+                       String appliedFilter, boolean filterWidened) {
         if (!props.isEnabled()) {
             return requestId;
         }
@@ -66,7 +79,9 @@ public class TraceRecorder {
                     promptTokens,
                     completionTokens,
                     truncate(answer),
-                    guardReason);
+                    guardReason,
+                    appliedFilter,
+                    filterWidened);
             repo.insert(trace);
             repo.prune(ctx.principal(), props.getKeep());
         } catch (RuntimeException e) {

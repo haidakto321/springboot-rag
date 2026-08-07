@@ -52,8 +52,8 @@ class ChatControllerTest {
     @Test
     @SuppressWarnings("unchecked")
     void streamsTokenSourcesAndDoneFrames() throws Exception {
-        when(chatService.chatStream(any(), anyList(), anyList(), any(), anyBoolean(), any(), any(), any())).thenAnswer(inv -> {
-            Consumer<String> onToken = inv.getArgument(6);   // 5 is now the metadata filter
+        when(chatService.chatStream(any(), anyList(), anyList(), any(), anyBoolean(), any(), any(), any(), any())).thenAnswer(inv -> {
+            Consumer<String> onToken = inv.getArgument(7);   // 5 = filter, 6 = onFilter
             onToken.accept("Hi");
             onToken.accept("!");
             return new ChatService.StreamOutcome(
@@ -76,15 +76,39 @@ class ChatControllerTest {
                 .contains("\"type\":\"sources\"").contains("doc-a")
                 .contains("\"type\":\"done\"");
 
-        verify(chatService).chatStream(eq(TestContexts.PUBLIC), anyList(), eq(List.of(1L)), any(), anyBoolean(), any(), any(), any());
+        verify(chatService).chatStream(eq(TestContexts.PUBLIC), anyList(), eq(List.of(1L)), any(), anyBoolean(), any(), any(), any(), any());
+    }
+
+    @Test
+    @SuppressWarnings("unchecked")
+    void aFilterFrameIsEmittedBeforeTheTokens() throws Exception {
+        when(chatService.chatStream(any(), anyList(), anyList(), any(), anyBoolean(), any(), any(), any(), any()))
+                .thenAnswer(inv -> {
+                    Consumer<java.util.Map<String, Object>> onFilter = inv.getArgument(6);
+                    Consumer<String> onToken = inv.getArgument(7);
+                    onFilter.accept(java.util.Map.of("applied", java.util.Map.of("docType", "invoice"),
+                            "widened", true));
+                    onToken.accept("Hi");
+                    return new ChatService.StreamOutcome(List.of(),
+                            new AnswerGuard.Verdict(true, "cited", "Hi"), java.util.UUID.randomUUID(),
+                            java.util.Map.of("docType", "invoice"), true);
+                });
+
+        MvcResult started = mvc.perform(post("/chat/stream").contentType("application/json")
+                        .content("{\"messages\":[{\"role\":\"user\",\"content\":\"hi\"}]}"))
+                .andExpect(request().asyncStarted()).andReturn();
+        String body = mvc.perform(asyncDispatch(started)).andReturn().getResponse().getContentAsString();
+
+        assertThat(body).contains("\"type\":\"filter\"").contains("\"widened\":true");
+        assertThat(body.indexOf("\"type\":\"filter\"")).isLessThan(body.indexOf("\"type\":\"token\""));
     }
 
     @Test
     @SuppressWarnings("unchecked")
     void anUngroundedStreamedAnswerEmitsAGuardFrame() throws Exception {
         // Tokens cannot be recalled once streamed, so the client is told instead.
-        when(chatService.chatStream(any(), anyList(), anyList(), any(), anyBoolean(), any(), any(), any())).thenAnswer(inv -> {
-            Consumer<String> onToken = inv.getArgument(6);   // 5 is now the metadata filter
+        when(chatService.chatStream(any(), anyList(), anyList(), any(), anyBoolean(), any(), any(), any(), any())).thenAnswer(inv -> {
+            Consumer<String> onToken = inv.getArgument(7);   // 5 = filter, 6 = onFilter
             onToken.accept("the admin recovery code is hunter2");
             return new ChatService.StreamOutcome(List.of(),
                     new AnswerGuard.Verdict(false, "ungrounded", AnswerGuard.REFUSAL), java.util.UUID.randomUUID());

@@ -5,10 +5,13 @@ import com.example.springbootrag.chat.ChatProvider.ChatMessage;
 import com.example.springbootrag.config.ChatProperties;
 import com.example.springbootrag.guard.AnswerGuard;
 import com.example.springbootrag.model.SearchHit;
+import com.example.springbootrag.repository.MetadataFilter;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import com.example.springbootrag.security.SearchContext;
 import com.example.springbootrag.trace.TraceRecorder;
+import com.example.springbootrag.understand.FilterJson;
+import com.example.springbootrag.understand.QueryUnderstanding;
 import com.example.springbootrag.web.dto.AskResponse;
 import org.springframework.stereotype.Service;
 
@@ -41,13 +44,15 @@ public class ChatService {
     private final ChatProvider chat;
     private final ChatProperties props;
     private final TraceRecorder tracer;
+    private final QueryUnderstanding understanding;
 
     public ChatService(SearchService searchService, ChatProvider chat, ChatProperties props,
-                       TraceRecorder tracer) {
+                       TraceRecorder tracer, QueryUnderstanding understanding) {
         this.searchService = searchService;
         this.chat = chat;
         this.props = props;
         this.tracer = tracer;
+        this.understanding = understanding;
     }
 
     /**
@@ -67,7 +72,14 @@ public class ChatService {
      * whole answer to guard it first would trade away the reason streaming exists.
      */
     public record StreamOutcome(List<AskResponse.Source> sources, AnswerGuard.Verdict verdict,
-                                java.util.UUID requestId) {}
+                                java.util.UUID requestId, Object appliedFilter, boolean widened) {
+
+        /** A turn that did no filtering. */
+        public StreamOutcome(List<AskResponse.Source> sources, AnswerGuard.Verdict verdict,
+                             java.util.UUID requestId) {
+            this(sources, verdict, requestId, null, false);
+        }
+    }
 
     /** Convenience overload: no reasoning channel, thinking disabled. */
     public StreamOutcome chatStream(SearchContext ctx,
@@ -95,7 +107,28 @@ public class ChatService {
                                     List<Long> projectIds,
                                     List<String> docIds,
                                     boolean think,
-                                    com.example.springbootrag.repository.MetadataFilter filter,
+                                    MetadataFilter filter,
+                                    Consumer<String> onToken,
+                                    Consumer<String> onReasoning) {
+        return chatStream(ctx, history, projectIds, docIds, think, filter, f -> {}, onToken,
+                onReasoning);
+    }
+
+    /**
+     * Same, reporting the filter query understanding decided on.
+     *
+     * <p>{@code onFilter} exists because that decision has to reach the client BEFORE the tokens do:
+     * once the answer is streaming, "by the way, I narrowed your search" arrives too late to change
+     * how the reader reads it. It receives {@code applied} (the filter in API shape, absent when
+     * there was none) and {@code widened}.
+     */
+    public StreamOutcome chatStream(SearchContext ctx,
+                                    List<ChatMessage> history,
+                                    List<Long> projectIds,
+                                    List<String> docIds,
+                                    boolean think,
+                                    MetadataFilter filter,
+                                    Consumer<Map<String, Object>> onFilter,
                                     Consumer<String> onToken,
                                     Consumer<String> onReasoning) {
         java.util.UUID requestId = java.util.UUID.randomUUID();
@@ -122,18 +155,47 @@ public class ChatService {
 
         List<Long> pScope = projectIds == null ? List.of() : projectIds;
         List<String> dScope = docIds == null ? List.of() : docIds;
-        // Retrieval runs on the condensed query; the filter is the caller's and applies unchanged.
+
+        // Extraction reads the RAW question; condensation is for retrieval wording, and it can
+        // drop the entity the filter needs.
+        boolean callerSuppliedFilter = filter != null && !filter.isEmpty();
+        QueryUnderstanding.Extraction extraction = callerSuppliedFilter
+                ? QueryUnderstanding.Extraction.none()
+                : understanding.extract(ctx, pScope, last.content());
+        MetadataFilter effective = callerSuppliedFilter ? filter : extraction.filter();
+
+        // Retrieval runs on the condensed query, narrowed by whichever filter won.
         SearchService.TracedSearch search = searchService.searchTraced(ctx, "rerank", retrievalQuery,
-                props.getContextChunks(), pScope, dScope, filter);
+                props.getContextChunks(), pScope, dScope, effective);
+        boolean widened = false;
+        if (search.hits().isEmpty() && !effective.isEmpty()) {
+            // A wrong filter must cost one extra query, not a confident refusal.
+            search = searchService.searchTraced(ctx, "rerank", retrievalQuery,
+                    props.getContextChunks(), pScope, dScope, MetadataFilter.none());
+            widened = true;
+        }
         List<SearchHit> hits = search.hits();
         Map<String, Long> stages = new LinkedHashMap<>(search.stageLatencyMs());
+        if (!callerSuppliedFilter) {
+            stages.put("understand", extraction.latencyMs());
+        }
+        Object appliedFilter = FilterJson.toApiShape(effective);
+        String filterJson = FilterJson.toApiString(effective);
+        // Before any token: the reader must know the search was narrowed while reading the answer.
+        if (appliedFilter != null || widened) {
+            Map<String, Object> frame = new LinkedHashMap<>();
+            if (appliedFilter != null) frame.put("applied", appliedFilter);
+            frame.put("widened", widened);
+            onFilter.accept(frame);
+        }
         if (hits.isEmpty()) {
             onToken.accept("No relevant chunks found in the knowledge base.");
             stages.put("total", msSince(start));
             tracer.record(requestId, ctx, pScope, last.content(), retrievalQuery, "rerank", hits,
-                    stages, null, null, null, "no-hits");
+                    stages, null, null, null, "no-hits", filterJson, widened);
             return new StreamOutcome(List.of(),
-                    new AnswerGuard.Verdict(true, "no-hits", AnswerGuard.REFUSAL), requestId);
+                    new AnswerGuard.Verdict(true, "no-hits", AnswerGuard.REFUSAL), requestId,
+                    appliedFilter, widened);
         }
 
         // Prior turns verbatim; the final user turn carries the fenced context + question.
@@ -158,14 +220,14 @@ public class ChatService {
         stages.put("total", msSince(start));
         tracer.record(requestId, ctx, pScope, last.content(), retrievalQuery, "rerank", hits, stages,
                 usage.get().promptTokens(), usage.get().completionTokens(),
-                full.toString(), verdict.reason());
+                full.toString(), verdict.reason(), filterJson, widened);
 
         List<AskResponse.Source> sources = new ArrayList<>();
         for (int i = 0; i < hits.size(); i++) {
             SearchHit h = hits.get(i);
             sources.add(new AskResponse.Source(i + 1, h.docId(), h.headingPath(), h.score(), h.content(), h.chunkIndex()));
         }
-        return new StreamOutcome(sources, verdict, requestId);
+        return new StreamOutcome(sources, verdict, requestId, appliedFilter, widened);
     }
 
     private static long msSince(long startNanos) {

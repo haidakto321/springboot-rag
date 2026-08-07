@@ -167,7 +167,7 @@ Existing corpora keep working after an upgrade: `schema.sql` backfills unlabelle
 - `GET /search?q=...&type=fts|pgvector|qdrant|hybrid|rerank|graph&topK=10` - optional `projectId=<id>`, `group=true`, `docIds=a&docIds=b`, `docType=invoice`, `filters=<json>`
 - `GET /compare?q=...&topK=10` - all six backends side by side (scores + timing); same `docType` / `filters` params
 - `GET /ask?q=...` - one-shot RAG answer with citations; same `docType` / `filters` params
-- `POST /chat/stream` - streaming multi-turn RAG, NDJSON frames: `token`, `reasoning`, `sources`, `trace`, `guard`, `done`, `error`; `docType` / `filters` in the body
+- `POST /chat/stream` - streaming multi-turn RAG, NDJSON frames: `filter`, `token`, `reasoning`, `sources`, `trace`, `guard`, `done`, `error`; `docType` / `filters` in the body
 
 **Documents and projects**
 - `POST /projects/{id}/documents` - multipart `.md` upload; optional `groups=hr&groups=public` sets the access label
@@ -181,6 +181,7 @@ Existing corpora keep working after an upgrade: `schema.sql` backfills unlabelle
 - `DELETE /projects/{id}/records/{docId}` - removes it from Postgres, Qdrant, the edge graph, and the registry
 - `PUT /projects/{id}/profiles/{docType}` - optional render profile for a document type
 - `GET /projects/{id}/profiles`, `GET /projects/{id}/profiles/{docType}`
+- `GET /projects/{id}/facets` - what can be filtered on, derived from what is actually indexed; optional `docType=`
 
 **Feedback, traces, identity**
 - `POST /feedback` - one relevance label per `(project, doc, chunk, query)`; `DELETE /feedback` clears it; `GET /feedback?projectId&query&limit` dumps them
@@ -245,6 +246,68 @@ curl -u alice:alice -X PUT localhost:8085/projects/1/profiles/invoice \
 
 No profile means generic rendering, so an unconfigured document type is searchable the moment it
 lands. Editing a profile bumps its version and re-indexes only that document type.
+
+## Query understanding (question -> filter)
+
+You should not have to write a filter by hand. When `app.understand.enabled` is on (the default),
+`/ask` and `/chat/stream` turn the question into one automatically:
+
+1. **Facet catalogue.** The filterable paths are derived from the metadata actually indexed, never
+   declared - so a document type nobody configured is still filterable. Read it yourself:
+
+   ```bash
+   curl -u alice:alice localhost:8085/projects/1/facets
+   # {"docTypes":["invoice"],
+   #  "facets":[{"docType":"invoice","path":"values.customer","type":"text",
+   #             "samples":["ACME Corp","GLOBEX Ltd"],"distinctCount":2}, ...]}
+   ```
+
+   Facets are read under your access labels - you never see a field belonging to documents you
+   cannot read.
+
+2. **One LLM call** gets that catalogue (with real sample values) plus the question, and returns a
+   filter as JSON.
+
+3. **The output is validated against the catalogue, not trusted.** Invented paths, unknown document
+   types, malformed conditions and oversized values are dropped. Everything surviving is rebuilt
+   through the same parser an explicit `filters=` param goes through, so extraction can never
+   express something the DSL cannot - and can never touch your access labels.
+
+4. **Widen on empty.** If the extracted filter matches nothing, retrieval runs again without it and
+   the response says so. A misheard customer name costs one extra query, not an answer.
+
+Both responses report what happened:
+
+```jsonc
+// GET /ask
+{"answer": "...", "sources": [...],
+ "appliedFilter": {"docType":"invoice",
+                   "filters":[{"path":"values.customer","op":"eq","value":"ACME Corp","type":"text"}]},
+ "widened": false}
+```
+
+```jsonc
+// POST /chat/stream - always BEFORE the first token frame
+{"type":"filter","applied":{"docType":"invoice","filters":[...]},"widened":false}
+```
+
+`appliedFilter` comes back in the same shape the API accepts, so a client can echo it straight back
+as an explicit filter. **An explicit `filters=` from you always wins** and skips extraction
+entirely - it is never merged with an extracted one.
+
+| Key | Default | Meaning |
+|---|---|---|
+| `app.understand.enabled` | `true` | off restores exactly the pre-feature behaviour |
+| `app.understand.model` | `""` | empty = `app.chat.model`; set a smaller model to make extraction cheap |
+| `app.understand.max-conditions` | `4` | conditions kept from one extraction |
+| `app.understand.facet-samples` | `5` | sample values shown per facet (clamped to 20) |
+| `app.understand.facet-ttl-seconds` | `300` | catalogue cache lifetime, per group set + project scope |
+| `app.understand.max-value-length` | `200` | longer values are dropped from the filter |
+
+Extraction never fails a request: model down, timeout, or garbage output all mean "no filter, answer
+anyway". The filter that was attempted and the widen decision are recorded in `rag_trace`
+(`applied_filter`, `filter_widened`), because "why did it not find my document?" is otherwise
+unanswerable.
 
 ## Reranking (`type=rerank`)
 `rerank` over-fetches hybrid candidates (`app.rerank.candidates`, default 50), reorders them with a
@@ -381,6 +444,7 @@ matter are on the answer model, not the vector store (`docs/LEARNINGS.md` sectio
 ./mvnw test "-Dgroups=eval" "-DexcludedGroups="           # retrieval metrics (top-K recall, MRR, hit@1)
 ./mvnw test "-Dgroups=eval-judge" "-DexcludedGroups="     # faithfulness smoke report (LLM judge, yes/no per answer)
 ./mvnw test "-Dgroups=eval-feedback" "-DexcludedGroups="  # precision@k over human thumbs (skips below 10 labels)
+./mvnw test "-Dgroups=eval-records" "-DexcludedGroups="   # query understanding vs a committed 210-record corpus
 ```
 
 > recall@5, MRR and hit@1 are **eval-time** metrics - nothing computes them on a live request. They

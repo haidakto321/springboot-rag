@@ -9,6 +9,17 @@ public interface ChatProvider {
     String chat(String systemPrompt, String userPrompt);
 
     /**
+     * Same as {@link #chat}, but against a named model.
+     *
+     * <p>Exists so a cheap fast model can do query understanding while the large one writes the
+     * answer - the model-tiering lever in RAG-MASTERY section 8. The default ignores the name, so a
+     * provider that cannot switch models per call stays valid and simply uses its configured one.
+     */
+    default String chat(String systemPrompt, String userPrompt, String model) {
+        return chat(systemPrompt, userPrompt);
+    }
+
+    /**
      * Same call as {@link #chat}, but also reporting how many tokens it cost.
      *
      * <p>Default implementation reports unknown usage, so a provider that cannot measure tokens

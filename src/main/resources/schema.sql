@@ -224,3 +224,9 @@ CREATE TABLE IF NOT EXISTS document (
     indexed_at      TIMESTAMPTZ NOT NULL DEFAULT now(),
     PRIMARY KEY (project_id, doc_id)
 );
+
+-- ---- Query understanding (2026-08-06) ----
+-- The filter that was actually applied and whether it had to be dropped. Without these, the one
+-- question a surprised user asks - "why did it not find my document?" - has no answer.
+ALTER TABLE rag_trace ADD COLUMN IF NOT EXISTS applied_filter JSONB;
+ALTER TABLE rag_trace ADD COLUMN IF NOT EXISTS filter_widened BOOLEAN NOT NULL DEFAULT false;

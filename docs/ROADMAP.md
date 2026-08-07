@@ -151,7 +151,7 @@ The existing whole-answer 👍/👎 (localStorage-only) stays; this adds a per-s
 
 ## Planned (not yet built)
 
-### CI-runnable eval gate - frozen test corpus  ⬜ planned (deliberately deferred 2026-08-05)
+### CI-runnable eval gate - frozen test corpus  🟨 half done (2026-08-07)
 Goal: make the retrieval regression gate enforceable by CI instead of by developer discipline.
 
 - **The limitation being tracked.** The gate built in
@@ -175,6 +175,22 @@ Goal: make the retrieval regression gate enforceable by CI instead of by develop
   deliverable, "run the gate before you merge, please" is not a control. A real project needs the
   gate to run without the private corpus. Revisit before this pattern is copied anywhere that has
   more than one contributor.
+
+**Update 2026-08-07 - a frozen corpus now exists, but it is not yet a gate.**
+`RecordCorpus.generate(42)` produces 210 deterministic synthetic records (invoices, delivery notes,
+contracts) in `src/test/java/.../eval/`, and `RecordFilterEvalTest` (`-Dgroups=eval-records`) runs
+against it under Testcontainers - so it works on a fresh clone and in CI, with no private corpus.
+`records-golden.yaml` holds 15 questions whose correct documents are COMPUTED from each question's
+expected filter (`RecordGroundTruth`) rather than listed by hand, so the golden set survives a
+change to the generator.
+
+What is still missing before this closes:
+- It **reports, it does not gate.** No committed baseline, no failure on regression - the same order
+  drill C followed for the wiki eval.
+- It uses a **fake embedding provider**, so its recall/MRR measure the metadata filter, not
+  retrieval quality. The original item's goal (gating semantic retrieval quality in CI) needs
+  either real embeddings in CI or committed vectors.
+- `golden.yaml` still points at this repo's `docs/`, so `RetrievalEvalTest` remains unstable.
 
 ## Everything else on this roadmap is built.
 Possible future directions (not scheduled): server-side session persistence, token-budget

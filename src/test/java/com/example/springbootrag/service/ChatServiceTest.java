@@ -9,6 +9,8 @@ import com.example.springbootrag.security.SearchContext;
 import com.example.springbootrag.web.dto.AskResponse;
 import com.example.springbootrag.security.TestContexts;
 import com.example.springbootrag.trace.NoopTraceRecorder;
+import com.example.springbootrag.understand.QueryUnderstanding;
+import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 
 import java.util.ArrayList;
@@ -25,8 +27,10 @@ import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyInt;
 import static org.mockito.ArgumentMatchers.anyList;
 import static org.mockito.ArgumentMatchers.anyString;
+import static org.mockito.ArgumentMatchers.argThat;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
@@ -59,7 +63,15 @@ class ChatServiceTest {
 
     private final FakeChat chat = new FakeChat();
     private final ChatProperties props = new ChatProperties();
-    private final ChatService service = new ChatService(searchService, chat, props, NoopTraceRecorder.create());
+    private final QueryUnderstanding understanding = mock(QueryUnderstanding.class);
+    private final ChatService service =
+            new ChatService(searchService, chat, props, NoopTraceRecorder.create(), understanding);
+
+    @BeforeEach
+    void extractionFindsNothingByDefault() {
+        when(understanding.extract(any(), anyList(), anyString()))
+                .thenReturn(QueryUnderstanding.Extraction.none());
+    }
 
     @Test
     void followupRetrievesWithCondensedQueryButGeneratesFromOriginal() {
@@ -157,6 +169,89 @@ class ChatServiceTest {
         ArgumentCaptor<List<String>> scope = ArgumentCaptor.forClass(List.class);
         verify(searchService).searchTraced(any(SearchContext.class), eq("rerank"), eq("q"), anyInt(), anyList(), scope.capture(), any(MetadataFilter.class));
         assertThat(scope.getValue()).containsExactly("doc-a", "doc-b");
+    }
+
+    @Test
+    void extractionUsesTheRawQuestionNotTheCondensedOne() {
+        // Condensation rewrites pronouns but can drop the entity the filter needs.
+        when(searchService.searchTraced(any(SearchContext.class), eq("rerank"),
+                eq("condensed standalone query"), anyInt(), anyList(), any(), any(MetadataFilter.class)))
+                .thenReturn(new SearchService.TracedSearch(
+                        List.of(new SearchHit(1, "d", 0, "c", null, null, 0.5, null)),
+                        Map.of("embed", 1L, "retrieve", 2L)));
+
+        service.chatStream(TestContexts.PUBLIC, List.of(
+                new ChatMessage("user", "what about ACME Corp?"),
+                new ChatMessage("assistant", "..."),
+                new ChatMessage("user", "and their unpaid ones?")), List.of(), List.of(), t -> {});
+
+        verify(understanding).extract(any(), anyList(), eq("and their unpaid ones?"));
+    }
+
+    @Test
+    void anExtractedFilterIsReportedBeforeTheFirstToken() {
+        MetadataFilter extracted = MetadataFilter.parse("""
+                {"filters":[{"path":"values.customer","op":"eq","value":"ACME Corp"}]}""");
+        when(understanding.extract(any(), anyList(), anyString()))
+                .thenReturn(new QueryUnderstanding.Extraction(extracted, 42L, List.of()));
+        when(searchService.searchTraced(any(SearchContext.class), anyString(), anyString(), anyInt(),
+                anyList(), any(), any(MetadataFilter.class)))
+                .thenReturn(new SearchService.TracedSearch(
+                        List.of(new SearchHit(1, "d", 0, "c", null, null, 0.5, null)),
+                        Map.of("embed", 1L, "retrieve", 2L)));
+
+        List<String> events = new ArrayList<>();
+        ChatService.StreamOutcome outcome = service.chatStream(TestContexts.PUBLIC,
+                List.of(new ChatMessage("user", "invoices for ACME Corp")), List.of(), List.of(),
+                false, MetadataFilter.none(),
+                f -> events.add("filter:" + f.get("widened")), t -> events.add("token"), r -> {});
+
+        assertThat(events).first().isEqualTo("filter:false");
+        assertThat(outcome.appliedFilter()).isNotNull();
+        assertThat(outcome.widened()).isFalse();
+    }
+
+    @Test
+    void aFilterThatMatchesNothingWidensAndSaysSo() {
+        MetadataFilter extracted = MetadataFilter.parse("""
+                {"filters":[{"path":"values.customer","op":"eq","value":"NOBODY Ltd"}]}""");
+        when(understanding.extract(any(), anyList(), anyString()))
+                .thenReturn(new QueryUnderstanding.Extraction(extracted, 42L, List.of()));
+        // Filtered retrieval finds nothing; the unfiltered retry does.
+        when(searchService.searchTraced(any(SearchContext.class), anyString(), anyString(), anyInt(),
+                anyList(), any(), argThat(f -> f != null && !f.isEmpty())))
+                .thenReturn(new SearchService.TracedSearch(List.of(), Map.of("retrieve", 2L)));
+        when(searchService.searchTraced(any(SearchContext.class), anyString(), anyString(), anyInt(),
+                anyList(), any(), argThat(f -> f == null || f.isEmpty())))
+                .thenReturn(new SearchService.TracedSearch(
+                        List.of(new SearchHit(1, "d", 0, "c", null, null, 0.5, null)),
+                        Map.of("retrieve", 3L)));
+
+        List<String> tokens = new ArrayList<>();
+        ChatService.StreamOutcome outcome = service.chatStream(TestContexts.PUBLIC,
+                List.of(new ChatMessage("user", "invoices for NOBODY")), List.of(), List.of(),
+                tokens::add);
+
+        assertThat(outcome.widened()).isTrue();
+        assertThat(outcome.sources()).hasSize(1);
+        assertThat(tokens).containsExactly("Hello", " there");
+    }
+
+    @Test
+    void anExplicitCallerFilterSkipsExtraction() {
+        when(searchService.searchTraced(any(SearchContext.class), anyString(), anyString(), anyInt(),
+                anyList(), any(), any(MetadataFilter.class)))
+                .thenReturn(new SearchService.TracedSearch(
+                        List.of(new SearchHit(1, "d", 0, "c", null, null, 0.5, null)),
+                        Map.of("retrieve", 2L)));
+
+        service.chatStream(TestContexts.PUBLIC, List.of(new ChatMessage("user", "q")), List.of(),
+                List.of(), false,
+                MetadataFilter.parse("""
+                        {"filters":[{"path":"values.customer","op":"eq","value":"GLOBEX Ltd"}]}"""),
+                t -> {}, r -> {});
+
+        verify(understanding, never()).extract(any(), anyList(), anyString());
     }
 
     @Test

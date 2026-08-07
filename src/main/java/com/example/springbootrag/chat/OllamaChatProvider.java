@@ -46,14 +46,25 @@ public class OllamaChatProvider implements ChatProvider {
         return chatDetailed(systemPrompt, userPrompt).content();
     }
 
+    /** Model tiering: a blank name means "whatever app.chat.model says". */
+    @Override
+    public String chat(String systemPrompt, String userPrompt, String model) {
+        return chatDetailed(systemPrompt, userPrompt,
+                model == null || model.isBlank() ? props.getModel() : model).content();
+    }
+
     @Override
     public ChatReply chatDetailed(String systemPrompt, String userPrompt) {
+        return chatDetailed(systemPrompt, userPrompt, props.getModel());
+    }
+
+    private ChatReply chatDetailed(String systemPrompt, String userPrompt, String model) {
         ChatResponse resp;
         try {
             resp = client.post()
                     .uri("/api/chat")
                     .body(Map.of(
-                            "model", props.getModel(),
+                            "model", model,
                             "stream", false,
                             "think", true,
                             "messages", List.of(
