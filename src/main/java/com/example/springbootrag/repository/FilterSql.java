@@ -34,20 +34,21 @@ public final class FilterSql {
             switch (c.op()) {
                 case "eq" -> {
                     sql.append(" AND ").append(accessor).append(" = ?");
-                    args.add(c.value());
+                    args.add(asText(c.value()));
                 }
                 case "in" -> {
                     sql.append(" AND ").append(accessor).append(" IN (")
                             .append(DocFilter.placeholders(c.values().size())).append(")");
-                    args.addAll(c.values());
+                    for (Object v : c.values()) args.add(asText(v));
                 }
                 case "exists" -> sql.append(" AND ").append(accessor).append(" IS NOT NULL");
                 case "range" -> {
                     String typed = cast(accessor, c.type());
-                    if (c.gte() != null) { sql.append(" AND ").append(typed).append(" >= ?"); args.add(c.gte()); }
-                    if (c.gt() != null) { sql.append(" AND ").append(typed).append(" > ?"); args.add(c.gt()); }
-                    if (c.lte() != null) { sql.append(" AND ").append(typed).append(" <= ?"); args.add(c.lte()); }
-                    if (c.lt() != null) { sql.append(" AND ").append(typed).append(" < ?"); args.add(c.lt()); }
+                    String param = param(c.type());
+                    if (c.gte() != null) { sql.append(" AND ").append(typed).append(" >= ").append(param); args.add(c.gte()); }
+                    if (c.gt() != null) { sql.append(" AND ").append(typed).append(" > ").append(param); args.add(c.gt()); }
+                    if (c.lte() != null) { sql.append(" AND ").append(typed).append(" <= ").append(param); args.add(c.lte()); }
+                    if (c.lt() != null) { sql.append(" AND ").append(typed).append(" < ").append(param); args.add(c.lt()); }
                 }
                 default -> throw new IllegalArgumentException("unknown filter op: " + c.op());
             }
@@ -88,5 +89,32 @@ public final class FilterSql {
             case "date" -> "(" + accessor + ")::timestamptz";
             default -> accessor;
         };
+    }
+
+    /**
+     * The BOUND side needs the same cast as the column side.
+     *
+     * <p>Casting only the column produced `(metadata #>> '{...}')::timestamptz >= ?` with a String
+     * argument, which Postgres rejects outright:
+     * {@code operator does not exist: timestamp with time zone >= character varying}. It went
+     * unnoticed because every filter written by hand so far compared text, and the unit test
+     * asserted the generated string rather than executing it. A date range only became reachable
+     * once query understanding started producing one.
+     */
+    private static String param(String type) {
+        return switch (type == null ? "text" : type) {
+            case "number" -> "?::numeric";
+            case "date" -> "?::timestamptz";
+            default -> "?";
+        };
+    }
+
+    /**
+     * {@code metadata #>> path} always yields text, so an {@code eq} or {@code in} value has to be
+     * compared as text. A JSON number arriving as a Java Integer would otherwise render as
+     * {@code text = integer}, which is the same class of type error as the range case above.
+     */
+    private static Object asText(Object value) {
+        return value == null ? null : String.valueOf(value);
     }
 }

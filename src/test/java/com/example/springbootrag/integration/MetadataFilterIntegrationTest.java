@@ -234,6 +234,60 @@ class MetadataFilterIntegrationTest {
         assertThat(unfiltered).contains("LOW-CONF", "HIGH-CONF");
     }
 
+    /**
+     * Executes the SQL rather than asserting its text.
+     *
+     * <p>`FilterSqlTest` checked the generated string and happily approved
+     * {@code (metadata #>> '{...}')::timestamptz >= ?} with a String bind - which Postgres rejects
+     * outright. Nothing caught it until a real extracted date range reached the database, because
+     * every hand-written filter until then compared text.
+     */
+    @Test
+    void aDateRangeActuallyRunsOnThePostgresBackends() {
+        ingestDated("JAN", "2026-01-15");
+        ingestDated("MAY", "2026-05-15");
+
+        MetadataFilter secondQuarter = MetadataFilter.parse("""
+                {"filters":[{"path":"values.issueDate","op":"range",
+                             "gte":"2026-04-01","lt":"2026-07-01","type":"date"}]}""");
+
+        for (String type : List.of("fts", "pgvector", "hybrid", "rerank")) {
+            List<String> ids = searchService.search(ctx, type, "invoice issued to the customer", 20,
+                            List.of(projectId()), List.of(), secondQuarter)
+                    .stream().map(SearchHit::docId).toList();
+            assertThat(ids).as("backend %s", type).contains("MAY").doesNotContain("JAN");
+        }
+    }
+
+    @Test
+    void aNumericEqRunsEvenThoughTheStoredValueIsText() {
+        // metadata #>> path yields text; binding an Integer would be `text = integer`.
+        ingestDated("JAN", "2026-01-15");
+
+        MetadataFilter byDate = MetadataFilter.parse("""
+                {"filters":[{"path":"values.issueDate","op":"eq","value":"2026-01-15"}]}""");
+        MetadataFilter byNumber = MetadataFilter.parse("""
+                {"filters":[{"path":"values.amount","op":"eq","value":42}]}""");
+
+        assertThat(searchService.search(ctx, "pgvector", "invoice issued", 20,
+                List.of(projectId()), List.of(), byDate)).isNotEmpty();
+        // No record has values.amount, so this must return nothing - not throw a type error.
+        assertThat(searchService.search(ctx, "pgvector", "invoice issued", 20,
+                List.of(projectId()), List.of(), byNumber)).isEmpty();
+    }
+
+    private void ingestDated(String docId, String issueDate) {
+        String json = """
+                {"customer":{"value":"ACME"},"issueDate":"%s",
+                 "body":"invoice issued to the customer"}""".formatted(issueDate);
+        try {
+            recordIngest.ingest(projectId(), new RecordRequest(
+                    docId, "invoice", M.readTree(json), null, List.of("public"), null));
+        } catch (Exception e) {
+            throw new IllegalStateException("seed failed for " + docId, e);
+        }
+    }
+
     @Test
     void dateRangeOnQdrantFailsLoudlyRatherThanSilently() {
         MetadataFilter f = MetadataFilter.parse("""

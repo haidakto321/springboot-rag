@@ -49,18 +49,40 @@ class FilterSqlTest {
         FilterSql.Fragment f = FilterSql.render(MetadataFilter.parse("""
                 {"filters":[{"path":"conf.min","op":"range","gte":0.7,"type":"number"}]}"""));
 
-        assertThat(f.sql()).isEqualTo(" AND (metadata #>> '{conf,min}')::numeric >= ?");
+        assertThat(f.sql()).isEqualTo(" AND (metadata #>> '{conf,min}')::numeric >= ?::numeric");
         assertThat(f.args()).hasSize(1);
     }
 
     @Test
-    void dateRangeCastsToTimestamp() {
+    void dateRangeCastsBothSidesNotJustTheColumn() {
+        // Casting only the column gives Postgres `timestamptz >= varchar`, which it refuses:
+        // "operator does not exist". Found by RecordFilterEvalTest, missed here for a month
+        // because this test asserted the generated string instead of executing it.
         FilterSql.Fragment f = FilterSql.render(MetadataFilter.parse("""
                 {"filters":[{"path":"values.issueDate","op":"range",
                              "gte":"2026-04-01","lt":"2026-07-01","type":"date"}]}"""));
 
-        assertThat(f.sql()).contains("::timestamptz >= ?").contains("::timestamptz < ?");
+        assertThat(f.sql()).contains("::timestamptz >= ?::timestamptz")
+                .contains("::timestamptz < ?::timestamptz");
         assertThat(f.args()).containsExactly("2026-04-01", "2026-07-01");
+    }
+
+    @Test
+    void eqOnANumericValueBindsItAsText() {
+        // metadata #>> path yields text, so `text = 5000` (an int bind) is the same type error.
+        FilterSql.Fragment f = FilterSql.render(MetadataFilter.parse("""
+                {"filters":[{"path":"values.total","op":"eq","value":5000}]}"""));
+
+        assertThat(f.sql()).isEqualTo(" AND metadata #>> '{values,total}' = ?");
+        assertThat(f.args()).containsExactly("5000");
+    }
+
+    @Test
+    void inOnNumericValuesBindsThemAsText() {
+        FilterSql.Fragment f = FilterSql.render(MetadataFilter.parse("""
+                {"filters":[{"path":"values.total","op":"in","values":[100,200]}]}"""));
+
+        assertThat(f.args()).containsExactly("100", "200");
     }
 
     @Test
