@@ -151,7 +151,7 @@ The existing whole-answer 👍/👎 (localStorage-only) stays; this adds a per-s
 
 ## Planned (not yet built)
 
-### CI-runnable eval gate - frozen test corpus  🟨 half done (2026-08-07)
+### CI-runnable eval gate - frozen test corpus  ✅ done for query understanding (2026-08-07)
 Goal: make the retrieval regression gate enforceable by CI instead of by developer discipline.
 
 - **The limitation being tracked.** The gate built in
@@ -184,13 +184,19 @@ against it under Testcontainers - so it works on a fresh clone and in CI, with n
 expected filter (`RecordGroundTruth`) rather than listed by hand, so the golden set survives a
 change to the generator.
 
-What is still missing before this closes:
-- It **reports, it does not gate.** No committed baseline, no failure on regression - the same order
-  drill C followed for the wiki eval.
-- It uses a **fake embedding provider**, so its recall/MRR measure the metadata filter, not
-  retrieval quality. The original item's goal (gating semantic retrieval quality in CI) needs
-  either real embeddings in CI or committed vectors.
+**Update 2026-08-07 (later): it now gates.** `baseline-records.yaml` is committed and
+`RecordFilterEvalTest` fails on a >0.05 drop in extraction precision/recall or docType accuracy, on
+any retrieval metric dropping, on a question that used to yield a filter yielding none, or on a new
+over-extraction (no tolerance at all for that one). Gate rules are unit-tested offline in
+`RecordEvalComparisonTest` - the eval itself takes half an hour, so its logic must never need it.
+Regenerate with `-Deval.baseline.update=true`.
+
+What is still missing before the ORIGINAL goal closes:
+- The gate covers **query understanding**, not semantic retrieval. It uses a **fake embedding
+  provider**, so its recall/MRR measure the metadata filter. Gating retrieval quality in CI still
+  needs either real embeddings in CI or committed vectors.
 - `golden.yaml` still points at this repo's `docs/`, so `RetrievalEvalTest` remains unstable.
+- Nothing runs it automatically: there is still no CI. It is enforceable, not enforced.
 
 ## Everything else on this roadmap is built.
 Possible future directions (not scheduled): server-side session persistence, token-budget

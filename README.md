@@ -444,7 +444,7 @@ matter are on the answer model, not the vector store (`docs/LEARNINGS.md` sectio
 ./mvnw test "-Dgroups=eval" "-DexcludedGroups="           # retrieval metrics (top-K recall, MRR, hit@1)
 ./mvnw test "-Dgroups=eval-judge" "-DexcludedGroups="     # faithfulness smoke report (LLM judge, yes/no per answer)
 ./mvnw test "-Dgroups=eval-feedback" "-DexcludedGroups="  # precision@k over human thumbs (skips below 10 labels)
-./mvnw test "-Dgroups=eval-records" "-DexcludedGroups="   # query understanding vs a committed 210-record corpus
+./mvnw test "-Dgroups=eval-records" "-DexcludedGroups="   # query understanding vs a committed 210-record corpus (GATED)
 ```
 
 > recall@5, MRR and hit@1 are **eval-time** metrics - nothing computes them on a live request. They

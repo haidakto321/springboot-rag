@@ -71,7 +71,11 @@
     - {path: values.status, op: eq, value: overdue}
     - {path: values.issueDate, op: range, gte: "2026-02-01", lt: "2026-03-01"}
 
-- question: "only high confidence invoice data"
+# The threshold is named in the question on purpose. "only high confidence invoice data" was the
+# original wording and it is unscoreable: no threshold is derivable from it, so the model picking
+# 0.8 and the golden saying 0.7 are equally defensible and the entry measures taste, not mechanism.
+# Choosing WHICH aggregate (conf.min over conf.avg) is still the model's job and still scored.
+- question: "invoices where the minimum extraction confidence is at least 0.7"
   expectedDocType: invoice
   expectedFilters:
     - {path: conf.min, op: range, gte: 0.7}

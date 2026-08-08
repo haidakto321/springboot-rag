@@ -32,6 +32,8 @@ import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 
+import static org.assertj.core.api.Assertions.assertThat;
+
 /**
  * Reports what query understanding is worth on a corpus that exists on every machine.
  *
@@ -47,6 +49,12 @@ import java.util.Map;
 class RecordFilterEvalTest {
 
     private static final long SEED = 42;
+    /**
+     * Wider than the wiki gate's 0.02: retrieval there is deterministic, extraction here is a
+     * sampled model whose output moves between runs. Too tight and the gate cries wolf, which ends
+     * with someone passing -Deval.baseline.update=true to make it stop - the worst outcome.
+     */
+    private static final double TOLERANCE = 0.05;
     private static final int TOP_K = 10;
 
     @Container
@@ -137,6 +145,7 @@ class RecordFilterEvalTest {
 
         List<Integer> ranksWith = new ArrayList<>();
         List<Integer> ranksWithout = new ArrayList<>();
+        List<String> filteredQuestions = new ArrayList<>();
         StringBuilder perQuestion = new StringBuilder();
 
         for (int q = 0; q < golden.size(); q++) {
@@ -150,11 +159,20 @@ class RecordFilterEvalTest {
                     understanding.extract(TestContexts.PUBLIC, List.of(projectId), entry.question());
             latencies.add(extraction.latencyMs());
             MetadataFilter got = extraction.filter();
-            System.out.printf(Locale.ROOT, "[eval-records]   -> %d ms, docType=%s, %d condition(s)%n",
-                    extraction.latencyMs(), got.docType(), got.conditions().size());
+            // The filter and the drop reasons, not just a count: when a condition disappears, the
+            // reason is the whole diagnosis, and without it the next step is guesswork against a
+            // 30-minute feedback loop.
+            System.out.printf(Locale.ROOT, "[eval-records]   -> %d ms, docType=%s, filter=%s%n",
+                    extraction.latencyMs(), got.docType(),
+                    com.example.springbootrag.understand.FilterJson.toApiString(got));
+            if (!extraction.dropped().isEmpty()) {
+                System.out.printf(Locale.ROOT, "[eval-records]      DROPPED: %s%n",
+                        String.join("; ", extraction.dropped()));
+            }
             System.out.flush();
 
             // ---- extraction quality ----
+            if (!got.isEmpty()) filteredQuestions.add(entry.question());
             expectedConditions += entry.expectedFilters().size();
             extractedConditions += got.conditions().size();
             for (Map<String, Object> want : entry.expectedFilters()) {
@@ -227,6 +245,54 @@ class RecordFilterEvalTest {
                 withMetrics.hit1(), withoutMetrics.hit1());
         System.out.println("per question:");
         System.out.print(perQuestion);
+
+        RecordEvalBaseline measured = new RecordEvalBaseline(SEED, corpus.size(),
+                golden.stream().map(RecordGoldenEntry::question).toList(),
+                new RecordEvalBaseline.Extraction(
+                        ratio(matchedConditions, extractedConditions),
+                        ratio(matchedConditions, expectedConditions),
+                        ratio(docTypeCorrect, docTypeQuestions),
+                        noFilterCorrect),
+                Map.of("with-extraction", withMetrics, "without-extraction", withoutMetrics),
+                List.copyOf(filteredQuestions));
+        gate(measured);
+    }
+
+    /**
+     * Compares this run against the committed baseline, or writes a new one.
+     *
+     * <p>Extraction quality is not deterministic - the model samples, and its output drifts with a
+     * version bump - so the gate is a floor with a tolerance, never an equality check. What it is
+     * really defending is the class of failure this feature already shipped once: a prompt change
+     * that quietly takes condition recall from 0.73 to 0.07 while every unit test stays green.
+     */
+    private void gate(RecordEvalBaseline measured) {
+        if (Boolean.getBoolean("eval.baseline.update")) {
+            RecordEvalBaselineStore.write(measured);
+            System.out.printf(Locale.ROOT, "%nbaseline WRITTEN to %s - review the diff before "
+                    + "committing it, a baseline is a claim about what is correct%n",
+                    RecordEvalBaselineStore.SOURCE);
+            return;
+        }
+        if (!RecordEvalBaselineStore.exists()) {
+            System.out.printf(Locale.ROOT, "%nno baseline yet - create one with "
+                    + "-Deval.baseline.update=true%n");
+            return;
+        }
+        RecordEvalBaseline expected = RecordEvalBaselineStore.load();
+        List<String> added = RecordEvalComparison.newQuestions(expected, measured);
+        if (!added.isEmpty()) {
+            System.out.printf(Locale.ROOT, "%nnew questions since the baseline (not gated): %s%n",
+                    String.join(", ", added));
+        }
+        List<RecordEvalComparison.Violation> violations =
+                RecordEvalComparison.compare(expected, measured, TOLERANCE);
+        assertThat(violations)
+                .as("query understanding regressed against %s:%n%s",
+                        RecordEvalBaselineStore.RESOURCE,
+                        violations.stream().map(v -> "  [" + v.area() + "] " + v.detail())
+                                .collect(java.util.stream.Collectors.joining("\n")))
+                .isEmpty();
     }
 
     /** Path and op must be equal; text values compare case-insensitively, numbers numerically. */

@@ -475,6 +475,15 @@ per-answer debug view in the UI. It is a 2 rather than more because it is storag
 observability: no metrics, no alerting, no aggregate latency view, and nothing exported to
 CloudWatch-shaped tooling.
 
+**Row 4 second update (2026-08-07, later): still 2, but on better evidence.** The two named gaps
+are closed - condition recall 0.73 -> 0.87, precision 0.79 -> 0.81 - and the eval is now a gate
+with a committed baseline (`baseline-records.yaml`), so a regression fails the build instead of
+being noticed. docType accuracy moved 1.00 -> 0.92 because the model now abstains on a typo'd
+customer name rather than guessing, which is better behaviour and a worse number.
+
+It stays at 2, not higher, for the reason it did before: **routing still does not exist**, and 66 s
+extraction latency makes this unusable in front of a person as configured. Neither moved today.
+
 **Row 4 update (2026-08-07): now 2.** Scored against the rule written down BEFORE the eval ran -
 "2 only if the eval shows extraction helps, otherwise stay at 1 with the evidence". It helps, and
 not marginally: filter extraction moved condition recall to 0.73 and recall@5 from 0.64 to 1.00 on

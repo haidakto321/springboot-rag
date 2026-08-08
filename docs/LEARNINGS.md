@@ -1063,6 +1063,96 @@ configured. The lever is already built and already measured as necessary: `app.u
 pointing at a smaller model. Section 8's finding stands - every latency cost on this box is a model,
 none of it is the vector store.
 
+### Two gaps closed, and what each one taught
+
+`open or overdue` produced nothing because the model returned the list under `value` instead of
+`values`. `high confidence` produced nothing useful because it picked `conf.avg` where the golden
+set assumed `conf.min`. Fixes, in the order of how much they generalise:
+
+1. **Show an example of every operator you expect.** The ops were named in the shape line
+   (`"op": "eq|in|range|exists"`) from the start and that was not enough. Adding one worked `in`
+   example fixed it immediately. Models copy examples; they skim rules.
+2. **Explain what a computed field MEANS.** `conf.min` and `conf.avg` are calculated at ingest, so
+   their meaning appears nowhere in the data and no number of sample values conveys it. One sentence
+   - "conf.min is the least confident field; a record is only as trustworthy as its weakest
+   extracted field" - moved the model onto the right aggregate.
+3. **Accept the near-miss in code.** The `in`-list-under-`value` case has exactly one possible
+   intent, so the validator honours it rather than dropping it. A single scalar under `value` is
+   still dropped: there, the intent is genuinely ambiguous.
+
+Result: condition recall 0.73 -> **0.87**, precision 0.79 -> **0.81** (13 of 15 expected
+conditions matched, 16 produced). Those are the DETERMINISTIC figures - the first measurement of
+this change read 0.93/0.82, which turned out to be a lucky sample; see the determinism section
+below for why that distinction cost two extra eval runs to discover.
+
+**And one number went DOWN, honestly.** docType accuracy 1.00 -> 0.92. The single miss is the
+deliberate typo question `invoices for ACEM Corp`: the model now abstains completely instead of
+guessing `invoice`. That is arguably the better behaviour and it is what the prompt asks for, but it
+is still a golden miss, and it means the widen path is now exercised only by the over-extraction
+case. Record the number that got worse and say why; a report that only moves upward is not a report.
+
+### A golden entry whose answer cannot be derived from its question is not a test
+
+`only high confidence invoice data` names no threshold. The model said 0.7 was really 0.8; the
+golden said 0.7. Neither is defensible over the other, so the entry scored **taste, not mechanism**.
+It was reworded to name the threshold, keeping the part that IS the model's job - choosing conf.min
+over conf.avg - scored.
+
+This is a change to a golden set made after seeing results, which is the shape of p-hacking, so the
+justification has to hold without reference to the result: an expectation not derivable from the
+question is invalid whichever way the run came out. The reasoning is committed as a comment in the
+file so a future reader can disagree with it.
+
+### Gate the thing that broke, not just the aggregate
+
+The records eval is now a gate (`baseline-records.yaml`), built after the report was trusted - the
+same order drill C followed. Two rules exist specifically because of what went wrong here:
+
+- **Per-question filter tracking.** The prompt-layout bug removed a filter from nearly every
+  question, but a subtler version removing one filter would sit inside any sane tolerance on a
+  15-question aggregate. So a question that used to produce a filter and now produces none fails on
+  its own.
+- **Over-extraction has no tolerance.** `noFilterCorrect` is a count, not a ratio. One free-text
+  question that starts inventing a filter is a failure, because that is the failure that hides
+  findable documents.
+
+The tolerance is 0.05, not the wiki gate's 0.02, because extraction is a sampled model rather than
+deterministic retrieval. A gate that cries wolf gets silenced with
+`-Deval.baseline.update=true`, and a silenced gate is worse than none.
+
+Note what the first committed baseline enshrines: **1 of 2 no-filter questions**, i.e. today's known
+over-extraction, is recorded as acceptable. That is a decision, not an oversight. A baseline is a
+claim about what is correct, which is why the writer prints "review the diff before committing it".
+
+### Extraction must be deterministic, and a flaky gate is how you find out
+
+The gate was built, the baseline written, and the very next run failed it with no code changed:
+condition recall 0.933 -> 0.800, precision 0.824 -> 0.750. Two identical runs, 0.13 apart, purely
+from sampling.
+
+The tempting fix is to widen the tolerance until the noise fits. Do not: a tolerance big enough to
+absorb 0.13 is big enough to hide every regression short of a catastrophe, and a gate that cannot
+fail on a real defect is decoration with a maintenance cost.
+
+**The noise was a product defect, not a measurement problem.** Turning a question into a filter is a
+structured decision with a right answer. Sampling means the same question narrows the corpus
+differently on two consecutive asks - the user does not see "variety", they see search that
+sometimes loses their document. Extraction now runs at temperature 0 with a fixed seed, which is
+what a deterministic decision deserves regardless of whether anyone is measuring it.
+
+Two design details worth copying:
+- Generation settings are **optional per call** (`ChatProvider.Options(model, temperature, seed)`,
+  all nullable, default implementation ignores them). Answer generation keeps the model's own
+  defaults; only extraction goes greedy. Making everything temperature 0 would have flattened the
+  answers as collateral damage.
+- The provider only sends the settings block **when something is set**, so the change is invisible
+  to every call that does not ask for it. Both directions are asserted.
+
+Side effect worth having: extraction p50 fell from 66 s to 54 s once it stopped sampling.
+
+> Lesson: when a gate is flaky, suspect the system before the gate. The noise you are about to
+> tolerate is behaviour a user will hit.
+
 ### Model tiering is only real if the provider can switch models
 
 `app.understand.model` existed in the config for about an hour before it turned out

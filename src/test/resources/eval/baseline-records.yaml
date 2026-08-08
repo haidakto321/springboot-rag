@@ -1,0 +1,48 @@
+corpus:
+  seed: 42
+  records: 210
+questions:
+- invoices for ACME Corp
+- unpaid invoices for GLOBEX Ltd
+- invoices issued in the second quarter of 2026
+- invoices over 5000
+- invoices that are open or overdue
+- delivery notes shipped by Speedy Freight
+- what delivery notes do we have
+- contracts with Initech
+- contracts longer than 12 months
+- anything mentioning late payment
+- what is in the corpus
+- invoices for ACEM Corp
+- overdue invoices for Umbrella SA in February 2026
+- invoices where the minimum extraction confidence is at least 0.7
+- shipments carried by NordCargo weighing more than 20 kg
+extraction:
+  conditionPrecision: 0.813
+  conditionRecall: 0.867
+  docTypeAccuracy: 1.0
+  noFilterCorrect: 1
+retrieval:
+  with-extraction:
+    recall5: 1.0
+    mrr: 1.0
+    hit1: 1.0
+  without-extraction:
+    recall5: 0.636
+    mrr: 0.53
+    hit1: 0.455
+filtered:
+- invoices for ACME Corp
+- unpaid invoices for GLOBEX Ltd
+- invoices issued in the second quarter of 2026
+- invoices over 5000
+- invoices that are open or overdue
+- delivery notes shipped by Speedy Freight
+- what delivery notes do we have
+- contracts with Initech
+- contracts longer than 12 months
+- anything mentioning late payment
+- invoices for ACEM Corp
+- overdue invoices for Umbrella SA in February 2026
+- invoices where the minimum extraction confidence is at least 0.7
+- shipments carried by NordCargo weighing more than 20 kg

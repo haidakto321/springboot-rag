@@ -36,7 +36,9 @@ Contents:
 | Prompt-injection defence (fence + cite-or-refuse) | done | `PromptFence`, `AnswerGuard` |
 | Per-request trace + debug view | done | `rag_trace`, `TraceRecorder` |
 | Human relevance labels (eval only) | done | `chunk_feedback`, `POST /feedback` |
-| Retrieval eval + regression gate | done | `WikiRetrievalEvalTest`, `baseline-wiki.yaml` |
+| Retrieval eval + regression gate (private wiki corpus) | done | `WikiRetrievalEvalTest`, `baseline-wiki.yaml` |
+| Query understanding (question -> metadata filter) | done, measured | `QueryUnderstanding`, `FacetCatalogue` |
+| Query-understanding eval + gate (runs on a fresh clone) | done | `RecordFilterEvalTest`, `baseline-records.yaml` |
 | Incremental re-sync / delete propagation | **missing** | see `RAG-MASTERY.md` section 7 |
 | Metrics, alerting, aggregate latency view | **missing** | see `RAG-MASTERY.md` section 6 |
 
@@ -413,7 +415,7 @@ in tests that replay questions against the corpus.
 | recall@5, MRR, hit@1 (real corpus) | `WikiRetrievalEvalTest` (`-Dgroups=eval-wiki`) | live `docmaster` project, `golden-wiki.yaml` | **yes** - fails on a >0.02 drop vs `baseline-wiki.yaml` |
 | Faithfulness (LLM judge) | `FaithfulnessEvalTest` (`-Dgroups=eval-judge`) | generated answers | report |
 | precision@5/@10, MRR of first 👍 | `FeedbackPrecisionEvalTest` (`-Dgroups=eval-feedback`) | human labels in `chunk_feedback` | report |
-| Extraction precision/recall, docType accuracy, widen rate, recall@5/MRR with vs without | `RecordFilterEvalTest` (`-Dgroups=eval-records`) | committed synthetic corpus (`RecordCorpus.generate(42)`) + `records-golden.yaml` | report |
+| Extraction precision/recall, docType accuracy, widen rate, recall@5/MRR with vs without | `RecordFilterEvalTest` (`-Dgroups=eval-records`) | committed synthetic corpus (`RecordCorpus.generate(42)`) + `records-golden.yaml` | **yes** - fails on a >0.05 drop vs `baseline-records.yaml`, or on a lost filter / new over-extraction |
 | Per-request latency and tokens | `rag_trace`, written live | every answer | none (no alerting) |
 
 The metrics that DO exist per request are latency per stage and token counts, in the trace.
