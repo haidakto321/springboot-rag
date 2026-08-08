@@ -883,6 +883,34 @@ function renderThread() {
         const bubble = document.createElement('div');
         bubble.className = 'bubble';
 
+        // Route and applied filter sit above everything: why an answer has no citations, or why it
+        // found less than expected, is a property of the request, not a footnote to the answer.
+        if (m.role === 'assistant' && (m.filter || m.widened || (m.route && m.route !== 'search'))) {
+            const meta = document.createElement('div');
+            meta.className = 'meta-chips';
+            if (m.route && m.route !== 'search') {
+                const chip = document.createElement('span');
+                chip.className = 'meta-chip';
+                chip.textContent = m.route === 'aggregate' ? 'counted' : 'no search needed';
+                chip.title = 'Route: ' + m.route;
+                meta.appendChild(chip);
+            }
+            if (m.filter) {
+                const chip = document.createElement('span');
+                chip.className = 'meta-chip';
+                chip.textContent = 'filtered: ' + describeFilter(m.filter);
+                chip.title = JSON.stringify(m.filter);
+                meta.appendChild(chip);
+            }
+            if (m.widened) {
+                const chip = document.createElement('span');
+                chip.className = 'meta-chip meta-chip-warn';
+                chip.textContent = 'filter matched nothing - searched everything';
+                meta.appendChild(chip);
+            }
+            bubble.appendChild(meta);
+        }
+
         // Assistant reasoning (if any) sits above the answer, collapsed behind a toggle.
         if (m.role === 'assistant' && m.reasoning) {
             bubble.appendChild(buildThoughts(m.reasoning, false));
@@ -1066,6 +1094,15 @@ $('#chat-form').addEventListener('submit', async (e) => {
                     assistant.sources = frame.sources;
                 } else if (frame.type === 'trace') {
                     assistant.requestId = frame.requestId;
+                } else if (frame.type === 'route') {
+                    // Arrives first. An answer with no citations is normal on the chitchat and
+                    // aggregate routes, and alarming on the search one.
+                    assistant.route = frame.route;
+                } else if (frame.type === 'filter') {
+                    // Also before the first token: a narrowed search has to be visible while the
+                    // answer is being read, not discovered afterwards in the trace panel.
+                    assistant.filter = frame.applied || null;
+                    assistant.widened = !!frame.widened;
                 } else if (frame.type === 'guard') {
                     // Tokens are already rendered; the server can only tell us they were not grounded.
                     assistant.guard = frame.reason;
@@ -1092,6 +1129,25 @@ $('#chat-form').addEventListener('submit', async (e) => {
         }
     }
 });
+
+// "invoice · values.customer = ACME Corp" - the applied filter in one short line.
+function describeFilter(applied) {
+    const parts = [];
+    if (applied.docType) parts.push(applied.docType);
+    for (const f of applied.filters || []) {
+        if (f.op === 'eq') parts.push(`${f.path} = ${f.value}`);
+        else if (f.op === 'in') parts.push(`${f.path} in [${(f.values || []).join(', ')}]`);
+        else if (f.op === 'exists') parts.push(`${f.path} present`);
+        else {
+            const bounds = ['gte', 'gt', 'lte', 'lt']
+                .filter((k) => f[k] !== undefined && f[k] !== null)
+                .map((k) => `${k} ${f[k]}`)
+                .join(' ');
+            parts.push(`${f.path} ${bounds}`);
+        }
+    }
+    return parts.join(' · ');
+}
 
 // Toggle an inline <pre> with the cited chunk content under the chips.
 function toggleSource(chip, source) {

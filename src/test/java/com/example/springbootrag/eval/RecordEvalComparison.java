@@ -50,6 +50,34 @@ public final class RecordEvalComparison {
                             + "baseline had %d", got.noFilterCorrect(), want.noFilterCorrect())));
         }
 
+        // Routing is gated with NO tolerance. A misroute is not a slightly worse answer, it is the
+        // wrong SHAPE of answer: a counting question answered with prose, or a document question
+        // answered with a number.
+        if (actual.routing().routeAccuracy() < expected.routing().routeAccuracy()) {
+            violations.add(new Violation("routing", String.format(Locale.ROOT,
+                    "route accuracy %.3f is below the baseline %.3f",
+                    actual.routing().routeAccuracy(), expected.routing().routeAccuracy())));
+        }
+        if (actual.routing().aggregateCountCorrect() < expected.routing().aggregateCountCorrect()) {
+            violations.add(new Violation("routing", String.format(Locale.ROOT,
+                    "aggregate count correct for %d questions, baseline had %d",
+                    actual.routing().aggregateCountCorrect(),
+                    expected.routing().aggregateCountCorrect())));
+        }
+        // Per question, because an aggregate question demoted to search still answers - just with
+        // ten chunks and no number - and the aggregate accuracy alone can absorb one of those.
+        for (int i = 0; i < expected.questions().size() && i < expected.routes().size(); i++) {
+            String question = expected.questions().get(i);
+            int at = actual.questions().indexOf(question);
+            if (at < 0 || at >= actual.routes().size()) continue;
+            String was = expected.routes().get(i);
+            String now = actual.routes().get(at);
+            if (!was.equals(now)) {
+                violations.add(new Violation("routing", String.format(Locale.ROOT,
+                        "route changed for \"%s\": %s -> %s", question, was, now)));
+            }
+        }
+
         for (String key : expected.retrieval().keySet()) {
             BackendMetrics wantMetrics = expected.retrieval().get(key);
             BackendMetrics gotMetrics = actual.retrieval().get(key);

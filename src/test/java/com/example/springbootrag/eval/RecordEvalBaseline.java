@@ -20,6 +20,9 @@ import java.util.Map;
  * @param retrieval         "with-extraction" and "without-extraction" to their retrieval metrics
  * @param filtered          questions for which extraction produced a non-empty filter, so losing
  *                          one is caught even when the aggregate barely moves
+ * @param routes            the route each question took, in the same order as {@code questions},
+ *                          so a single silently demoted aggregate question is caught
+ * @param routing           route accuracy and aggregate-count correctness
  */
 public record RecordEvalBaseline(
         long corpusSeed,
@@ -27,7 +30,27 @@ public record RecordEvalBaseline(
         List<String> questions,
         Extraction extraction,
         Map<String, BackendMetrics> retrieval,
-        List<String> filtered) {
+        List<String> filtered,
+        List<String> routes,
+        Routing routing) {
+
+    /** A baseline written before routing existed: nothing to compare, nothing to gate. */
+    public RecordEvalBaseline(long corpusSeed, int corpusSize, List<String> questions,
+                              Extraction extraction, Map<String, BackendMetrics> retrieval,
+                              List<String> filtered) {
+        this(corpusSeed, corpusSize, questions, extraction, retrieval, filtered, List.of(),
+                new Routing(0.0, 0));
+    }
+
+    /**
+     * How well questions were routed.
+     *
+     * @param routeAccuracy         share of golden questions routed as the golden set expects
+     * @param aggregateCountCorrect of the aggregate questions, how many produced the count ground
+     *                              truth says is right. A count, not a ratio: there are four of
+     *                              them and a ratio hides which one broke
+     */
+    public record Routing(double routeAccuracy, int aggregateCountCorrect) {}
 
     /**
      * How well questions became filters.

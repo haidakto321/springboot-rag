@@ -8,63 +8,76 @@
 # the stored metadata (values.packages.weightKg, not values.packages[].weightKg).
 
 - question: "invoices for ACME Corp"
+  expectedRoute: search
   expectedDocType: invoice
   expectedFilters:
     - {path: values.customer, op: eq, value: "ACME Corp"}
 
 - question: "unpaid invoices for GLOBEX Ltd"
+  expectedRoute: search
   expectedDocType: invoice
   expectedFilters:
     - {path: values.customer, op: eq, value: "GLOBEX Ltd"}
     - {path: values.status, op: eq, value: overdue}
 
 - question: "invoices issued in the second quarter of 2026"
+  expectedRoute: search
   expectedDocType: invoice
   expectedFilters:
     - {path: values.issueDate, op: range, gte: "2026-04-01", lt: "2026-07-01"}
 
 - question: "invoices over 5000"
+  expectedRoute: search
   expectedDocType: invoice
   expectedFilters:
     - {path: values.total, op: range, gt: 5000}
 
 - question: "invoices that are open or overdue"
+  expectedRoute: search
   expectedDocType: invoice
   expectedFilters:
     - {path: values.status, op: in, values: [open, overdue]}
 
 - question: "delivery notes shipped by Speedy Freight"
+  expectedRoute: search
   expectedDocType: delivery-note
   expectedFilters:
     - {path: values.carrier, op: eq, value: "Speedy Freight"}
 
 - question: "what delivery notes do we have"
+  expectedRoute: search
   expectedDocType: delivery-note
   expectedFilters: []
 
 - question: "contracts with Initech"
+  expectedRoute: search
   expectedDocType: contract
   expectedFilters:
     - {path: values.party, op: eq, value: Initech}
 
 - question: "contracts longer than 12 months"
+  expectedRoute: search
   expectedDocType: contract
   expectedFilters:
     - {path: values.termMonths, op: range, gt: 12}
 
 - question: "anything mentioning late payment"
+  expectedRoute: search
   expectNoFilter: true
 
 - question: "what is in the corpus"
+  expectedRoute: search
   expectNoFilter: true
 
 - question: "invoices for ACEM Corp"
+  expectedRoute: search
   expectedDocType: invoice
   expectWiden: true
 
 # February, not a prettier month: it is the only one where this three-way conjunction actually
 # has a record in the generated corpus (INV-0045). A golden entry matching nothing measures nothing.
 - question: "overdue invoices for Umbrella SA in February 2026"
+  expectedRoute: search
   expectedDocType: invoice
   expectedFilters:
     - {path: values.customer, op: eq, value: "Umbrella SA"}
@@ -76,12 +89,51 @@
 # 0.8 and the golden saying 0.7 are equally defensible and the entry measures taste, not mechanism.
 # Choosing WHICH aggregate (conf.min over conf.avg) is still the model's job and still scored.
 - question: "invoices where the minimum extraction confidence is at least 0.7"
+  expectedRoute: search
   expectedDocType: invoice
   expectedFilters:
     - {path: conf.min, op: range, gte: 0.7}
 
 - question: "shipments carried by NordCargo weighing more than 20 kg"
+  expectedRoute: search
   expectedDocType: delivery-note
   expectedFilters:
     - {path: values.carrier, op: eq, value: NordCargo}
     - {path: values.packages.weightKg, op: range, gt: 20}
+
+# ---- Routing (2026-08-08) ----
+# Two questions that must never reach retrieval, and four that must be answered by counting.
+# The counts are NOT written here: RecordGroundTruth derives them from RecordCorpus.generate(42),
+# so a regenerated corpus updates them instead of silently making this file lie.
+
+- question: "hi"
+  expectedRoute: chitchat
+  expectNoFilter: true
+
+# Rules only catch fixed greetings, so this one has to be routed by the model.
+- question: "what can you do"
+  expectedRoute: chitchat
+  expectNoFilter: true
+
+- question: "how many invoices for ACME Corp"
+  expectedRoute: aggregate
+  expectedDocType: invoice
+  expectedFilters:
+    - {path: values.customer, op: eq, value: "ACME Corp"}
+
+- question: "how many overdue invoices are there"
+  expectedRoute: aggregate
+  expectedDocType: invoice
+  expectedFilters:
+    - {path: values.status, op: eq, value: overdue}
+
+- question: "how many delivery notes are there"
+  expectedRoute: aggregate
+  expectedDocType: delivery-note
+  expectedFilters: []
+
+- question: "how many contracts with Initech"
+  expectedRoute: aggregate
+  expectedDocType: contract
+  expectedFilters:
+    - {path: values.party, op: eq, value: Initech}

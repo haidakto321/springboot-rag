@@ -9,7 +9,10 @@ import com.example.springbootrag.security.SearchContext;
 import com.example.springbootrag.web.dto.AskResponse;
 import com.example.springbootrag.security.TestContexts;
 import com.example.springbootrag.trace.NoopTraceRecorder;
+import com.example.springbootrag.repository.RecordCountRepository;
+import com.example.springbootrag.understand.QueryRouter;
 import com.example.springbootrag.understand.QueryUnderstanding;
+import com.example.springbootrag.understand.Route;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 
@@ -64,13 +67,19 @@ class ChatServiceTest {
     private final FakeChat chat = new FakeChat();
     private final ChatProperties props = new ChatProperties();
     private final QueryUnderstanding understanding = mock(QueryUnderstanding.class);
+    private final QueryRouter router = mock(QueryRouter.class);
+    private final RecordCountRepository counts = mock(RecordCountRepository.class);
     private final ChatService service =
-            new ChatService(searchService, chat, props, NoopTraceRecorder.create(), understanding);
+            new ChatService(searchService, chat, props, NoopTraceRecorder.create(), understanding,
+                    router, counts);
 
     @BeforeEach
     void extractionFindsNothingByDefault() {
         when(understanding.extract(any(), anyList(), anyString()))
                 .thenReturn(QueryUnderstanding.Extraction.none());
+        // Every pre-existing test describes the search path, which is what an unrouted question
+        // has always done.
+        when(router.route(anyString())).thenReturn(QueryRouter.Decision.rule(Route.SEARCH));
     }
 
     @Test
@@ -252,6 +261,84 @@ class ChatServiceTest {
                 t -> {}, r -> {});
 
         verify(understanding, never()).extract(any(), anyList(), anyString());
+    }
+
+    @Test
+    void theRouteFrameArrivesBeforeTheFilterFrameAndBeforeAnyToken() {
+        when(searchService.searchTraced(any(SearchContext.class), anyString(), anyString(), anyInt(),
+                anyList(), any(), any(MetadataFilter.class)))
+                .thenReturn(new SearchService.TracedSearch(
+                        List.of(new SearchHit(1, "d", 0, "c", null, null, 0.5, null)),
+                        Map.of("retrieve", 2L)));
+        List<String> order = new java.util.ArrayList<>();
+
+        service.chatStream(TestContexts.PUBLIC, List.of(new ChatMessage("user", "what is up")),
+                List.of(), List.of(), false,
+                MetadataFilter.parse("""
+                        {"filters":[{"path":"values.customer","op":"eq","value":"GLOBEX Ltd"}]}"""),
+                route -> order.add("route:" + route),
+                f -> order.add("filter"),
+                t -> order.add("token"),
+                r -> {});
+
+        assertThat(order).isNotEmpty();
+        assertThat(order.get(0)).isEqualTo("route:search");
+        assertThat(order.indexOf("filter")).isLessThan(order.indexOf("token"));
+    }
+
+    @Test
+    void chitchatStreamsTheCannedReplyAndRetrievesNothing() {
+        when(router.route(anyString())).thenReturn(QueryRouter.Decision.rule(Route.CHITCHAT));
+        StringBuilder out = new StringBuilder();
+
+        ChatService.StreamOutcome outcome = service.chatStream(TestContexts.PUBLIC,
+                List.of(new ChatMessage("user", "hi")), List.of(), List.of(), false,
+                MetadataFilter.none(), route -> {}, f -> {}, out::append, r -> {});
+
+        assertThat(outcome.route()).isEqualTo("chitchat");
+        assertThat(outcome.sources()).isEmpty();
+        assertThat(out.toString()).isEqualTo(AggregateAnswerer.CHITCHAT_REPLY);
+        org.mockito.Mockito.verifyNoInteractions(searchService);
+        verify(understanding, never()).extract(any(), anyList(), anyString());
+    }
+
+    @Test
+    void anAggregateQuestionIsAnsweredFromACountWithoutRetrieving() {
+        when(router.route(anyString())).thenReturn(QueryRouter.Decision.rule(Route.AGGREGATE));
+        when(understanding.extract(any(), anyList(), anyString())).thenReturn(
+                new QueryUnderstanding.Extraction(MetadataFilter.parse("""
+                        {"docType":"invoice"}"""), 5L, List.of()));
+        when(counts.count(any(SearchContext.class), anyList(), any(MetadataFilter.class)))
+                .thenReturn(7L);
+        StringBuilder out = new StringBuilder();
+
+        ChatService.StreamOutcome outcome = service.chatStream(TestContexts.PUBLIC,
+                List.of(new ChatMessage("user", "how many invoices are there")), List.of(),
+                List.of(), false, MetadataFilter.none(), route -> {}, f -> {}, out::append, r -> {});
+
+        assertThat(outcome.route()).isEqualTo("aggregate");
+        assertThat(out.toString()).isEqualTo("7 invoice records match.");
+        org.mockito.Mockito.verifyNoInteractions(searchService);
+    }
+
+    @Test
+    void aFailingCountFallsBackToTheSearchPathRatherThanLosingTheAnswer() {
+        when(router.route(anyString())).thenReturn(QueryRouter.Decision.rule(Route.AGGREGATE));
+        when(counts.count(any(SearchContext.class), anyList(), any(MetadataFilter.class)))
+                .thenThrow(new IllegalStateException("column does not exist"));
+        when(searchService.searchTraced(any(SearchContext.class), anyString(), anyString(), anyInt(),
+                anyList(), any(), any(MetadataFilter.class)))
+                .thenReturn(new SearchService.TracedSearch(
+                        List.of(new SearchHit(1, "d", 0, "c", null, null, 0.5, null)),
+                        Map.of("retrieve", 2L)));
+        StringBuilder out = new StringBuilder();
+
+        ChatService.StreamOutcome outcome = service.chatStream(TestContexts.PUBLIC,
+                List.of(new ChatMessage("user", "how many invoices are there")), List.of(),
+                List.of(), false, MetadataFilter.none(), route -> {}, f -> {}, out::append, r -> {});
+
+        assertThat(outcome.route()).isEqualTo("search");
+        assertThat(out.toString()).isEqualTo("Hello there");
     }
 
     @Test

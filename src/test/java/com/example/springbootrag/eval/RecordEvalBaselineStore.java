@@ -80,6 +80,12 @@ public final class RecordEvalBaselineStore {
         });
         root.put("retrieval", retrieval);
         root.put("filtered", List.copyOf(b.filtered()));
+        root.put("routes", List.copyOf(b.routes()));
+
+        Map<String, Object> routing = new LinkedHashMap<>();
+        routing.put("routeAccuracy", round3(b.routing().routeAccuracy()));
+        routing.put("aggregateCountCorrect", b.routing().aggregateCountCorrect());
+        root.put("routing", routing);
         return root;
     }
 
@@ -103,6 +109,15 @@ public final class RecordEvalBaselineStore {
                     ((Number) row.get("hit1")).doubleValue()));
         });
 
+        // A baseline written before routing existed still loads: absent blocks mean "nothing to
+        // gate here yet", which reports rather than failing a run for a file-format reason.
+        Map<String, Object> routing = (Map<String, Object>) root.get("routing");
+        RecordEvalBaseline.Routing parsedRouting = routing == null
+                ? new RecordEvalBaseline.Routing(0.0, 0)
+                : new RecordEvalBaseline.Routing(
+                        ((Number) routing.getOrDefault("routeAccuracy", 0)).doubleValue(),
+                        ((Number) routing.getOrDefault("aggregateCountCorrect", 0)).intValue());
+
         return new RecordEvalBaseline(
                 ((Number) corpus.get("seed")).longValue(),
                 ((Number) corpus.get("records")).intValue(),
@@ -113,7 +128,9 @@ public final class RecordEvalBaselineStore {
                         ((Number) extraction.get("docTypeAccuracy")).doubleValue(),
                         ((Number) extraction.get("noFilterCorrect")).intValue()),
                 retrieval,
-                (List<String>) root.getOrDefault("filtered", List.of()));
+                (List<String>) root.getOrDefault("filtered", List.of()),
+                (List<String>) root.getOrDefault("routes", List.of()),
+                parsedRouting);
     }
 
     /** Keeps the committed file readable at the 3 decimals the report prints. */

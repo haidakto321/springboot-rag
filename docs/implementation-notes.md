@@ -1382,3 +1382,153 @@ hopeful, and it is there for genuine drift (a model upgrade, a prompt edit), not
 Numbers quoted anywhere in the docs are the deterministic ones. An earlier draft of this file said
 condition recall reached 0.93; that was a sampled run and is superseded - exactly the trap the
 determinism work exists to close.
+
+---
+
+## 2026-08-08 - Query routing and the cheapest correct path
+
+Spec `docs/superpowers/specs/2026-08-08-query-routing-design.md`, plan
+`docs/superpowers/plans/2026-08-08-query-routing.md`, executed inline. Three routes on the answer
+path: chit-chat answers from a fixed string, aggregate answers a count from SQL, search is
+unchanged. Aimed at `RAG-MASTERY.md` row 4 (stuck at 2 because "routing does not exist") and row 8
+(no latency lever ever pulled).
+
+### Decisions taken while planning, not in the spec
+
+- **`QueryRouter.route(String question)`** takes only the question. The spec sketched
+  `(SearchContext, projectIds, question)`; routing needs neither, and an unused parameter reads to
+  the next person as if it mattered.
+- **No `route_latency_ms` column.** `rag_trace.stage_latency_ms` is JSONB whose own javadoc says a
+  new stage needs no migration, so route latency goes in there under `route`. Only `route` itself
+  became a column, because that is the field rows get filtered by.
+- **`ChatService` gained a fifth overload** rather than a `Signals` refactor. The file already
+  delegates down a chain of overloads and `ChatServiceTest` is 14 KB; collapsing them is unrelated
+  churn. Debt, noted: if a sixth is ever needed, collapse them all.
+
+### Rules decide chit-chat only, never aggregate
+
+A `how many` keyword cannot separate "how many invoices do we have" (a count) from "how many days
+do I have to pay an invoice" (a payment-terms clause). A misroute produces the wrong SHAPE of
+answer, so the fuzzy half stays with the model. The free half - blank input and a fixed greeting
+list, matched whole-string so "thanks for the invoice policy" is not a greeting - stays free.
+
+### The bug the unit tests could not see, again
+
+The design said: run the router with `think:false` and a small `num_predict`, and read the label
+with a keyword scan. Fifteen unit tests passed on that design. A one-minute probe against the real
+qwen3:4b killed it:
+
+```
+[3997 ms] 'how many invoices for ACME Corp' -> 'We are given the user's message: "how many
+          invoices for ACME Corp"\n\nWe need to classify it into exactly one route: chitchat,
+          aggregate'
+```
+
+With `think:false` the model reasons **in `content`** (`LEARNINGS.md` §12 again), and the 32-token
+cap ran out before it ever chose. Worse, the truncated text contains the option list, so a
+first-keyword-wins scan would have routed nearly every question to **chitchat** - the route that
+answers nothing. Confidently wrong on every question, with a green suite.
+
+**Fix, measured rather than argued.** Three variants against the live model, 8 probe questions:
+
+| Variant | Accuracy | Mean latency |
+|---|---|---|
+| `think:false`, no schema, cap 32 | unusable - never answered | ~4 s |
+| `think:false` + JSON schema, cap 16 | **8/8** | **3.4 s** |
+| `think:true` + JSON schema | 8/8 | 44 s (one question 206 s) |
+
+So `ChatProvider.Options` gained a nullable `responseSchema`, forwarded as Ollama's `format`, and
+the router constrains the reply to `{"route":"<enum>"}`. `think:true` is correct but costs more
+than the extraction call routing exists to skip.
+
+`Route.parse` also changed: a reply naming **more than one** route is now unreadable rather than
+resolved by position, and unreadable means SEARCH. Ambiguity resolves to today's behaviour instead
+of to a confident guess.
+
+> Lesson, third time in this repo: the prompt is an interface, and the only test of it that counts
+> runs against the real model. Unit tests pin what you decided; they cannot tell you the model
+> ignores it.
+
+### Aggregate route
+
+`RecordCountRepository` reuses `DocFilter.groupClause` and `FilterSql.render` - one copy of the
+access-control predicate, not two - and counts `DISTINCT doc_id`, because one record renders to
+several chunks. The sentence is built in code by `AggregateAnswerer`: a model asked to count from
+retrieved context is guessing from a sample, and a model handed the right number is a chance to
+change it.
+
+**Aggregate never widens.** Zero is frequently the true answer to a count, and widen-on-empty would
+replace a correct 0 with a number nobody asked for. Instead the applied filter is printed beside
+the count, so `0 invoice records match where values.customer = ACEM Corp` shows the typo. A failing
+count falls through to the search path rather than surfacing an error.
+
+### Visibility
+
+`route` NDJSON frame before the `filter` frame and before any token; `rag_trace.route`; chips above
+each answer in the chat UI. The chip work also fixed the `filter` frame, which had been emitted
+since 2026-08-07 and silently dropped - `app.js` handled `reasoning`, `token`, `sources`, `trace`,
+`guard`, `error` and nothing else, so every "I narrowed your search" notice went nowhere.
+
+### Measured result (2026-08-08)
+
+Baseline run over the 21-question golden set, quiet machine, `qwen3:4b`, fake embeddings:
+
+```
+route accuracy        1.00   (21/21)
+aggregate counts      4/4 exactly right
+router p50            1,437 ms
+extraction p50        52,613 ms
+condition precision   0.89   condition recall 0.89   docType 1.00
+no-filter questions   4/4 correctly left unfiltered
+recall@5   with extraction 1.00   without 0.57
+```
+
+The ratio is the point: **1.4 s to decide whether to spend 52 s.**
+
+**Prompt tuning with a control.** v1 scored 20/21 - "delivery notes shipped by Speedy Freight" is a
+bare noun phrase and the model called it small talk. v2 added a bare-phrase rule and one
+noun-phrase example: 21/21. Because that is tuning against the eval, nine held-out questions (none
+in the golden file) were run against both: 9/9 either way, so the change closed a real gap rather
+than memorising one question. `QueryRouterPromptTest` fails if an example ever copies a golden
+question verbatim.
+
+**Unexplained-but-better:** "anything mentioning late payment" and "invoices for ACEM Corp" both
+stopped producing a filter, moving `noFilterCorrect` from 1-of-2 to 4-of-4, with no change to any
+extraction code. Both are improvements, but nothing here caused them.
+
+Two consecutive runs then matched exactly on every metric and the second passed the gate, so the
+2026-08-07 determinism claim holds *within a machine state* and drifted *across weeks*. Recorded
+rather than smoothed over - and it is the argument for a tolerance-based gate over an equality
+check.
+
+**Housekeeping finding worth more than it sounds.** Mid-session Ollama took **256 s for a 10-token
+reply**. Cause: four orphaned JVMs and six orphaned containers left by killed eval runs, taking the
+box to 2.9 GB free with 1.5 GB in memory compression. After cleanup: 3.5 s. A 70x latency swing
+from process hygiene - any latency number quoted without the machine state is noise.
+
+**Process note.** Killing a 30-minute eval to iterate on the prompt with a 90-second standalone
+probe (21 questions straight at Ollama, no Spring, no containers) was worth far more than the run
+it interrupted. Build the cheap loop first; spend the expensive one on the baseline.
+
+### The live smoke found what a 21/21 eval could not (2026-08-08)
+
+With the gate green and every metric at its best value, a manual smoke against the running app
+asked *"what is the total on invoice INV-5575"* and got:
+
+```
+route=aggregate | sources=0 | 1 invoice record matches where values.invoiceNumber = 5575.
+```
+
+A factual lookup answered with a record count. No golden question distinguished "count the records"
+from "read a value out of a record", so a perfect score on the eval said nothing about that whole
+category. Six probes written for it scored 3/6; a prompt rule separating record counts from values
+stored inside documents took it to 5/6 while golden stayed 21/21 and held-out stayed 9/9. The same
+live question now answers `The total on invoice INV-5575 is 1899.5 [1]`.
+
+Accepted limitation, documented in `QueryRouter`: "how many packages are on delivery note DN-9001"
+still routes to aggregate. It counts things inside a single document - neither a record count nor a
+lookup.
+
+Also worth noting for the next person: `spring-boot:run` in the background survives killing the
+Maven wrapper. A re-smoke that "shows the fix did not work" may simply be talking to the old JVM
+still holding the port - check `netstat -ano | grep :PORT` before believing the result.

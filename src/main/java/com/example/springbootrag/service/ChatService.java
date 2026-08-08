@@ -6,12 +6,15 @@ import com.example.springbootrag.config.ChatProperties;
 import com.example.springbootrag.guard.AnswerGuard;
 import com.example.springbootrag.model.SearchHit;
 import com.example.springbootrag.repository.MetadataFilter;
+import com.example.springbootrag.repository.RecordCountRepository;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import com.example.springbootrag.security.SearchContext;
 import com.example.springbootrag.trace.TraceRecorder;
 import com.example.springbootrag.understand.FilterJson;
+import com.example.springbootrag.understand.QueryRouter;
 import com.example.springbootrag.understand.QueryUnderstanding;
+import com.example.springbootrag.understand.Route;
 import com.example.springbootrag.web.dto.AskResponse;
 import org.springframework.stereotype.Service;
 
@@ -45,14 +48,19 @@ public class ChatService {
     private final ChatProperties props;
     private final TraceRecorder tracer;
     private final QueryUnderstanding understanding;
+    private final QueryRouter router;
+    private final RecordCountRepository counts;
 
     public ChatService(SearchService searchService, ChatProvider chat, ChatProperties props,
-                       TraceRecorder tracer, QueryUnderstanding understanding) {
+                       TraceRecorder tracer, QueryUnderstanding understanding,
+                       QueryRouter router, RecordCountRepository counts) {
         this.searchService = searchService;
         this.chat = chat;
         this.props = props;
         this.tracer = tracer;
         this.understanding = understanding;
+        this.router = router;
+        this.counts = counts;
     }
 
     /**
@@ -72,12 +80,19 @@ public class ChatService {
      * whole answer to guard it first would trade away the reason streaming exists.
      */
     public record StreamOutcome(List<AskResponse.Source> sources, AnswerGuard.Verdict verdict,
-                                java.util.UUID requestId, Object appliedFilter, boolean widened) {
+                                java.util.UUID requestId, Object appliedFilter, boolean widened,
+                                String route) {
 
         /** A turn that did no filtering. */
         public StreamOutcome(List<AskResponse.Source> sources, AnswerGuard.Verdict verdict,
                              java.util.UUID requestId) {
-            this(sources, verdict, requestId, null, false);
+            this(sources, verdict, requestId, null, false, "search");
+        }
+
+        /** Pre-routing callers: the search route, which is the only one they ever took. */
+        public StreamOutcome(List<AskResponse.Source> sources, AnswerGuard.Verdict verdict,
+                             java.util.UUID requestId, Object appliedFilter, boolean widened) {
+            this(sources, verdict, requestId, appliedFilter, widened, "search");
         }
     }
 
@@ -131,6 +146,27 @@ public class ChatService {
                                     Consumer<Map<String, Object>> onFilter,
                                     Consumer<String> onToken,
                                     Consumer<String> onReasoning) {
+        return chatStream(ctx, history, projectIds, docIds, think, filter, r -> {}, onFilter,
+                onToken, onReasoning);
+    }
+
+    /**
+     * Same, reporting which route is answering.
+     *
+     * <p>{@code onRoute} fires before everything else, because an answer with no citations is
+     * normal on the chit-chat and aggregate routes and alarming on the search one. The client has
+     * to know which it is looking at while the answer arrives, not afterwards.
+     */
+    public StreamOutcome chatStream(SearchContext ctx,
+                                    List<ChatMessage> history,
+                                    List<Long> projectIds,
+                                    List<String> docIds,
+                                    boolean think,
+                                    MetadataFilter filter,
+                                    Consumer<String> onRoute,
+                                    Consumer<Map<String, Object>> onFilter,
+                                    Consumer<String> onToken,
+                                    Consumer<String> onReasoning) {
         java.util.UUID requestId = java.util.UUID.randomUUID();
         long start = System.nanoTime();
         if (history == null || history.isEmpty()) {
@@ -145,6 +181,32 @@ public class ChatService {
             throw new IllegalArgumentException("last message must be a non-empty user turn");
         }
 
+        List<Long> pScope = projectIds == null ? List.of() : projectIds;
+        List<String> dScope = docIds == null ? List.of() : docIds;
+
+        // Route before condensing: condensation is itself an LLM call, and a greeting should not
+        // pay for one. An explicit caller filter is already a structured request and stays on the
+        // search path.
+        boolean callerSuppliedFilter = filter != null && !filter.isEmpty();
+        QueryRouter.Decision decision = callerSuppliedFilter
+                ? QueryRouter.Decision.rule(Route.SEARCH)
+                : router.route(last.content());
+        String route = decision.route().label();
+        onRoute.accept(route);
+
+        if (decision.route() == Route.CHITCHAT) {
+            onToken.accept(AggregateAnswerer.CHITCHAT_REPLY);
+            Map<String, Long> chitStages = new LinkedHashMap<>();
+            chitStages.put("route", decision.latencyMs());
+            chitStages.put("total", msSince(start));
+            tracer.record(requestId, ctx, pScope, last.content(), null, "none", List.of(),
+                    chitStages, null, null, AggregateAnswerer.CHITCHAT_REPLY, null, null, false,
+                    route);
+            return new StreamOutcome(List.of(),
+                    new AnswerGuard.Verdict(true, "chitchat", AggregateAnswerer.CHITCHAT_REPLY),
+                    requestId, null, false, route);
+        }
+
         // On follow-up turns, retrieve using a standalone query condensed from the conversation;
         // the first turn's question is already standalone.
         String retrievalQuery = last.content();
@@ -153,16 +215,43 @@ public class ChatService {
             retrievalQuery = condenseQuery(prior, last.content());
         }
 
-        List<Long> pScope = projectIds == null ? List.of() : projectIds;
-        List<String> dScope = docIds == null ? List.of() : docIds;
-
         // Extraction reads the RAW question; condensation is for retrieval wording, and it can
         // drop the entity the filter needs.
-        boolean callerSuppliedFilter = filter != null && !filter.isEmpty();
         QueryUnderstanding.Extraction extraction = callerSuppliedFilter
                 ? QueryUnderstanding.Extraction.none()
                 : understanding.extract(ctx, pScope, last.content());
         MetadataFilter effective = callerSuppliedFilter ? filter : extraction.filter();
+
+        if (decision.route() == Route.AGGREGATE) {
+            try {
+                // No widening: zero is a correct count, and retrying unfiltered would answer a
+                // different question than the one that was asked.
+                long n = counts.count(ctx, pScope, effective);
+                String countAnswer = AggregateAnswerer.answer(n, effective);
+                Object countFilter = FilterJson.toApiShape(effective);
+                if (countFilter != null) {
+                    Map<String, Object> frame = new LinkedHashMap<>();
+                    frame.put("applied", countFilter);
+                    frame.put("widened", false);
+                    onFilter.accept(frame);
+                }
+                onToken.accept(countAnswer);
+                Map<String, Long> countStages = new LinkedHashMap<>();
+                countStages.put("route", decision.latencyMs());
+                countStages.put("understand", extraction.latencyMs());
+                countStages.put("total", msSince(start));
+                tracer.record(requestId, ctx, pScope, last.content(), null, "count", List.of(),
+                        countStages, null, null, countAnswer, null,
+                        FilterJson.toApiString(effective), false, route);
+                return new StreamOutcome(List.of(),
+                        new AnswerGuard.Verdict(true, "count", countAnswer), requestId,
+                        countFilter, false, route);
+            } catch (RuntimeException e) {
+                // A broken count must not lose the answer: fall through to normal retrieval.
+                log.warn("count failed; falling back to the search path", e);
+                route = Route.SEARCH.label();
+            }
+        }
 
         // Retrieval runs on the condensed query, narrowed by whichever filter won.
         SearchService.TracedSearch search = searchService.searchTraced(ctx, "rerank", retrievalQuery,
@@ -176,6 +265,7 @@ public class ChatService {
         }
         List<SearchHit> hits = search.hits();
         Map<String, Long> stages = new LinkedHashMap<>(search.stageLatencyMs());
+        stages.put("route", decision.latencyMs());
         if (!callerSuppliedFilter) {
             stages.put("understand", extraction.latencyMs());
         }
@@ -192,10 +282,10 @@ public class ChatService {
             onToken.accept("No relevant chunks found in the knowledge base.");
             stages.put("total", msSince(start));
             tracer.record(requestId, ctx, pScope, last.content(), retrievalQuery, "rerank", hits,
-                    stages, null, null, null, "no-hits", filterJson, widened);
+                    stages, null, null, null, "no-hits", filterJson, widened, route);
             return new StreamOutcome(List.of(),
                     new AnswerGuard.Verdict(true, "no-hits", AnswerGuard.REFUSAL), requestId,
-                    appliedFilter, widened);
+                    appliedFilter, widened, route);
         }
 
         // Prior turns verbatim; the final user turn carries the fenced context + question.
@@ -220,14 +310,14 @@ public class ChatService {
         stages.put("total", msSince(start));
         tracer.record(requestId, ctx, pScope, last.content(), retrievalQuery, "rerank", hits, stages,
                 usage.get().promptTokens(), usage.get().completionTokens(),
-                full.toString(), verdict.reason(), filterJson, widened);
+                full.toString(), verdict.reason(), filterJson, widened, route);
 
         List<AskResponse.Source> sources = new ArrayList<>();
         for (int i = 0; i < hits.size(); i++) {
             SearchHit h = hits.get(i);
             sources.add(new AskResponse.Source(i + 1, h.docId(), h.headingPath(), h.score(), h.content(), h.chunkIndex()));
         }
-        return new StreamOutcome(sources, verdict, requestId, appliedFilter, widened);
+        return new StreamOutcome(sources, verdict, requestId, appliedFilter, widened, route);
     }
 
     private static long msSince(long startNanos) {

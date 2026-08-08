@@ -43,7 +43,7 @@ class RecordGroundTruthTest {
         RecordGoldenEntry entry = new RecordGoldenEntry("delivery notes by Speedy Freight",
                 "delivery-note",
                 List.of(Map.of("path", "values.carrier", "op", "eq", "value", "Speedy Freight")),
-                false, false);
+                false, false, "search");
 
         List<String> ids = RecordGroundTruth.matchingDocIds(CORPUS, entry);
 
@@ -54,7 +54,7 @@ class RecordGroundTruthTest {
     void aNumericRangeComparesAsNumbersNotStrings() {
         // "9" > "10" as text; the whole point is that it must not.
         RecordGoldenEntry entry = new RecordGoldenEntry("invoices over 5000", "invoice",
-                List.of(Map.of("path", "values.total", "op", "range", "gt", 5000)), false, false);
+                List.of(Map.of("path", "values.total", "op", "range", "gt", 5000)), false, false, "search");
 
         List<String> ids = RecordGroundTruth.matchingDocIds(CORPUS, entry);
 
@@ -66,7 +66,7 @@ class RecordGroundTruthTest {
     void aDateRangeUsesIsoOrdering() {
         RecordGoldenEntry q2 = new RecordGoldenEntry("Q2 invoices", "invoice",
                 List.of(Map.of("path", "values.issueDate", "op", "range",
-                        "gte", "2026-04-01", "lt", "2026-07-01")), false, false);
+                        "gte", "2026-04-01", "lt", "2026-07-01")), false, false, "search");
 
         assertThat(RecordGroundTruth.matchingDocIds(CORPUS, q2)).isNotEmpty();
     }

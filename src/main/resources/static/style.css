@@ -654,6 +654,15 @@ body {
   font-size: 12px; font-weight: 700; line-height: 1.45;
 }
 
+/* ---------- Request-level chips: route + applied filter ---------- */
+.meta-chips { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 8px; }
+.meta-chip {
+  padding: 1px 9px; border-radius: 999px;
+  background: var(--bg); border: 1px solid var(--border2); color: var(--muted);
+  font-size: 11px; line-height: 1.8; font-weight: 600;
+}
+.meta-chip-warn { border-color: var(--danger); color: var(--danger); }
+
 /* ---------- Signed-in identity + upload access label ---------- */
 .who-am-i {
   margin-top: 10px; padding: 12px 14px; border: 1px solid var(--border);

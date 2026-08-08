@@ -225,8 +225,10 @@ answers from noise.
 which is the single most valuable transform. **Filter extraction is done too (2026-08-07)**: a
 facet catalogue derived from the metadata actually indexed, one LLM call, output validated against
 that catalogue, and widen-on-empty when the extracted filter matches nothing. Measured by
-`RecordFilterEvalTest` against a committed 210-record corpus (`LEARNINGS.md` section 20). Routing,
-multi-query fan-out, decomposition and HyDE are still absent.
+`RecordFilterEvalTest` against a committed 210-record corpus (`LEARNINGS.md` section 20).
+**Routing is done too (2026-08-08)**: three paths - canned chit-chat, a SQL count, and RAG - scored
+21/21 on the golden set and gated with no tolerance (`LEARNINGS.md` section 21). Multi-query
+fan-out, decomposition and HyDE are still absent.
 
 **Concept - route before you retrieve.** Not every question needs retrieval, and not everything
 needs an LLM. Greeting -> canned reply. "How many documents are in project 5?" -> a SQL count,
@@ -458,7 +460,7 @@ the point of the exercise.
 | 1 | Retrieval filtered by authenticated identity | 2 (was 0) |
 | 2 | Ingestion failure modes catalogued for this corpus | 2 (was 1) |
 | 3 | Eval running on the realistic corpus, as a gate | 2 |
-| 4 | Query routing and transforms beyond condense | 2 (was 1) |
+| 4 | Query routing and transforms beyond condense | 2 (was 1) - see the 2026-08-08 note |
 | 5 | Injection-resistant prompting, cite-or-refuse | 1 (was 0) |
 | 6 | Per-request trace of the whole chain | 2 (was 0) |
 | 7 | Incremental re-sync and delete propagation | 1 (was 0) |
@@ -474,6 +476,33 @@ chunks with scores, per-stage latency, token counts, and the guard verdict for e
 per-answer debug view in the UI. It is a 2 rather than more because it is storage plus a panel, not
 observability: no metrics, no alerting, no aggregate latency view, and nothing exported to
 CloudWatch-shaped tooling.
+
+**Row 4 update (2026-08-08): still 2, and this is the honest ceiling for it.** Routing now exists -
+the gap named in every previous note. `QueryRouter` sends greetings to a canned reply, "how many X"
+to one SQL `COUNT`, and everything else down the unchanged RAG path, scored **21/21** on the golden
+set and **9/9** on held-out questions, with all four aggregate counts exactly right. The router
+costs **1.4 s** to decide whether to spend **52 s**, and it is gated with no tolerance, so a
+misroute fails the build.
+
+It stays at 2 rather than moving higher because the rest of the row is still absent: no multi-query
+fan-out, no decomposition, no HyDE, and **extraction is still 52 s p50**, which routing avoids for
+some questions rather than fixing. The one lever left for that - `app.understand.model` pointed at a
+smaller model - was deliberately not pulled this session (only `qwen3:4b` is pulled on this box), so
+the tiering claim remains untested rather than proven.
+
+Worth recording next to it, twice over. The first router design passed 15 unit tests and was
+**broken against the real model**, which would have routed nearly every question to "chitchat"; a
+one-minute probe caught it. Then, with the gate green at 21/21, a live smoke found the router
+answering *"what is the total on invoice INV-5575"* with a record count - a category the golden set
+had no question for. Unit tests pin what you decided, and a golden set scores what it contains;
+neither one tells you the model is wrong in a direction you never thought to ask about.
+
+**Row 8 update (2026-08-08): still 1.** Routing is the first latency lever anyone has actually
+pulled here - two of 21 golden questions now skip a 52 s extraction and a generation entirely - but
+the row asks for a *budget*: p95 per stage, tokens per answer, cost per 1,000 questions. What
+exists is one more stage timing (`stage_latency_ms.route`) and a p50 from an eval. Also measured
+and worth more than any of it: the same call took **3.5 s on a quiet machine and 256 s on a
+memory-starved one**, so a budget without a stated machine state is decoration.
 
 **Row 4 second update (2026-08-07, later): still 2, but on better evidence.** The two named gaps
 are closed - condition recall 0.73 -> 0.87, precision 0.79 -> 0.81 - and the eval is now a gate
@@ -587,10 +616,23 @@ In order. Each is small, each unlocks the next.
      Scorecard row 5: 0 -> 1 (the instruction stopped running; the content still leaked).
 
 **After those three (2026-08-06 / 08-07).** Record search and the metadata filter DSL (§2, §7), then
-query understanding on top of it (§4). The next move is the user's call; the honest candidates are
-**§7 incremental re-sync** (still a 1), **§8 a real latency budget** (still a 1 - the one live trace
-says generation is 97% of wall clock, so model tiering via `app.understand.model` is the lever to
-measure), and turning `RecordFilterEvalTest` into a gate the way drill C did for the wiki eval.
+query understanding on top of it (§4), then `RecordFilterEvalTest` became a gate the way drill C did
+for the wiki eval.
+
+**2026-08-08: query routing (§4).** Three paths instead of one - chit-chat answered from a fixed
+string, "how many X" answered by one SQL `COUNT`, everything else unchanged. 21/21 on the golden
+set, 9/9 held out, 4/4 aggregate counts, router p50 1.4 s against a 52 s extraction call. Gated with
+no tolerance. Findings in `LEARNINGS.md` §21.
+
+**The honest candidates now**, in the order they would teach the most:
+- **§8 a real latency budget** (still a 1). The lever is built and unpulled: point
+  `app.understand.model` at a small model, run the gate, keep it only if extraction quality holds.
+  That is one download and one eval run away from a measured answer.
+- **§7 incremental re-sync** (still a 1). Nothing detects upstream change on its own: no scheduled
+  sync, no deletion detection for records the pipeline stopped sending, no migration path for an
+  embedding-model change.
+- **§5 injection, from 1 to 2** (a live probe still extracted the attacker's payload as a cited
+  answer).
 
 ---
 

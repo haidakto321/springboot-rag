@@ -8,10 +8,13 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import com.example.springbootrag.model.SearchHit;
 import com.example.springbootrag.repository.MetadataFilter;
+import com.example.springbootrag.repository.RecordCountRepository;
 import com.example.springbootrag.security.SearchContext;
 import com.example.springbootrag.trace.TraceRecorder;
 import com.example.springbootrag.understand.FilterJson;
+import com.example.springbootrag.understand.QueryRouter;
 import com.example.springbootrag.understand.QueryUnderstanding;
+import com.example.springbootrag.understand.Route;
 import com.example.springbootrag.web.dto.AskResponse;
 import org.springframework.stereotype.Service;
 
@@ -51,16 +54,21 @@ public class AskService {
     private final ProjectService projectService;
     private final TraceRecorder tracer;
     private final QueryUnderstanding understanding;
+    private final QueryRouter router;
+    private final RecordCountRepository counts;
 
     public AskService(SearchService searchService, ChatProvider chat,
                       ChatProperties props, ProjectService projectService,
-                      TraceRecorder tracer, QueryUnderstanding understanding) {
+                      TraceRecorder tracer, QueryUnderstanding understanding,
+                      QueryRouter router, RecordCountRepository counts) {
         this.searchService = searchService;
         this.chat = chat;
         this.props = props;
         this.projectService = projectService;
         this.tracer = tracer;
         this.understanding = understanding;
+        this.router = router;
+        this.counts = counts;
     }
 
     /** Single-question entry point: scopes to the default project. */
@@ -87,13 +95,51 @@ public class AskService {
         UUID requestId = UUID.randomUUID();
         long start = System.nanoTime();
 
+        // Route before spending anything. An explicit caller filter is already a structured
+        // request, so it takes the search path without asking a model to reinterpret it.
+        boolean callerSuppliedFilter = callerFilter != null && !callerFilter.isEmpty();
+        QueryRouter.Decision decision = callerSuppliedFilter
+                ? QueryRouter.Decision.rule(Route.SEARCH)
+                : router.route(question);
+        String route = decision.route().label();
+
+        if (decision.route() == Route.CHITCHAT) {
+            Map<String, Long> chitStages = new LinkedHashMap<>();
+            chitStages.put("route", decision.latencyMs());
+            chitStages.put("total", msSince(start));
+            tracer.record(requestId, ctx, projectIds, question, null, "none", List.of(), chitStages,
+                    null, null, AggregateAnswerer.CHITCHAT_REPLY, null, null, false, route);
+            return new AskResponse(AggregateAnswerer.CHITCHAT_REPLY, List.of(), null, false, route);
+        }
+
         // Extraction runs on the raw question. An explicit caller filter wins outright - merging
         // the two would let a model silently narrow a scope the caller deliberately set.
-        boolean callerSuppliedFilter = callerFilter != null && !callerFilter.isEmpty();
         QueryUnderstanding.Extraction extraction = callerSuppliedFilter
                 ? QueryUnderstanding.Extraction.none()
                 : understanding.extract(ctx, projectIds, question);
         MetadataFilter filter = callerSuppliedFilter ? callerFilter : extraction.filter();
+
+        if (decision.route() == Route.AGGREGATE) {
+            try {
+                // No widening here: zero is a correct count, and retrying without the filter would
+                // answer a different question than the one that was asked.
+                long n = counts.count(ctx, projectIds, filter);
+                String countAnswer = AggregateAnswerer.answer(n, filter);
+                Map<String, Long> countStages = new LinkedHashMap<>();
+                countStages.put("route", decision.latencyMs());
+                countStages.put("understand", extraction.latencyMs());
+                countStages.put("total", msSince(start));
+                tracer.record(requestId, ctx, projectIds, question, null, "count", List.of(),
+                        countStages, null, null, countAnswer, null,
+                        FilterJson.toApiString(filter), false, route);
+                return new AskResponse(countAnswer, List.of(), FilterJson.toApiShape(filter), false,
+                        route);
+            } catch (RuntimeException e) {
+                // A broken count must not lose the answer: fall through to normal retrieval.
+                log.warn("count failed; falling back to the search path", e);
+                route = Route.SEARCH.label();
+            }
+        }
 
         // "rerank" = hybrid + reranker; with no reranker configured it degrades to plain hybrid.
         SearchService.TracedSearch search = searchService.searchTraced(ctx, "rerank", question,
@@ -107,6 +153,7 @@ public class AskService {
         }
         List<SearchHit> hits = search.hits();
         Map<String, Long> stages = new LinkedHashMap<>(search.stageLatencyMs());
+        stages.put("route", decision.latencyMs());
         if (!callerSuppliedFilter) {
             stages.put("understand", extraction.latencyMs());
         }
@@ -114,9 +161,9 @@ public class AskService {
         if (hits.isEmpty()) {
             stages.put("total", msSince(start));
             tracer.record(requestId, ctx, projectIds, question, null, "rerank", hits, stages,
-                    null, null, null, "no-hits", filterJson, widened);
+                    null, null, null, "no-hits", filterJson, widened, route);
             return new AskResponse("No relevant chunks found in the knowledge base.", List.of(),
-                    FilterJson.toApiShape(filter), widened);
+                    FilterJson.toApiShape(filter), widened, route);
         }
 
         long beforeGenerate = System.nanoTime();
@@ -135,13 +182,13 @@ public class AskService {
         // answer is impossible if the blocked text is thrown away.
         tracer.record(requestId, ctx, projectIds, question, null, "rerank", hits, stages,
                 reply.usage().promptTokens(), reply.usage().completionTokens(),
-                reply.content(), verdict.reason(), filterJson, widened);
+                reply.content(), verdict.reason(), filterJson, widened, route);
         List<AskResponse.Source> sources = new ArrayList<>();
         for (int i = 0; i < hits.size(); i++) {
             SearchHit h = hits.get(i);
             sources.add(new AskResponse.Source(i + 1, h.docId(), h.headingPath(), h.score(), h.content(), h.chunkIndex()));
         }
-        return new AskResponse(answer, sources, FilterJson.toApiShape(filter), widened);
+        return new AskResponse(answer, sources, FilterJson.toApiShape(filter), widened, route);
     }
 
     private static long msSince(long startNanos) {

@@ -21,7 +21,8 @@ import java.util.Map;
 
 /**
  * Streaming multi-turn chat. Responds with newline-delimited JSON frames:
- *   {"type":"filter","applied":{...},"widened":bool}  - what query understanding decided, first
+ *   {"type":"route","route":"search"}  - which path is answering, before anything else
+ *   {"type":"filter","applied":{...},"widened":bool}  - what query understanding decided
  *   {"type":"token","text":...}  - one per streamed delta
  *   {"type":"sources","sources":[...]}  - citation chunks
  *   {"type":"done"}  - normal end
@@ -64,6 +65,9 @@ public class ChatController {
                 ChatService.StreamOutcome outcome =
                         chatService.chatStream(ctx, req.messages(), scope, req.docIds(), req.think(),
                                 filter,
+                                // First frame of all: an answer with no citations is normal on the
+                                // chitchat and aggregate routes, and alarming on the search one.
+                                route -> writeFrame(out, Map.of("type", "route", "route", route)),
                                 // Emitted before the first token: a narrowed search has to be
                                 // visible while the answer is being read, not after it.
                                 applied -> {

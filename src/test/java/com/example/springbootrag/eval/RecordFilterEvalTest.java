@@ -5,10 +5,13 @@ import com.example.springbootrag.embedding.EmbeddingProvider;
 import com.example.springbootrag.model.SearchHit;
 import com.example.springbootrag.repository.MetadataFilter;
 import com.example.springbootrag.repository.ProjectRepository;
+import com.example.springbootrag.repository.RecordCountRepository;
 import com.example.springbootrag.security.TestContexts;
 import com.example.springbootrag.service.RecordIngestService;
 import com.example.springbootrag.service.SearchService;
+import com.example.springbootrag.understand.QueryRouter;
 import com.example.springbootrag.understand.QueryUnderstanding;
+import com.example.springbootrag.understand.Route;
 import com.example.springbootrag.web.dto.RecordRequest;
 import org.junit.jupiter.api.Assumptions;
 import org.junit.jupiter.api.BeforeEach;
@@ -106,6 +109,8 @@ class RecordFilterEvalTest {
     @Autowired ProjectRepository projectRepository;
     @Autowired SearchService searchService;
     @Autowired QueryUnderstanding understanding;
+    @Autowired QueryRouter router;
+    @Autowired RecordCountRepository counts;
     @Autowired ChatProvider chat;
 
     private static Long projectId;
@@ -141,7 +146,10 @@ class RecordFilterEvalTest {
         int docTypeQuestions = 0, docTypeCorrect = 0;
         int noFilterQuestions = 0, noFilterCorrect = 0;
         int widened = 0, expectedWiden = 0, expectedWidenSeen = 0;
+        int routedCorrectly = 0, aggregateQuestions = 0, aggregateCountCorrect = 0;
         List<Long> latencies = new ArrayList<>();
+        List<Long> routeLatencies = new ArrayList<>();
+        List<String> routes = new ArrayList<>();
 
         List<Integer> ranksWith = new ArrayList<>();
         List<Integer> ranksWithout = new ArrayList<>();
@@ -152,12 +160,25 @@ class RecordFilterEvalTest {
             RecordGoldenEntry entry = golden.get(q);
             // Printed as it goes, not buffered to the end: a run that takes minutes per question
             // must never be indistinguishable from a hung one.
-            System.out.printf(Locale.ROOT, "[eval-records] %d/%d extracting: %s%n",
+            System.out.printf(Locale.ROOT, "[eval-records] %d/%d asking: %s%n",
                     q + 1, golden.size(), entry.question());
             System.out.flush();
-            QueryUnderstanding.Extraction extraction =
-                    understanding.extract(TestContexts.PUBLIC, List.of(projectId), entry.question());
-            latencies.add(extraction.latencyMs());
+
+            QueryRouter.Decision decision = router.route(entry.question());
+            String route = decision.route().label();
+            routes.add(route);
+            routeLatencies.add(decision.latencyMs());
+            if (route.equals(entry.expectedRoute())) routedCorrectly++;
+            System.out.printf(Locale.ROOT, "[eval-records]   route=%s (%s, %d ms), expected %s%n",
+                    route, decision.source(), decision.latencyMs(), entry.expectedRoute());
+            System.out.flush();
+
+            // Chit-chat skips extraction because the feature skips it. Scoring extraction on a
+            // question that never reaches the extractor would measure a path that no longer runs.
+            QueryUnderstanding.Extraction extraction = decision.route() == Route.CHITCHAT
+                    ? QueryUnderstanding.Extraction.none()
+                    : understanding.extract(TestContexts.PUBLIC, List.of(projectId), entry.question());
+            if (decision.route() != Route.CHITCHAT) latencies.add(extraction.latencyMs());
             MetadataFilter got = extraction.filter();
             // The filter and the drop reasons, not just a count: when a condition disappears, the
             // reason is the whole diagnosis, and without it the next step is guesswork against a
@@ -190,7 +211,22 @@ class RecordFilterEvalTest {
             }
             if (entry.expectWiden()) expectedWiden++;
 
+            // ---- aggregate questions are scored on the number, not on the prose ----
+            if ("aggregate".equals(entry.expectedRoute())) {
+                aggregateQuestions++;
+                long expectedCount = RecordGroundTruth.matchingDocIds(corpus, entry).size();
+                long actualCount = counts.count(TestContexts.PUBLIC, List.of(projectId), got);
+                if (expectedCount == actualCount) aggregateCountCorrect++;
+                System.out.printf(Locale.ROOT, "[eval-records]   count=%d, ground truth %d%n",
+                        actualCount, expectedCount);
+            }
+
             // ---- retrieval, with the extracted filter and without ----
+            if (decision.route() == Route.CHITCHAT) {
+                perQuestion.append(String.format(Locale.ROOT,
+                        "  %-60s route=%s%n", entry.question(), route));
+                continue;   // no retrieval happens on this route, so there is nothing to score
+            }
             List<SearchHit> with = searchService.search(TestContexts.PUBLIC, "rerank",
                     entry.question(), TOP_K, List.of(projectId), List.of(), got);
             boolean didWiden = with.isEmpty() && !got.isEmpty();
@@ -212,9 +248,9 @@ class RecordFilterEvalTest {
                 ranksWithout.add(firstCorrectRank(without, correct));
             }
             perQuestion.append(String.format(Locale.ROOT,
-                    "  %-60s docType=%-14s conditions=%d%s%n",
-                    entry.question(), String.valueOf(got.docType()), got.conditions().size(),
-                    didWiden ? " WIDENED" : ""));
+                    "  %-60s route=%-9s docType=%-14s conditions=%d%s%n",
+                    entry.question(), route, String.valueOf(got.docType()),
+                    got.conditions().size(), didWiden ? " WIDENED" : ""));
         }
 
         BackendMetrics withMetrics = BackendMetrics.of(toArray(ranksWith), ranksWith.size());
@@ -236,6 +272,12 @@ class RecordFilterEvalTest {
                 widened, golden.size(), expectedWidenSeen, expectedWiden);
         System.out.printf(Locale.ROOT, "extraction p50        %d ms   (model: %s)%n",
                 median(latencies), understanding.model());
+        System.out.printf(Locale.ROOT, "route accuracy        %.2f   (%d/%d)%n",
+                ratio(routedCorrectly, golden.size()), routedCorrectly, golden.size());
+        System.out.printf(Locale.ROOT, "aggregate counts      %d/%d exactly right%n",
+                aggregateCountCorrect, aggregateQuestions);
+        System.out.printf(Locale.ROOT, "router p50            %d ms   (model: %s)%n",
+                median(routeLatencies), router.model());
         System.out.printf(Locale.ROOT, "%nscored on %d filter questions%n", ranksWith.size());
         System.out.printf(Locale.ROOT, "recall@5   with extraction %.2f   without %.2f%n",
                 withMetrics.recall5(), withoutMetrics.recall5());
@@ -254,7 +296,10 @@ class RecordFilterEvalTest {
                         ratio(docTypeCorrect, docTypeQuestions),
                         noFilterCorrect),
                 Map.of("with-extraction", withMetrics, "without-extraction", withoutMetrics),
-                List.copyOf(filteredQuestions));
+                List.copyOf(filteredQuestions),
+                List.copyOf(routes),
+                new RecordEvalBaseline.Routing(ratio(routedCorrectly, golden.size()),
+                        aggregateCountCorrect));
         gate(measured);
     }
 

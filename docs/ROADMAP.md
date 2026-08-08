@@ -198,6 +198,22 @@ What is still missing before the ORIGINAL goal closes:
 - `golden.yaml` still points at this repo's `docs/`, so `RetrievalEvalTest` remains unstable.
 - Nothing runs it automatically: there is still no CI. It is enforceable, not enforced.
 
+### Query routing - three paths instead of one  ✅ done (2026-08-08)
+`QueryRouter` classifies every question on `/ask` and `/chat/stream` before anything is spent:
+`chitchat` answers from a fixed string with no retrieval, `aggregate` answers "how many X" from one
+`COUNT(DISTINCT doc_id)` in SQL, and `search` is the unchanged RAG path. Rules handle blank input
+and a fixed greeting list for free; everything else is one schema-constrained LLM call at
+temperature 0 with a fixed seed. Any router failure resolves to `search`, and
+`app.route.enabled=false` restores the old behaviour outright.
+
+Routing is scored inside `RecordFilterEvalTest` and gated in `baseline-records.yaml` with **no
+tolerance** - route accuracy, per-question route, and exact aggregate counts. Spec and plan:
+`docs/superpowers/{specs,plans}/2026-08-08-query-routing*`. Findings in `LEARNINGS.md` section 21.
+
+Not built, deliberately: SUM/AVG/GROUP BY aggregates, multi-query fan-out, decomposition, HyDE, and
+routing on `/search` or `/compare` (those are the retrieval laboratory - routing belongs on the
+answer path).
+
 ## Everything else on this roadmap is built.
 Possible future directions (not scheduled): server-side session persistence, token-budget
 history trimming, streaming the compare screen, Option B live-feedback boost / reranker

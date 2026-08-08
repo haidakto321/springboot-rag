@@ -44,6 +44,13 @@ Contents:
 
 ---
 
+### Routing, in one line
+
+`QueryRouter` runs before everything on `/ask` and `/chat/stream`: chit-chat is answered from a
+fixed string, "how many X" is answered by one SQL count, and everything else takes the unchanged
+RAG path. A router failure resolves to the RAG path, so the worst case is exactly the old
+behaviour. `app.route.enabled=false` restores it outright.
+
 ## 2. Topology
 
 ```mermaid
@@ -206,17 +213,27 @@ sequenceDiagram
     participant B as Browser
     participant C as ChatController
     participant CS as ChatService
-    participant S as SearchService
-    participant O as Ollama
+    participant QR as QueryRouter
     participant QU as QueryUnderstanding
+    participant S as SearchService
+    participant RC as RecordCountRepository
+    participant O as Ollama
     participant G as AnswerGuard
     participant T as TraceRecorder
 
     B->>C: POST /chat/stream {messages[], projectId, group, docIds, think, docType, filters}
     C->>C: reject empty messages (400) · resolveScope · CurrentUser.context()
     Note over C: identity is captured HERE, on the request thread -<br/>the streaming body runs on an async thread where<br/>the SecurityContext is gone
-    C->>CS: chatStream(ctx, history, scope, docIds, think, filter, onFilter, onToken, onReasoning)
+    C->>CS: chatStream(ctx, history, scope, docIds, think, filter, onRoute, onFilter, onToken, onReasoning)
     CS->>CS: trim history to last 10 · require last turn to be a non-empty user message
+    CS->>QR: route(raw question)
+    Note over QR: rules first (blank, fixed greetings) then one<br/>schema-constrained call. Never throws: any failure is SEARCH
+    QR-->>CS: chitchat | aggregate | search
+    CS-->>B: {"type":"route","route":"..."} FIRST frame of all
+    alt route = chitchat
+        CS-->>B: canned reply · trace(route=chitchat) · done
+        Note over CS: no condensing, no extraction, no retrieval,<br/>no generation - three model calls skipped
+    end
     opt follow-up turn and app.chat.condense-followups
         CS->>O: condense(conversation + follow-up) → standalone query
         O-->>CS: retrieval query (falls back to the raw question on failure)
@@ -229,6 +246,12 @@ sequenceDiagram
         O-->>QU: JSON (or prose, or nothing)
         QU->>QU: ExtractionValidator - rebuild through MetadataFilter.parse,<br/>drop unknown paths / docTypes / malformed conditions
         QU-->>CS: filter + latency + dropped[] (NEVER throws)
+    end
+    alt route = aggregate
+        CS->>RC: count(ctx, scope, filter) - COUNT(DISTINCT doc_id) under the caller's labels
+        RC-->>CS: n
+        CS-->>B: "n invoice records match where ..." · trace(route=aggregate) · done
+        Note over CS: the number is written by CODE, never by the model,<br/>and this route NEVER widens: 0 is a correct count
     end
     CS->>S: searchTraced(ctx, "rerank", retrievalQuery, contextChunks, filter)
     S-->>CS: hits + {embed, retrieve} ms
@@ -250,7 +273,7 @@ sequenceDiagram
     O-->>CS: final chunk (prompt_eval_count, eval_count)
     CS->>G: check(full answer, chunkCount)
     G-->>CS: verdict cited | ungrounded | bad-citation
-    CS->>T: record(requestId, principal, raw + condensed query, retrieved[], stage ms,<br/>tokens, answer, verdict, applied filter, widened)
+    CS->>T: record(requestId, principal, raw + condensed query, retrieved[], stage ms,<br/>tokens, answer, verdict, applied filter, widened, route)
     T->>T: INSERT rag_trace, prune to app.trace.keep per principal
     CS-->>B: {"type":"sources"} · {"type":"trace"} · optional {"type":"guard"} · {"type":"done"}
     Note over B: tokens are already rendered, so a failed guard can only<br/>annotate the answer - the UI shows a red "unverified" banner

@@ -88,6 +88,56 @@ class OllamaChatProviderTest {
     }
 
     @Test
+    void thinkFalseAndAnOutputCapAreForwardedWhenTheCallerAsksForThem() throws Exception {
+        server.enqueue(new MockResponse()
+                .setHeader("Content-Type", "application/json")
+                .setBody("""
+                        {"message": {"role": "assistant", "content": "search"}}
+                        """));
+
+        provider.chat("system", "user", new ChatProvider.Options(null, 0.0, 42, false, 16));
+
+        String body = server.takeRequest().getBody().readUtf8();
+        // A one-word classification has nothing worth reasoning about, and on a reasoning model
+        // those tokens ARE the latency.
+        assertThat(body).contains("\"think\":false");
+        assertThat(body).contains("\"num_predict\":16");
+        assertThat(body).contains("\"temperature\":0.0");
+        assertThat(body).contains("\"seed\":42");
+    }
+
+    @Test
+    void aResponseSchemaIsSentAsOllamaFormat() throws Exception {
+        server.enqueue(new MockResponse()
+                .setHeader("Content-Type", "application/json")
+                .setBody("""
+                        {"message": {"role": "assistant", "content": "{\\"route\\":\\"search\\"}"}}
+                        """));
+
+        provider.chat("system", "user", new ChatProvider.Options(null, 0.0, 42, false, 16,
+                java.util.Map.of("type", "object")));
+
+        String body = server.takeRequest().getBody().readUtf8();
+        // "format" is the constraint that makes a reasoning model answer instead of narrate.
+        assertThat(body).contains("\"format\":{\"type\":\"object\"}");
+    }
+
+    @Test
+    void aCallerWithNoOpinionStillGetsThinkTrueAndNoOutputCap() throws Exception {
+        server.enqueue(new MockResponse()
+                .setHeader("Content-Type", "application/json")
+                .setBody("""
+                        {"message": {"role": "assistant", "content": "hi"}}
+                        """));
+
+        provider.chat("system", "user");
+
+        String body = server.takeRequest().getBody().readUtf8();
+        assertThat(body).contains("\"think\":true");
+        assertThat(body).doesNotContain("num_predict");
+    }
+
+    @Test
     void noGenerationSettingsMeansNoOptionsBlockAtAll() throws Exception {
         // An ordinary answer must keep the model's own defaults, not silently get temperature 0.
         server.enqueue(new MockResponse()

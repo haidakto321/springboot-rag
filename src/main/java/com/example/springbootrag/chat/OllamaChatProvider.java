@@ -63,15 +63,21 @@ public class OllamaChatProvider implements ChatProvider {
         Map<String, Object> body = new java.util.LinkedHashMap<>(Map.of(
                 "model", model,
                 "stream", false,
-                "think", true,
+                // think:true unless the caller explicitly opts out - see the Options javadoc.
+                "think", options.think() == null ? Boolean.TRUE : options.think(),
                 "messages", List.of(
                         Map.of("role", "system", "content", systemPrompt),
                         Map.of("role", "user", "content", userPrompt))));
+        // A response schema is Ollama's "format": the model is constrained to emit conforming JSON,
+        // which is what keeps a reasoning model from spending a short answer's whole budget on
+        // preamble. Omitted entirely when the caller wants free text.
+        if (options.responseSchema() != null) body.put("format", options.responseSchema());
         // Ollama takes generation settings under "options"; omitted entirely when the caller has no
         // opinion, so the model's own defaults still apply to ordinary answers.
         Map<String, Object> generation = new java.util.LinkedHashMap<>();
         if (options.temperature() != null) generation.put("temperature", options.temperature());
         if (options.seed() != null) generation.put("seed", options.seed());
+        if (options.numPredict() != null) generation.put("num_predict", options.numPredict());
         if (!generation.isEmpty()) body.put("options", generation);
 
         ChatResponse resp;

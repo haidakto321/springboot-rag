@@ -36,8 +36,8 @@ public class TraceRepository {
             INSERT INTO rag_trace (request_id, ts, principal, project_ids, raw_query, condensed_query,
                                    backend, retrieved, stage_latency_ms, prompt_tokens,
                                    completion_tokens, answer, guard_reason,
-                                   applied_filter, filter_widened)
-            VALUES (?, ?, ?, ?::bigint[], ?, ?, ?, ?::jsonb, ?::jsonb, ?, ?, ?, ?, ?::jsonb, ?)
+                                   applied_filter, filter_widened, route)
+            VALUES (?, ?, ?, ?::bigint[], ?, ?, ?, ?::jsonb, ?::jsonb, ?, ?, ?, ?, ?::jsonb, ?, ?)
             ON CONFLICT (request_id) DO NOTHING
             """,
                 t.requestId(),
@@ -54,7 +54,8 @@ public class TraceRepository {
                 t.answer(),
                 t.guardReason(),
                 t.appliedFilter(),
-                t.filterWidened());
+                t.filterWidened(),
+                t.route());
     }
 
     /** Newest first, one principal only. */
@@ -62,7 +63,7 @@ public class TraceRepository {
         return jdbc.query("""
             SELECT request_id, ts, principal, project_ids, raw_query, condensed_query, backend,
                    retrieved, stage_latency_ms, prompt_tokens, completion_tokens, answer,
-                   guard_reason, applied_filter, filter_widened
+                   guard_reason, applied_filter, filter_widened, route
             FROM rag_trace WHERE principal = ? ORDER BY ts DESC, id DESC LIMIT ?
             """, mapRow(), principal, limit);
     }
@@ -96,7 +97,8 @@ public class TraceRepository {
                 rs.getString("answer"),
                 rs.getString("guard_reason"),
                 rs.getString("applied_filter"),
-                rs.getBoolean("filter_widened"));
+                rs.getBoolean("filter_widened"),
+                rs.getString("route"));
     }
 
     private String toJson(Object value) {

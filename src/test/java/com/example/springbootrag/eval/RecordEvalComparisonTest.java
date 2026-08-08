@@ -125,6 +125,72 @@ class RecordEvalComparisonTest {
                 .anyMatch(v -> v.area().equals("without-extraction"));
     }
 
+    /** Same three questions, with routes and routing figures attached. */
+    private static RecordEvalBaseline routed(List<String> routes, double accuracy, int countsRight) {
+        return new RecordEvalBaseline(42, 210, List.of("q1", "q2", "q3"),
+                new RecordEvalBaseline.Extraction(0.79, 0.80, 1.00, 2),
+                Map.of("with-extraction", new BackendMetrics(1.00, 1.00, 1.00),
+                        "without-extraction", new BackendMetrics(0.64, 0.59, 0.55)),
+                List.of("q1", "q2"), routes,
+                new RecordEvalBaseline.Routing(accuracy, countsRight));
+    }
+
+    @Test
+    void aDropInRouteAccuracyFailsWithNoTolerance() {
+        // 0.05 would be absorbed by the extraction tolerance. Routing does not get one.
+        RecordEvalBaseline expected = routed(List.of("search", "search", "aggregate"), 1.00, 4);
+        RecordEvalBaseline actual = routed(List.of("search", "search", "aggregate"), 0.95, 4);
+
+        assertThat(RecordEvalComparison.compare(expected, actual, TOLERANCE))
+                .anyMatch(v -> v.area().equals("routing") && v.detail().contains("route accuracy"));
+    }
+
+    @Test
+    void aWrongCountFailsEvenWhenRouteAccuracyHolds() {
+        RecordEvalBaseline expected = routed(List.of("search", "search", "aggregate"), 1.00, 4);
+        RecordEvalBaseline actual = routed(List.of("search", "search", "aggregate"), 1.00, 3);
+
+        assertThat(RecordEvalComparison.compare(expected, actual, TOLERANCE))
+                .anyMatch(v -> v.detail().contains("aggregate count correct"));
+    }
+
+    @Test
+    void aQuestionThatChangedRouteIsNamed() {
+        RecordEvalBaseline expected = routed(List.of("search", "search", "aggregate"), 1.00, 4);
+        RecordEvalBaseline actual = routed(List.of("search", "search", "search"), 1.00, 4);
+
+        assertThat(RecordEvalComparison.compare(expected, actual, TOLERANCE))
+                .anyMatch(v -> v.detail().contains("q3")
+                        && v.detail().contains("aggregate -> search"));
+    }
+
+    @Test
+    void betterRoutingNeverFails() {
+        RecordEvalBaseline expected = routed(List.of("search", "search", "aggregate"), 0.90, 3);
+        RecordEvalBaseline actual = routed(List.of("search", "search", "aggregate"), 1.00, 4);
+
+        assertThat(RecordEvalComparison.compare(expected, actual, TOLERANCE)).isEmpty();
+    }
+
+    @Test
+    void aBaselineWrittenBeforeRoutingStillPasses() {
+        // The 6-argument form models a pre-routing baseline file: no routes, nothing to gate.
+        assertThat(RecordEvalComparison.compare(reference(),
+                routed(List.of("search", "search", "aggregate"), 1.00, 4), TOLERANCE)).isEmpty();
+    }
+
+    @Test
+    void theStoreRoundTripsRoutingToo() {
+        RecordEvalBaseline written = routed(List.of("search", "chitchat", "aggregate"), 0.933, 3);
+
+        RecordEvalBaseline read = RecordEvalBaselineStore.parse(
+                RecordEvalBaselineStore.toMap(written));
+
+        assertThat(read.routes()).containsExactly("search", "chitchat", "aggregate");
+        assertThat(read.routing().routeAccuracy()).isEqualTo(0.933);
+        assertThat(read.routing().aggregateCountCorrect()).isEqualTo(3);
+    }
+
     @Test
     void theStoreRoundTripsEveryField() {
         RecordEvalBaseline written = reference();

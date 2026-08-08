@@ -230,3 +230,9 @@ CREATE TABLE IF NOT EXISTS document (
 -- question a surprised user asks - "why did it not find my document?" - has no answer.
 ALTER TABLE rag_trace ADD COLUMN IF NOT EXISTS applied_filter JSONB;
 ALTER TABLE rag_trace ADD COLUMN IF NOT EXISTS filter_widened BOOLEAN NOT NULL DEFAULT false;
+
+-- ---- Query routing (2026-08-08) ----
+-- Which path answered: chitchat, aggregate, or search. A column rather than a stage-map key
+-- because rows get filtered by it ("every question that took the aggregate path"). Route LATENCY
+-- stays inside stage_latency_ms, which is JSONB precisely so a new stage needs no migration.
+ALTER TABLE rag_trace ADD COLUMN IF NOT EXISTS route VARCHAR(16);

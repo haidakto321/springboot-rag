@@ -167,7 +167,7 @@ Existing corpora keep working after an upgrade: `schema.sql` backfills unlabelle
 - `GET /search?q=...&type=fts|pgvector|qdrant|hybrid|rerank|graph&topK=10` - optional `projectId=<id>`, `group=true`, `docIds=a&docIds=b`, `docType=invoice`, `filters=<json>`
 - `GET /compare?q=...&topK=10` - all six backends side by side (scores + timing); same `docType` / `filters` params
 - `GET /ask?q=...` - one-shot RAG answer with citations; same `docType` / `filters` params
-- `POST /chat/stream` - streaming multi-turn RAG, NDJSON frames: `filter`, `token`, `reasoning`, `sources`, `trace`, `guard`, `done`, `error`; `docType` / `filters` in the body
+- `POST /chat/stream` - streaming multi-turn RAG, NDJSON frames: `route`, `filter`, `token`, `reasoning`, `sources`, `trace`, `guard`, `done`, `error`; `docType` / `filters` in the body
 
 **Documents and projects**
 - `POST /projects/{id}/documents` - multipart `.md` upload; optional `groups=hr&groups=public` sets the access label
@@ -308,6 +308,60 @@ Extraction never fails a request: model down, timeout, or garbage output all mea
 anyway". The filter that was attempted and the widen decision are recorded in `rag_trace`
 (`applied_filter`, `filter_widened`), because "why did it not find my document?" is otherwise
 unanswerable.
+
+## Query routing (which path answers)
+
+Not every question needs retrieval, and not every question needs an LLM. When `app.route.enabled`
+is on (the default), `/ask` and `/chat/stream` classify the question first and take the cheapest
+path that can answer it correctly.
+
+| Route | Example | What happens |
+|---|---|---|
+| `chitchat` | "hi", "what can you do" | fixed reply, no retrieval, no generation |
+| `aggregate` | "how many overdue invoices does ACME have" | filter extraction, then one `COUNT(DISTINCT doc_id)`, answered from a template |
+| `search` | "what does the late payment clause say" | the full RAG path, unchanged |
+
+Fixed greetings and blank input are matched by a rule and never reach a model. Everything else is
+one short LLM call constrained by a JSON schema (`{"route":"..."}`) at temperature 0 with a fixed
+seed, so the same question always routes the same way. **Asking the model for one word is not
+enough** - a reasoning model narrates instead of answering, so the schema is the control. See
+`LEARNINGS.md` section 21.
+
+Two rules keep it safe: routing never throws, and its output is validated rather than trusted. A
+model that is down, slow, or returns something unrecognised routes to `search`, which is exactly
+what this system did before routing existed.
+
+The aggregate route counts under your access labels using the same predicate retrieval uses, counts
+distinct documents rather than chunks, and **never widens** - zero is a legitimate count, so instead
+of retrying unfiltered it prints the filter it applied:
+
+```
+0 invoice records match where values.customer = ACEM Corp.
+```
+
+The number is computed in SQL and written into a template by code; no model ever writes it. If the
+count query fails, the request falls back to the search path rather than failing.
+
+```jsonc
+// GET /ask
+{"answer": "3 invoice records match where values.customer = ACME Corp.",
+ "sources": [], "route": "aggregate", "appliedFilter": {...}, "widened": false}
+```
+
+```jsonc
+// POST /chat/stream - the FIRST frame, before `filter` and before any token
+{"type":"route","route":"aggregate"}
+```
+
+| Key | Default | Meaning |
+|---|---|---|
+| `app.route.enabled` | `true` | off routes everything to `search`, exactly the pre-feature behaviour |
+| `app.route.model` | `""` | empty = `app.chat.model`; point at a smaller model to tier |
+| `app.route.num-predict` | `32` | cap on router output; the reply is one word |
+
+An explicit `filters=` from you skips routing as well as extraction: a caller who supplied a filter
+has already said what shape of request this is. The route is recorded per request in
+`rag_trace.route`, with its latency under `stage_latency_ms.route`.
 
 ## Reranking (`type=rerank`)
 `rerank` over-fetches hybrid candidates (`app.rerank.candidates`, default 50), reorders them with a

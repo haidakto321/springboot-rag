@@ -10,4 +10,5 @@ import java.util.Map;
  */
 public record RecordGoldenEntry(String question, String expectedDocType,
                                 List<Map<String, Object>> expectedFilters,
-                                boolean expectNoFilter, boolean expectWiden) {}
+                                boolean expectNoFilter, boolean expectWiden,
+                                String expectedRoute) {}

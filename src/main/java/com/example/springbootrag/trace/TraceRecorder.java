@@ -60,6 +60,17 @@ public class TraceRecorder {
                        Map<String, Long> stageLatencyMs, Integer promptTokens,
                        Integer completionTokens, String answer, String guardReason,
                        String appliedFilter, boolean filterWidened) {
+        return record(requestId, ctx, projectIds, rawQuery, condensedQuery, backend, hits,
+                stageLatencyMs, promptTokens, completionTokens, answer, guardReason, appliedFilter,
+                filterWidened, null);
+    }
+
+    /** Same, plus which route answered - chitchat, aggregate, or search. */
+    public UUID record(UUID requestId, SearchContext ctx, List<Long> projectIds, String rawQuery,
+                       String condensedQuery, String backend, List<SearchHit> hits,
+                       Map<String, Long> stageLatencyMs, Integer promptTokens,
+                       Integer completionTokens, String answer, String guardReason,
+                       String appliedFilter, boolean filterWidened, String route) {
         if (!props.isEnabled()) {
             return requestId;
         }
@@ -81,7 +92,8 @@ public class TraceRecorder {
                     truncate(answer),
                     guardReason,
                     appliedFilter,
-                    filterWidened);
+                    filterWidened,
+                    route);
             repo.insert(trace);
             repo.prune(ctx.principal(), props.getKeep());
         } catch (RuntimeException e) {

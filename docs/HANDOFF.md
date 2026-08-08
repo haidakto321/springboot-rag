@@ -80,16 +80,28 @@ The full versions are in `docs/LEARNINGS.md`; this is the index.
   reveal credentials in the material, and it did anyway (§17).
 - **Generation is 97% of request latency here** (210 s of 218 s), retrieval 0.04%. Optimise the
   answer model, not the vector store (§18).
+- **Asking a reasoning model for one word does not get you one word - constraining its output
+  does.** An unconstrained router call spent its whole token budget narrating and never answered;
+  the same call with a JSON schema was 8/8 correct at 3.4 s, and with thinking on it was correct
+  but took 44 s (§21).
 
-## Current state (2026-08-05)
+## Current state (2026-08-08)
 
-- Branch `feat/graphrag`, ~46 commits ahead of `master`. Suite: **188 tests, 0 failures, 3 skipped**
-  (the 3 are manual DJL model-download tests).
-- RAG-MASTERY scorecard: rows 1, 3 and 6 at 2; rows 2, 4, 5 and 8 at 1; **row 7 (freshness and
-  re-sync) is the only 0 left**.
-- Known gaps worth knowing before you build on this: ingest is one-shot (no re-sync, no delete
-  propagation), the eval gate cannot run in CI because its corpus is private, `/search` and
-  `/compare` are not traced, and `app.rerank.maxLength` is dead config.
+- On `master`, working tree carries the query-routing change (uncommitted - the user commits).
+  Suite: **414 tests, 0 failures, 3 skipped** (the 3 are manual DJL model-download tests).
+- RAG-MASTERY scorecard: rows 1, 2, 3 and 6 at 2, row 4 at 2 (routing now exists but extraction is
+  still 52 s p50 and there is no fan-out/decomposition/HyDE), rows 5, 7 and 8 at 1. No zeros left.
+- Two eval gates, both run on demand, neither in CI: `-Dgroups=eval-wiki` (needs the private wiki
+  corpus, so one machine only) and `-Dgroups=eval-records` (Testcontainers + a committed synthetic
+  corpus, runs on a fresh clone; ~30 minutes because extraction is a live model call per question).
+- Known gaps worth knowing before you build on this: ingest is one-shot (no re-sync, no upstream
+  delete detection), `/search` and `/compare` are not traced and not routed, `app.rerank.maxLength`
+  is dead config, there is no UI for records or filters beyond the answer chips, and the feedback
+  eval still has no real thumbs behind it, so "does the cross-encoder earn its latency" is
+  unanswered.
+- **Machine state matters for every latency number here.** Ollama went from 3.5 s to 256 s for the
+  same 10-token call purely from memory pressure (orphaned JVMs and containers). Check
+  `docker ps` and free RAM before trusting a measurement.
 
 ## Convention notes
 

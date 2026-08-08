@@ -1164,6 +1164,162 @@ cannot switch per call stay valid.
 
 ---
 
+## 21. Query routing (not every question is a retrieval question)
+
+Every question used to take the same path: extract a filter with an LLM, retrieve, generate. For a
+whole class of questions that is both slow and the wrong shape of answer. "hi" paid a full
+extraction call to find nothing. "How many overdue invoices does ACME have?" got ten chunks and a
+model guessing a total from a sample, when one `COUNT(*)` knows it exactly.
+
+`QueryRouter` picks one of three paths before anything is spent:
+
+| Route | Cost | Answered by |
+|---|---|---|
+| `chitchat` | rule, or one ~1-3 s call | a fixed string |
+| `aggregate` | router + extraction | `COUNT(DISTINCT doc_id)` in SQL, rendered by code |
+| `search` | router + the old path | unchanged RAG |
+
+### Rules only decide the half that is actually clear
+
+Blank input and a fixed greeting list are matched in code and never reach a model. There is
+deliberately **no `how many` rule**: "how many invoices do we have" is a count and "how many days do
+I have to pay an invoice" is a payment-terms clause, and the keyword is identical. §5 says not to
+spend an LLM call where a rule is clear; the point here is that the rule is only clear for one of
+the two.
+
+The greeting rule matches the WHOLE message, not a substring. "thanks for the invoice policy"
+contains "thanks" and is a real question.
+
+### The measurement that killed the first design
+
+The plan was: run the router with `think:false`, cap the output at 32 tokens, read the label with a
+keyword scan. Fifteen unit tests passed on that design. One minute against the real qwen3:4b:
+
+```
+'how many invoices for ACME Corp'
+  -> "We are given the user's message: ... We need to classify it into exactly one route:
+      chitchat, aggregate"
+```
+
+Two failures at once. With `think:false` the model reasons **in `content`** (§12 again), so the
+32-token budget was gone before it decided anything. And the truncated text contains the option
+list, so a first-keyword-wins scan reads `chitchat` - the route that answers nothing - on almost
+every question. It would have been confidently wrong everywhere, with a green suite.
+
+Three variants, same 8 probe questions, same model:
+
+| Router call | Accuracy | Mean latency |
+|---|---|---|
+| `think:false`, prompt asks for one word | never answered | ~4 s wasted |
+| `think:false` + **JSON schema** (`{"route": enum}`) | **8/8** | **3.4 s** |
+| `think:true` + JSON schema | 8/8 | 44 s (worst 206 s) |
+
+**Asking a reasoning model for one word does not get you one word. Constraining its output does.**
+Ollama's `format` (a JSON Schema) is the control; the prompt is only a request. And `think:true`,
+though equally accurate, costs more than the extraction call routing exists to skip - a router that
+slow is a latency regression wearing a routing costume.
+
+`Route.parse` took the second lesson: a reply naming **more than one** route is now unreadable
+rather than resolved by position, and unreadable falls back to `search`. Ambiguity resolving to
+today's behaviour is always safe; ambiguity resolving to a guess is how you get a confident wrong
+answer on every request.
+
+> Lesson, and it is the third time in this repo: the prompt is an interface, and the only test of
+> it that counts runs against the real model. Unit tests pin what you decided. They cannot tell you
+> the model ignored it.
+
+
+### Measured on the 21-question golden set (2026-08-08)
+
+Corpus: the committed 210-record synthetic set, `qwen3:4b`, fake embeddings (so the retrieval
+numbers measure the FILTER, not embedding quality).
+
+| Metric | Value |
+|---|---|
+| route accuracy | **21/21 = 1.00** |
+| aggregate counts exactly right | **4/4** |
+| router p50 | **1,437 ms** |
+| extraction p50 | 52,613 ms |
+| condition precision / recall | 0.89 / 0.89 |
+| docType accuracy | 1.00 (17/17) |
+| questions that must produce no filter | 4/4 |
+| recall@5 with extraction / without | 1.00 / 0.57 |
+
+The number that justifies the feature is the ratio, not the accuracy: **the router costs 1.4 s to
+decide whether to spend 52 s.** On the two chit-chat questions it skips extraction, condensation and
+generation outright.
+
+**Prompt tuning, and how not to fool yourself.** The first prompt scored 20/21; the miss was
+"delivery notes shipped by Speedy Freight" - a bare noun phrase that names documents but asks
+nothing, which the model read as small talk and answered with a canned hello. Adding a rule for
+bare phrases plus one noun-phrase example took it to 21/21.
+
+That is tuning against the eval, so it needs a control. Nine held-out questions (three per route,
+none in the golden file) scored **9/9 before and 9/9 after**, so the change fixed a real gap rather
+than memorising one question. The example in the prompt is deliberately worded differently from the
+golden question that motivated it, and a test fails if anyone ever pastes a golden question in
+verbatim.
+
+**The eval was 21/21 and the feature was still wrong.** A live smoke against the real app asked
+"what is the total on invoice INV-5575" and got back `1 invoice record matches where
+values.invoiceNumber = 5575` - a factual lookup answered with a record count. The word "total"
+pulls the model toward counting, and no golden question covered a value-versus-count confusion, so
+a perfect score said nothing about it. Six probe questions written for that specific confusion
+scored **3/6**; a rule separating "counts whole records" from "a value stored inside a document"
+took it to **5/6**, with golden still 21/21 and held-out still 9/9. Afterwards the same live
+question answered `The total on invoice INV-5575 is 1899.5 [1]`.
+
+The remaining miss is accepted and written into the code: "how many packages are on delivery note
+DN-9001" counts things *inside* one document, which is neither a record count nor a lookup. A sixth
+example would be tuning against six hand-written probes.
+
+> Lesson: a golden set scores what it contains. 21/21 means "no regression on the failures we
+> already know about", never "the feature is right". The live smoke is not a formality after the
+> eval passes - it is the only part of the loop that can find a category the eval has no question
+> for.
+
+**Two extraction results moved with no extraction code change.** "anything mentioning late payment"
+and "invoices for ACEM Corp" (a deliberate typo) both stopped producing a filter, taking
+`noFilterCorrect` from 1-of-2 to 4-of-4 and improving condition precision to 0.89. Both moves are
+improvements - abstaining is the right answer for a free-text question and for a customer name that
+does not exist - but nothing in this repo caused them.
+
+Two consecutive runs on the same machine then produced **identical** numbers on every metric, and
+the second passed the gate. So determinism holds *within a machine state* and drifted *across
+weeks*: the runtime moved under us. Read §20's "temperature 0 plus a fixed seed makes runs
+identical" as a within-session guarantee, not a permanent one - which is also why the gate compares
+against a committed baseline rather than asserting exact equality.
+
+**A latency number is only meaningful with the machine state attached.** Mid-session Ollama went to
+**256 s for a 10-token reply**. Nothing in the code had changed; four orphaned JVMs and six orphaned
+containers from killed eval runs had taken the box to 2.9 GB free with 1.5 GB in memory
+compression, and the model was being paged. After cleanup the same call took 3.5 s - a 70x swing
+from housekeeping. Every latency figure in this document is from a quiet machine.
+
+### The aggregate route: never let the model hold the number
+
+`RecordCountRepository` reuses `DocFilter.groupClause` and `FilterSql.render`, so the access-label
+predicate exists once rather than twice - a security clause that is copied is a security clause
+that will diverge. It counts `DISTINCT doc_id` because one record renders to several chunks, and
+"how many invoices" is a question about records.
+
+`AggregateAnswerer` writes the sentence in code. No model sees the number: one asked to count from
+retrieved context is guessing from a sample, and one handed the right number is just an opportunity
+to change it.
+
+**This route never widens.** Widen-on-empty is right for retrieval, where zero hits usually means
+the filter hid the answer. For a count, zero is frequently the true answer, and widening would
+replace a correct 0 with a number nobody asked for. The mitigation is to print the filter beside
+the count:
+
+```
+0 invoice records match where values.customer = ACEM Corp.
+```
+
+A typo is now visible as a typo instead of reading as "we have none of those".
+
+---
+
 ## Where to go next
 `docs/ROADMAP.md` lists what's built and what's queued - notably **condense-question retrieval**
 (fixes vague follow-ups), snippet windowing, and token-budget history trimming. Each is a small

@@ -17,20 +17,26 @@ questions:
 - overdue invoices for Umbrella SA in February 2026
 - invoices where the minimum extraction confidence is at least 0.7
 - shipments carried by NordCargo weighing more than 20 kg
+- hi
+- what can you do
+- how many invoices for ACME Corp
+- how many overdue invoices are there
+- how many delivery notes are there
+- how many contracts with Initech
 extraction:
-  conditionPrecision: 0.813
-  conditionRecall: 0.867
+  conditionPrecision: 0.889
+  conditionRecall: 0.889
   docTypeAccuracy: 1.0
-  noFilterCorrect: 1
+  noFilterCorrect: 4
 retrieval:
+  without-extraction:
+    recall5: 0.571
+    mrr: 0.464
+    hit1: 0.357
   with-extraction:
     recall5: 1.0
     mrr: 1.0
     hit1: 1.0
-  without-extraction:
-    recall5: 0.636
-    mrr: 0.53
-    hit1: 0.455
 filtered:
 - invoices for ACME Corp
 - unpaid invoices for GLOBEX Ltd
@@ -41,8 +47,36 @@ filtered:
 - what delivery notes do we have
 - contracts with Initech
 - contracts longer than 12 months
-- anything mentioning late payment
 - invoices for ACEM Corp
 - overdue invoices for Umbrella SA in February 2026
 - invoices where the minimum extraction confidence is at least 0.7
 - shipments carried by NordCargo weighing more than 20 kg
+- how many invoices for ACME Corp
+- how many overdue invoices are there
+- how many delivery notes are there
+- how many contracts with Initech
+routes:
+- search
+- search
+- search
+- search
+- search
+- search
+- search
+- search
+- search
+- search
+- search
+- search
+- search
+- search
+- search
+- chitchat
+- chitchat
+- aggregate
+- aggregate
+- aggregate
+- aggregate
+routing:
+  routeAccuracy: 1.0
+  aggregateCountCorrect: 4

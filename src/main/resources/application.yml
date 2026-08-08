@@ -50,6 +50,10 @@ app:
     facet-samples: 5
     facet-ttl-seconds: 300
     max-value-length: 200
+  route:
+    enabled: true
+    model: ""              # empty = app.chat.model. Point at a small model to tier (RAG-MASTERY 8)
+    num-predict: 32        # the reply is one word; anything longer is leaked reasoning
   ollama:
     base-url: http://localhost:11434
   qdrant:

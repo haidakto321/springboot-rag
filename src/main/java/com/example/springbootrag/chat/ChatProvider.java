@@ -1,6 +1,7 @@
 package com.example.springbootrag.chat;
 
 import java.util.List;
+import java.util.Map;
 import java.util.function.Consumer;
 
 /** Generates one assistant reply from a system + user prompt pair. Ollama now, Azure swap later. */
@@ -29,8 +30,30 @@ public interface ChatProvider {
      * @param model       model name, or null/blank for the configured one
      * @param temperature 0 for a deterministic structured answer, null for the provider default
      * @param seed        fixes sampling so the same prompt gives the same answer
+     * @param think       null keeps the provider default (think:true). false is for calls whose
+     *                    output is a fixed vocabulary, where reasoning tokens are pure latency and
+     *                    chain-of-thought leaking into content cannot break the parse
+     * @param numPredict  hard cap on generated tokens, null for uncapped
+     * @param responseSchema JSON Schema the reply must conform to, null for free text. This is the
+     *                    only reliable way to stop a reasoning model prefacing a short structured
+     *                    answer with its chain of thought - measured on qwen3:4b, an unconstrained
+     *                    one-word classification spent its whole token budget restating the
+     *                    question and never reached an answer
      */
-    record Options(String model, Double temperature, Integer seed) {}
+    record Options(String model, Double temperature, Integer seed, Boolean think, Integer numPredict,
+                   Map<String, Object> responseSchema) {
+
+        /** Pre-routing callers: provider defaults for thinking and output length. */
+        public Options(String model, Double temperature, Integer seed) {
+            this(model, temperature, seed, null, null, null);
+        }
+
+        /** Free-text reply, with explicit thinking and length control. */
+        public Options(String model, Double temperature, Integer seed, Boolean think,
+                       Integer numPredict) {
+            this(model, temperature, seed, think, numPredict, null);
+        }
+    }
 
     default String chat(String systemPrompt, String userPrompt, Options options) {
         return chat(systemPrompt, userPrompt);

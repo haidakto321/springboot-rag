@@ -25,7 +25,10 @@ public final class RecordGoldenSet {
                         (String) m.get("expectedDocType"),
                         (List<Map<String, Object>>) m.getOrDefault("expectedFilters", List.of()),
                         Boolean.TRUE.equals(m.get("expectNoFilter")),
-                        Boolean.TRUE.equals(m.get("expectWiden"))));
+                        Boolean.TRUE.equals(m.get("expectWiden")),
+                        // Omitted means search: the route every question took before routing
+                        // existed, so an un-annotated golden entry keeps its old meaning.
+                        (String) m.getOrDefault("expectedRoute", "search")));
             }
             return out;
         } catch (Exception e) {
