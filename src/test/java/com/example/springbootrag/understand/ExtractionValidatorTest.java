@@ -104,6 +104,37 @@ class ExtractionValidatorTest {
     }
 
     @Test
+    void movesAnInListFromValueToValues() {
+        // What qwen3:4b returns for "invoices that are open or overdue" - measured. MetadataFilter
+        // rejects it as an empty values list, though the intent is unambiguous.
+        ExtractionValidator.Result r = ExtractionValidator.validate("""
+                {"filters":[{"path":"values.status","op":"in","value":["open","overdue"]}]}""",
+                List.of(new Facet("invoice", "values.status", "text", List.of("open"), 3)), 4, 200);
+
+        assertThat(r.filter().conditions()).hasSize(1);
+        assertThat(r.filter().conditions().get(0).values()).containsExactly("open", "overdue");
+        assertThat(r.filter().conditions().get(0).value()).isNull();
+    }
+
+    @Test
+    void anExplicitValuesListWinsOverAValueArray() {
+        ExtractionValidator.Result r = ExtractionValidator.validate("""
+                {"filters":[{"path":"values.status","op":"in",
+                             "value":["ignored"],"values":["open"]}]}""",
+                List.of(new Facet("invoice", "values.status", "text", List.of("open"), 3)), 4, 200);
+
+        assertThat(r.filter().conditions().get(0).values()).containsExactly("open");
+    }
+
+    @Test
+    void anInWithASingleScalarValueIsStillDropped() {
+        // Not a list, so there is no unambiguous intent to honour.
+        assertThat(validate("""
+                {"filters":[{"path":"values.customer","op":"in","value":"ACME Corp"}]}""")
+                .filter().conditions()).isEmpty();
+    }
+
+    @Test
     void aBareComparisonOpWithNoBoundIsStillDropped() {
         assertThat(validate("""
                 {"filters":[{"path":"values.total","op":"gt"}]}""")

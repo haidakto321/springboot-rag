@@ -58,6 +58,28 @@ class QueryUnderstandingPromptTest {
     }
 
     @Test
+    void theInExampleIsShown() {
+        // Measured: without it, "open or overdue" came back as {"op":"in","value":[...]}.
+        assertThat(QueryUnderstanding.buildPrompt(FACETS))
+                .contains("\"op\": \"in\", \"values\": [\"open\", \"overdue\"]");
+    }
+
+    @Test
+    void confPathsGetTheirMeaningExplained() {
+        // conf.* is computed at ingest, so its meaning appears nowhere in the data.
+        List<Facet> withConf = new java.util.ArrayList<>(FACETS);
+        withConf.add(new Facet("invoice", "conf.min", "number", List.of("0.44"), 20));
+
+        assertThat(QueryUnderstanding.buildPrompt(withConf))
+                .contains("conf.min is the LEAST confident field");
+    }
+
+    @Test
+    void theConfNoteIsAbsentWhenNoConfFacetExists() {
+        assertThat(QueryUnderstanding.buildPrompt(FACETS)).doesNotContain("About conf.*");
+    }
+
+    @Test
     void sampleValuesReachTheModel() {
         assertThat(QueryUnderstanding.buildPrompt(FACETS))
                 .contains("ACME Corp").contains("GLOBEX Ltd").contains("NordCargo");

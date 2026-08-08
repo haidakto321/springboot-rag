@@ -16,6 +16,23 @@ public interface ChatProvider {
      * provider that cannot switch models per call stays valid and simply uses its configured one.
      */
     default String chat(String systemPrompt, String userPrompt, String model) {
+        return chat(systemPrompt, userPrompt, new Options(model, null, null));
+    }
+
+    /**
+     * Per-call generation settings.
+     *
+     * <p>Every field is optional; null means "leave the provider's default alone". The default
+     * implementation ignores all of them, so a provider that cannot vary settings per call stays
+     * valid.
+     *
+     * @param model       model name, or null/blank for the configured one
+     * @param temperature 0 for a deterministic structured answer, null for the provider default
+     * @param seed        fixes sampling so the same prompt gives the same answer
+     */
+    record Options(String model, Double temperature, Integer seed) {}
+
+    default String chat(String systemPrompt, String userPrompt, Options options) {
         return chat(systemPrompt, userPrompt);
     }
 

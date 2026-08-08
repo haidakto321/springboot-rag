@@ -74,6 +74,34 @@ class OllamaChatProviderTest {
     }
 
     @Test
+    void temperatureAndSeedAreSentUnderOptions() throws Exception {
+        server.enqueue(new MockResponse()
+                .setHeader("Content-Type", "application/json")
+                .setBody("""
+                        {"message": {"role": "assistant", "content": "{}"}}
+                        """));
+
+        provider.chat("system", "user", new ChatProvider.Options("m", 0.0, 42));
+
+        String body = server.takeRequest().getBody().readUtf8();
+        assertThat(body).contains("\"options\"").contains("\"temperature\":0.0").contains("\"seed\":42");
+    }
+
+    @Test
+    void noGenerationSettingsMeansNoOptionsBlockAtAll() throws Exception {
+        // An ordinary answer must keep the model's own defaults, not silently get temperature 0.
+        server.enqueue(new MockResponse()
+                .setHeader("Content-Type", "application/json")
+                .setBody("""
+                        {"message": {"role": "assistant", "content": "hi"}}
+                        """));
+
+        provider.chat("system", "user");
+
+        assertThat(server.takeRequest().getBody().readUtf8()).doesNotContain("\"options\"");
+    }
+
+    @Test
     void aBlankModelFallsBackToTheConfiguredOne() throws Exception {
         server.enqueue(new MockResponse()
                 .setHeader("Content-Type", "application/json")

@@ -99,7 +99,21 @@ public final class ExtractionValidator {
      */
     private static ObjectNode normalizeOp(ObjectNode condition) {
         String op = condition.hasNonNull("op") ? condition.get("op").asText() : null;
-        if (op == null || !BARE_BOUNDS.contains(op)) {
+        if (op == null) {
+            return condition;
+        }
+        // "in" with the list under "value" instead of "values". Measured: qwen3:4b returns
+        // {"op":"in","value":["open","overdue"]} for "open or overdue", which MetadataFilter
+        // rejects as an empty values list. The intent is unambiguous, so honour it.
+        if ("in".equals(op)) {
+            JsonNode value = condition.get("value");
+            if (value != null && value.isArray() && !condition.has("values")) {
+                condition.set("values", value);
+                condition.remove("value");
+            }
+            return condition;
+        }
+        if (!BARE_BOUNDS.contains(op)) {
             return condition;
         }
         JsonNode bound = condition.get("value");

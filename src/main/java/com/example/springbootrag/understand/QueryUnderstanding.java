@@ -23,6 +23,17 @@ public class QueryUnderstanding {
 
     private static final Logger log = LoggerFactory.getLogger(QueryUnderstanding.class);
 
+    /**
+     * Extraction runs at temperature 0 with a fixed seed.
+     *
+     * <p>This is not a test convenience. Turning a question into a filter is a structured decision
+     * with a right answer, and sampling makes the same question narrow the corpus differently on
+     * two consecutive asks - which a user experiences as the search being broken. Measured on the
+     * records eval: two identical runs moved condition recall by 0.13, enough to fail a regression
+     * gate on its own noise.
+     */
+    static final int EXTRACTION_SEED = 42;
+
     /** What extraction produced, plus what it cost and what was thrown away. */
     public record Extraction(MetadataFilter filter, long latencyMs, List<String> dropped) {
         public static Extraction none() {
@@ -53,7 +64,8 @@ public class QueryUnderstanding {
         }
         long start = System.nanoTime();
         try {
-            String reply = chat.chat(buildPrompt(facets), question, model());
+            String reply = chat.chat(buildPrompt(facets), question,
+                    new ChatProvider.Options(model(), 0.0, EXTRACTION_SEED));
             ExtractionValidator.Result result = ExtractionValidator.validate(
                     reply, facets, props.getMaxConditions(), props.getMaxValueLength());
             return new Extraction(result.filter(), msSince(start), result.dropped());
@@ -95,6 +107,9 @@ public class QueryUnderstanding {
                 {"docType": "invoice",
                  "filters": [{"path": "values.customer", "op": "eq", "value": "ACME Corp"}]}
 
+                For "X or Y" use one "in" filter with a "values" list:
+                {"filters": [{"path": "values.status", "op": "in", "values": ["open", "overdue"]}]}
+
                 Rules:
                 - A "path" must be copied EXACTLY from a "path:" entry below - it always starts with
                   "values." or "conf.". Never include the document type in it. Never invent one.
@@ -125,6 +140,18 @@ public class QueryUnderstanding {
                 sb.append('\n');
             }
         });
+        // The conf.* paths are computed at ingest, so their meaning is nowhere in the data and the
+        // model cannot infer it from a name and two samples. Measured: asked for "high confidence"
+        // it guessed conf.avg, which is defensible but not what a threshold question usually means.
+        if (facets.stream().anyMatch(f -> f.path().startsWith("conf."))) {
+            sb.append("""
+
+                    About conf.*: these are the extraction pipeline's own confidence in the record,
+                    from 0 to 1. conf.min is the LEAST confident field, conf.avg the average. For
+                    "high confidence" or "reliable" data, prefer conf.min with a range filter -
+                    a record is only as trustworthy as its weakest extracted field.
+                    """);
+        }
         return sb.toString();
     }
 

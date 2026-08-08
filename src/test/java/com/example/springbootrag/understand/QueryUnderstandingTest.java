@@ -26,6 +26,7 @@ class QueryUnderstandingTest {
     private static class StubChat implements ChatProvider {
         String lastSystem;
         String lastUser;
+        Options lastOptions;
         Function<String, String> reply = q -> "{}";
         RuntimeException boom;
 
@@ -34,6 +35,11 @@ class QueryUnderstandingTest {
             lastUser = userPrompt;
             if (boom != null) throw boom;
             return reply.apply(userPrompt);
+        }
+
+        @Override public String chat(String systemPrompt, String userPrompt, Options options) {
+            lastOptions = options;
+            return chat(systemPrompt, userPrompt);
         }
     }
 
@@ -105,6 +111,18 @@ class QueryUnderstandingTest {
 
         assertThat(extraction.filter().isEmpty()).isTrue();
         assertThat(chat.lastUser).isNull();
+    }
+
+    @Test
+    void extractionIsAskedForDeterministically() {
+        // The same question must narrow the corpus the same way twice. Measured: sampling moved
+        // condition recall by 0.13 between two identical eval runs.
+        StubChat chat = new StubChat();
+        service(chat, true).extract(TestContexts.PUBLIC, List.of(1L), "invoices for ACME");
+
+        assertThat(chat.lastOptions).isNotNull();
+        assertThat(chat.lastOptions.temperature()).isEqualTo(0.0);
+        assertThat(chat.lastOptions.seed()).isNotNull();
     }
 
     @Test

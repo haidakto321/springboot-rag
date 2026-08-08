@@ -48,28 +48,37 @@ public class OllamaChatProvider implements ChatProvider {
 
     /** Model tiering: a blank name means "whatever app.chat.model says". */
     @Override
-    public String chat(String systemPrompt, String userPrompt, String model) {
-        return chatDetailed(systemPrompt, userPrompt,
-                model == null || model.isBlank() ? props.getModel() : model).content();
+    public String chat(String systemPrompt, String userPrompt, Options options) {
+        return chatDetailed(systemPrompt, userPrompt, options).content();
     }
 
     @Override
     public ChatReply chatDetailed(String systemPrompt, String userPrompt) {
-        return chatDetailed(systemPrompt, userPrompt, props.getModel());
+        return chatDetailed(systemPrompt, userPrompt, new Options(null, null, null));
     }
 
-    private ChatReply chatDetailed(String systemPrompt, String userPrompt, String model) {
+    private ChatReply chatDetailed(String systemPrompt, String userPrompt, Options options) {
+        String model = options.model() == null || options.model().isBlank()
+                ? props.getModel() : options.model();
+        Map<String, Object> body = new java.util.LinkedHashMap<>(Map.of(
+                "model", model,
+                "stream", false,
+                "think", true,
+                "messages", List.of(
+                        Map.of("role", "system", "content", systemPrompt),
+                        Map.of("role", "user", "content", userPrompt))));
+        // Ollama takes generation settings under "options"; omitted entirely when the caller has no
+        // opinion, so the model's own defaults still apply to ordinary answers.
+        Map<String, Object> generation = new java.util.LinkedHashMap<>();
+        if (options.temperature() != null) generation.put("temperature", options.temperature());
+        if (options.seed() != null) generation.put("seed", options.seed());
+        if (!generation.isEmpty()) body.put("options", generation);
+
         ChatResponse resp;
         try {
             resp = client.post()
                     .uri("/api/chat")
-                    .body(Map.of(
-                            "model", model,
-                            "stream", false,
-                            "think", true,
-                            "messages", List.of(
-                                    Map.of("role", "system", "content", systemPrompt),
-                                    Map.of("role", "user", "content", userPrompt))))
+                    .body(body)
                     .retrieve()
                     .body(ChatResponse.class);
         } catch (RestClientResponseException e) {
