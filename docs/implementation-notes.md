@@ -1623,3 +1623,30 @@ state has never been looked at in a browser.
 One trap worth repeating: the first smoke attempt started on :8088, failed with "Port 8088 was
 already in use", and something DID answer there - a VS Code extension's JVM. Confirm the process on
 the port is the one you just started before believing any smoke result.
+
+### Live verification, completed 2026-08-11 (second attempt)
+
+The `verifying` frame was checked on a real stream, which the first attempt never reached. Frame
+order on the search route, against the live stack:
+
+```
+route -> verifying -> token -> sources -> trace -> done
+```
+
+The answer came back cited (`... returns "all backends side by side (scores + timing) ..." [1]`),
+so the guard passed and no `guard` frame was emitted. That is Task 8's server side verified. The
+browser-side "Checking sources" state has still never been looked at by a human.
+
+Two things worth carrying forward from that run.
+
+**A router miss the gate cannot see.** `what is chunking` routed to **chitchat** and was answered
+with the canned reply; `what is chunking and why does it matter` and `what is RRF` both routed to
+search. Recorded in `ROADMAP.md`. Nothing in this change touched routing - it is a pre-existing gap
+that only a live question could surface, exactly like the `INV-5575` miss on 2026-08-08.
+
+**The machine was starved and the probes stopped being trustworthy.** Firing five stream requests
+in a loop and reading only the first frame of each left their generations running; free memory fell
+to **829 MB of 16 GB**, and a call that had returned its route frame in ~1.4s stopped returning
+anything within 60 seconds (`curl exit=28`, zero bytes). `LEARNINGS.md` §21 already records the
+3.5s-vs-256s version of this. The practical rule: one live probe at a time, and check free memory
+before believing any timing.

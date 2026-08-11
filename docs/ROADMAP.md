@@ -151,6 +151,24 @@ The existing whole-answer 👍/👎 (localStorage-only) stays; this adds a per-s
 
 ## Planned (not yet built)
 
+### Router: a bare "what is X" can land in chitchat
+Found by live smoke on 2026-08-11, not by the gate. `what is chunking` was routed **chitchat** and
+answered with the canned reply, while `what is chunking and why does it matter` and `what is RRF`
+both routed **search** on the same corpus and model. The shape that fails looks like a short
+definition question whose subject is one ordinary English noun - it reads as small talk to the
+classifier, and the prompt's chitchat rule ("ONLY a greeting, thanks, or a question about you")
+does not exclude it explicitly.
+
+Status: observed once per question, on a machine that was memory-starved at the time (829 MB free),
+so latency was unusable and the repeat probes timed out before returning. The router is temperature
+0 with a fixed seed, so the routing decision itself is deterministic and the observation stands -
+but **reproduce it on a quiet machine before changing the prompt**, and remember that any prompt
+change means regenerating `baseline-records.yaml`.
+
+This is the same lesson as the 2026-08-08 `what is the total on invoice INV-5575` miss, which is
+already recorded in `QueryRouter`'s javadoc: routing scored 21/21 on the golden set and 9/9 on
+held-out questions, and neither set contained this category. A golden set scores what it contains.
+
 ### Quarantine release: a privilege gate and an audit row
 Built 2026-08-11, and left open on purpose. `POST /projects/{id}/quarantine/{docId}/release` is
 scoped to the caller's groups and nothing more, so any authenticated user in `public` can undo the
