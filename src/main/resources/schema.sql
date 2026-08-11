@@ -236,3 +236,23 @@ ALTER TABLE rag_trace ADD COLUMN IF NOT EXISTS filter_widened BOOLEAN NOT NULL D
 -- because rows get filtered by it ("every question that took the aggregate path"). Route LATENCY
 -- stays inside stage_latency_ms, which is JSONB precisely so a new stage needs no migration.
 ALTER TABLE rag_trace ADD COLUMN IF NOT EXISTS route VARCHAR(16);
+
+-- ---- Quarantine holding pen (2026-08-11) ----
+-- A document whose text tripped SecretScanner is stored HERE and never in chunks. The alternative
+-- - index it and mark it hidden - would need a new predicate inside all six retrieval backends,
+-- the rerank over-fetch, graph expansion, and the Qdrant payload filter, and every one of those is
+-- a place to forget it. Not indexed needs no predicate anywhere.
+-- allowed_groups is captured at hold time so a release re-ingests under the labels the original
+-- call carried, and so the pen itself is readable only by a caller in those groups.
+CREATE TABLE IF NOT EXISTS quarantine (
+    project_id     BIGINT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+    doc_id         VARCHAR(255) NOT NULL,
+    origin         VARCHAR(32) NOT NULL,          -- 'upload' | 'record'
+    source_file    VARCHAR(512),
+    doc_type       VARCHAR(128),
+    raw_text       TEXT NOT NULL,                 -- upload: the markdown. record: the raw JSON.
+    findings       JSONB NOT NULL,                -- [{rule, label, excerpt}], excerpts masked
+    allowed_groups TEXT[] NOT NULL,
+    created_at     TIMESTAMPTZ NOT NULL DEFAULT now(),
+    PRIMARY KEY (project_id, doc_id)
+);

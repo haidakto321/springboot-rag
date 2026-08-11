@@ -4,8 +4,11 @@ import com.example.springbootrag.chunk.Chunk;
 import com.example.springbootrag.chunk.MarkdownChunker;
 import com.example.springbootrag.chunk.WordWindowChunker;
 import com.example.springbootrag.config.GraphProperties;
+import com.example.springbootrag.config.GuardProperties;
 import com.example.springbootrag.embedding.EmbeddingProvider;
 import com.example.springbootrag.graph.EntityExtractor;
+import com.example.springbootrag.guard.QuarantineRequiredException;
+import com.example.springbootrag.guard.SecretScanner;
 import com.example.springbootrag.graph.ExtractedGraph;
 import com.example.springbootrag.graph.WikiLinkParser;
 import com.example.springbootrag.repository.DocEdgeRepository;
@@ -36,6 +39,7 @@ public class IngestService {
     private final GraphProperties graphProps;
     private final SecurityProperties securityProps;
     private final DocumentRegistry documentRegistry;
+    private final GuardProperties guard;
     // Hard ceiling per chunk so an atomic table/code block can never exceed the embedding
     // model's context window (nomic-embed-text runs at ~2048 tokens under Ollama). Dense
     // tables (IDs, numbers, pipes) tokenize near 1 char/token, so 2000 chars stays under
@@ -54,7 +58,8 @@ public class IngestService {
                          EntityRepository entityRepo,
                          GraphProperties graphProps,
                          SecurityProperties securityProps,
-                         DocumentRegistry documentRegistry) {
+                         DocumentRegistry documentRegistry,
+                         GuardProperties guard) {
         this.embeddings = embeddings;
         this.pgVector = pgVector;
         this.qdrant = qdrant;
@@ -65,6 +70,7 @@ public class IngestService {
         this.graphProps = graphProps;
         this.securityProps = securityProps;
         this.documentRegistry = documentRegistry;
+        this.guard = guard;
     }
 
     // ---- Legacy wrappers (resolve default project) ----------------------------------------
@@ -109,8 +115,16 @@ public class IngestService {
      */
     public int ingestMarkdown(long projectId, String docId, String sourceFile,
                               String markdownText, Instant updatedAt, List<String> allowedGroups) {
+        return ingestMarkdown(projectId, docId, sourceFile, markdownText, updatedAt, allowedGroups,
+                true);
+    }
+
+    /** {@code scanForSecrets} is false only for a release from quarantine - see the funnel below. */
+    public int ingestMarkdown(long projectId, String docId, String sourceFile,
+                              String markdownText, Instant updatedAt, List<String> allowedGroups,
+                              boolean scanForSecrets) {
         int stored = ingestChunks(projectId, docId, sourceFile, markdown.chunk(markdownText),
-                updatedAt, allowedGroups);
+                updatedAt, allowedGroups, null, null, scanForSecrets);
         // Structural edges: one 'link' edge per outbound cross-page reference.
         for (String dst : linkParser.outboundDocIds(markdownText)) {
             docEdges.insertLink(projectId, docId, dst);
@@ -150,8 +164,32 @@ public class IngestService {
     public int ingestChunks(long projectId, String docId, String sourceFile, List<Chunk> chunks,
                             Instant updatedAt, List<String> allowedGroups,
                             String docType, List<String> perChunkMetadataJson) {
+        return ingestChunks(projectId, docId, sourceFile, chunks, updatedAt, allowedGroups,
+                docType, perChunkMetadataJson, true);
+    }
+
+    /**
+     * The single funnel every ingest path crosses, and therefore where the credential scan belongs.
+     *
+     * <p>{@code scanForSecrets} is false only for a release from quarantine: re-running the rule
+     * that held the document would refuse the exact document a human just decided to accept.
+     *
+     * @throws com.example.springbootrag.guard.QuarantineRequiredException when the text carries a
+     *         credential. Callers that hold the document's original form catch it and store it;
+     *         callers that do not, fail loudly rather than indexing a secret.
+     */
+    public int ingestChunks(long projectId, String docId, String sourceFile, List<Chunk> chunks,
+                            Instant updatedAt, List<String> allowedGroups,
+                            String docType, List<String> perChunkMetadataJson,
+                            boolean scanForSecrets) {
         if (docId == null || docId.isBlank()) {
             throw new IllegalArgumentException("docId is required");
+        }
+        if (scanForSecrets && guard.getQuarantine().isEnabled()) {
+            List<SecretScanner.Finding> findings = SecretScanner.scan(joinedText(chunks));
+            if (!findings.isEmpty()) {
+                throw new QuarantineRequiredException(docId, findings);
+            }
         }
         List<String> groups = resolveGroups(allowedGroups);
         chunks = capToBudget(chunks);
@@ -177,6 +215,15 @@ public class IngestService {
             }
         }
         return chunks.size();
+    }
+
+    /** Everything that is about to be embedded, as one string for the scanner. */
+    private static String joinedText(List<Chunk> chunks) {
+        StringBuilder sb = new StringBuilder();
+        for (Chunk c : chunks) {
+            sb.append(c.text()).append('\n');
+        }
+        return sb.toString();
     }
 
     /**

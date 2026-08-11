@@ -1,11 +1,13 @@
 package com.example.springbootrag.web;
 
 import com.example.springbootrag.guard.InjectionScanner;
+import com.example.springbootrag.guard.QuarantineRequiredException;
 import com.example.springbootrag.model.DocumentSummary;
 import com.example.springbootrag.repository.PgVectorRepository;
 import com.example.springbootrag.security.CurrentUser;
 import com.example.springbootrag.service.IngestService;
 import com.example.springbootrag.service.ProjectService;
+import com.example.springbootrag.service.QuarantineService;
 import com.example.springbootrag.web.dto.ChunkView;
 import com.example.springbootrag.web.dto.IngestResponse;
 import org.slf4j.Logger;
@@ -32,15 +34,18 @@ public class DocumentController {
     private final PgVectorRepository pgVector;
     private final ProjectService projectService;
     private final CurrentUser currentUser;
+    private final QuarantineService quarantineService;
 
     public DocumentController(IngestService ingestService,
                               PgVectorRepository pgVector,
                               ProjectService projectService,
-                              CurrentUser currentUser) {
+                              CurrentUser currentUser,
+                              QuarantineService quarantineService) {
         this.ingestService = ingestService;
         this.pgVector = pgVector;
         this.projectService = projectService;
         this.currentUser = currentUser;
+        this.quarantineService = quarantineService;
     }
 
     // ---- Legacy endpoints (scoped to Default project) ------------------------------------
@@ -50,9 +55,7 @@ public class DocumentController {
                                  @RequestParam(required = false) List<String> groups) {
         currentUser.requireOwnGroups(groups);
         UploadResult u = parseUpload(file);
-        int stored = ingestService.ingestMarkdown(projectService.defaultProjectId(),
-                u.docId(), u.sourceFile(), u.text(), null, groups);
-        return new IngestResponse(u.docId(), stored, scanForInjection(u));
+        return ingestOrHold(projectService.defaultProjectId(), u, groups);
     }
 
     @GetMapping("/documents")
@@ -84,8 +87,7 @@ public class DocumentController {
         if (!projectService.exists(projectId)) throw new IllegalArgumentException("project not found: " + projectId);
         currentUser.requireOwnGroups(groups);
         UploadResult u = parseUpload(file);
-        int stored = ingestService.ingestMarkdown(projectId, u.docId(), u.sourceFile(), u.text(), null, groups);
-        return new IngestResponse(u.docId(), stored, scanForInjection(u));
+        return ingestOrHold(projectId, u, groups);
     }
 
     @GetMapping("/projects/{projectId}/documents")
@@ -130,6 +132,26 @@ public class DocumentController {
      * legitimate pages about prompt injection, so refusing the upload would be wrong - but the
      * moment of upload is the one moment a human is looking at this document.
      */
+    /**
+     * Ingests, or holds the document when the ingest funnel refuses it.
+     *
+     * <p>The scan itself lives in {@link IngestService}, not here. It was in this class first, and
+     * a review found two other paths to the index - {@code POST /ingest} and the wiki importer -
+     * that never met it. What this method contributes is the one thing the funnel cannot know:
+     * the document's original text, which is what a release has to re-ingest.
+     */
+    private IngestResponse ingestOrHold(long projectId, UploadResult u, List<String> groups) {
+        try {
+            int stored = ingestService.ingestMarkdown(projectId, u.docId(), u.sourceFile(),
+                    u.text(), null, groups);
+            return new IngestResponse(u.docId(), stored, scanForInjection(u));
+        } catch (QuarantineRequiredException e) {
+            quarantineService.hold(projectId, u.docId(), "upload", u.sourceFile(), null,
+                    u.text(), groups, e.findings());
+            return new IngestResponse(u.docId(), 0, List.of(), true, e.findings());
+        }
+    }
+
     private List<String> scanForInjection(UploadResult u) {
         List<String> warnings = InjectionScanner.scan(u.text());
         if (!warnings.isEmpty()) {

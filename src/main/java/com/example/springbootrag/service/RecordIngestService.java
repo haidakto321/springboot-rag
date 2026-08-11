@@ -2,7 +2,9 @@ package com.example.springbootrag.service;
 
 import com.example.springbootrag.chunk.Chunk;
 import com.example.springbootrag.config.EmbeddingProperties;
+import com.example.springbootrag.config.GuardProperties;
 import com.example.springbootrag.guard.InjectionScanner;
+import com.example.springbootrag.guard.SecretScanner;
 import com.example.springbootrag.record.RecordHash;
 import com.example.springbootrag.record.RecordRenderer;
 import com.example.springbootrag.record.RenderProfile;
@@ -13,6 +15,7 @@ import com.example.springbootrag.repository.ProfileRepository;
 import com.example.springbootrag.repository.QdrantRepository;
 import com.example.springbootrag.web.dto.RecordRequest;
 import com.example.springbootrag.web.dto.RecordResponse;
+import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import org.springframework.stereotype.Service;
 
@@ -43,19 +46,38 @@ public class RecordIngestService {
     private final PgVectorRepository pgVector;
     private final QdrantRepository qdrant;
     private final EmbeddingProperties embeddingProps;
+    private final QuarantineService quarantine;
+    private final GuardProperties guard;
 
     public RecordIngestService(IngestService ingest, DocumentRegistry registry,
                                ProfileRepository profiles, PgVectorRepository pgVector,
-                               QdrantRepository qdrant, EmbeddingProperties embeddingProps) {
+                               QdrantRepository qdrant, EmbeddingProperties embeddingProps,
+                               QuarantineService quarantine, GuardProperties guard) {
         this.ingest = ingest;
         this.registry = registry;
         this.profiles = profiles;
         this.pgVector = pgVector;
         this.qdrant = qdrant;
         this.embeddingProps = embeddingProps;
+        this.quarantine = quarantine;
+        this.guard = guard;
     }
 
     public RecordResponse ingest(long projectId, RecordRequest req) {
+        return ingest(projectId, req, true);
+    }
+
+    /**
+     * Ingest of a record a human has released from quarantine: identical, minus the scan.
+     *
+     * <p>Re-running the rule that held it would refuse the exact document someone just decided to
+     * accept. The human decision IS the override, and it is recorded by the row leaving the pen.
+     */
+    public RecordResponse ingestReleased(long projectId, RecordRequest req) {
+        return ingest(projectId, req, false);
+    }
+
+    private RecordResponse ingest(long projectId, RecordRequest req, boolean scan) {
         validate(req);
 
         Optional<ProfileRepository.StoredProfile> stored = profiles.find(projectId, req.docType());
@@ -67,6 +89,16 @@ public class RecordIngestService {
             // Storing nothing silently is the failure that gets discovered a month later.
             throw new IllegalArgumentException(
                     "record rendered to no text - every field was empty, excluded, or filter-only");
+        }
+
+        // BEFORE the hash comparison below, deliberately. A record whose rendered text is unchanged
+        // but which is now known to carry a credential must still be held: a 'skipped' short-circuit
+        // would leave the indexed copy in place forever.
+        if (scan) {
+            RecordResponse quarantined = quarantineIfSecret(projectId, req, blocks);
+            if (quarantined != null) {
+                return quarantined;
+            }
         }
 
         String contentHash = RecordHash.ofBlocks(blocks);
@@ -99,7 +131,7 @@ public class RecordIngestService {
         List<String> metadata = metadataFor(capped, blocks, req);
 
         int storedCount = ingest.ingestChunks(projectId, req.docId(), sourceFileOf(req), capped,
-                null, groups, req.docType(), metadata);
+                null, groups, req.docType(), metadata, scan);
 
         registry.upsert(projectId, new DocumentRegistry.Entry(
                 req.docId(), req.docType(), "record", contentHash, rawHash,
@@ -111,6 +143,33 @@ public class RecordIngestService {
     }
 
     /* ---- helpers ---- */
+
+    /**
+     * Holds the record instead of indexing it when its RENDERED text carries a credential.
+     *
+     * <p>Rendered rather than raw: rendering is what strips the confidence and grounding noise, so
+     * it is the text that would actually be embedded and retrieved. The raw record is what gets
+     * stored in the pen, because that is what a release has to re-ingest.
+     *
+     * @return the response to return, or null when the record is clean
+     */
+    private RecordResponse quarantineIfSecret(long projectId, RecordRequest req,
+                                              List<RenderedBlock> blocks) {
+        if (!guard.getQuarantine().isEnabled()) {
+            return null;
+        }
+        List<SecretScanner.Finding> findings = SecretScanner.scan(joined(blocks));
+        if (findings.isEmpty()) {
+            return null;
+        }
+        try {
+            quarantine.hold(projectId, req.docId(), "record", sourceFileOf(req), req.docType(),
+                    MAPPER.writeValueAsString(req.record()), req.groups(), findings);
+        } catch (JsonProcessingException e) {
+            throw new IllegalStateException("could not serialise quarantine row: " + req.docId(), e);
+        }
+        return new RecordResponse(req.docId(), 0, "quarantined", List.of(), findings);
+    }
 
     private static void validate(RecordRequest req) {
         if (req == null) {

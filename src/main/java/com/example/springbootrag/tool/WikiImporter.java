@@ -19,10 +19,22 @@ public class WikiImporter {
 
     private final IngestService ingest;
     private final DocEdgeRepository docEdges;
+    private final com.example.springbootrag.service.QuarantineService quarantine;
 
-    public WikiImporter(IngestService ingest, DocEdgeRepository docEdges) {
+    public WikiImporter(IngestService ingest, DocEdgeRepository docEdges,
+                        com.example.springbootrag.service.QuarantineService quarantine) {
         this.ingest = ingest;
         this.docEdges = docEdges;
+        this.quarantine = quarantine;
+    }
+
+    /** Best effort: the page was readable a moment ago, and a hold must not fail on a re-read. */
+    private static String safeRead(Path page) {
+        try {
+            return Files.readString(page, StandardCharsets.UTF_8);
+        } catch (Exception e) {
+            return "";
+        }
     }
 
     /** Called during import so callers can report live progress. */
@@ -78,6 +90,13 @@ public class WikiImporter {
                     }
                     count++;
                     listener.onPage(index, total, docId);
+                } catch (com.example.springbootrag.guard.QuarantineRequiredException e) {
+                    // Bulk import is the path most likely to meet a real credential - a runbook
+                    // page with a production password. Hold it rather than reporting a generic
+                    // failure, so it is visible in the pen and one call from being released.
+                    quarantine.hold(projectId, docId, "upload", page.getFileName().toString(), null,
+                            safeRead(page), allowedGroups, e.findings());
+                    listener.onError(index, total, docId, e);
                 } catch (Exception e) {
                     // One bad page must not abort a bulk import; skip it and report.
                     // Roll back any partial chunks written before the failure.
