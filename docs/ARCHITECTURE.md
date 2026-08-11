@@ -297,7 +297,9 @@ flowchart TB
     V3 -->|no| E400
     V3 --> SCAN["<b>InjectionScanner</b><br/>denylist → warnings (never blocks)"]
     SCAN --> CH["<b>MarkdownChunker</b><br/>split by heading, breadcrumbs kept,<br/>code blocks and tables atomic"]
-    CH --> CAP["<b>capToBudget</b><br/>hard 2000-char cap so a chunk<br/>fits nomic-embed-text's context"]
+    CH --> SEC{"<b>SecretScanner</b><br/>inside IngestService.ingestChunks,<br/>the funnel EVERY ingest path crosses"}
+    SEC -->|credential found| QUAR["<b>quarantine table</b><br/>un-index first, then hold.<br/>never reaches chunks / Qdrant / registry"]
+    SEC -->|clean| CAP["<b>capToBudget</b><br/>hard 2000-char cap so a chunk<br/>fits nomic-embed-text's context"]
     CAP --> DEL["<b>delete existing chunks</b><br/>upsert-by-(project, docId)"]
     DEL --> EMB["<b>embed each chunk</b><br/>Ollama nomic-embed-text"]
     EMB --> W1[("<b>Postgres</b><br/>chunks + allowed_groups")]
@@ -410,6 +412,11 @@ filter is a caller preference, a label is a boundary.
 | Unknown `type`, `topK` outside 1..100, blank docId, unknown group, bad rating, oversized query | `400` ProblemDetail | `GlobalExceptionHandler` |
 | Upload not `.md`, over 2 MB, or invalid UTF-8 | `400` | `DocumentController.parseUpload` |
 | Record with no docType, non-object record, or one that renders to no text | `400` | `RecordIngestService.ingest` |
+| Document carries credential-shaped text | `200` with `quarantined: true`, nothing indexed | `IngestService.ingestChunks` throws `QuarantineRequiredException`; the caller holds it via `QuarantineService` |
+| Release requested for a document you cannot read | `400` | `QuarantineController.require` - the lookup goes through your groups |
+| Streamed answer never cites a supplied chunk | nothing streamed; `AnswerGuard.REFUSAL` sent instead | `GuardedEmitter` (HOLDING state at end of stream) |
+| Streamed answer cites out of range mid-answer | stream stops after the good prefix, `guard` frame | `GuardedEmitter` (PASSING state) |
+| Groundedness judge unreachable or unparseable | answer allowed | `GroundednessJudge.judge` - a judge outage must not refuse everything |
 | Malformed filter JSON, unknown op, `range` with no bound, `in` with an empty list, illegal path segment | `400` | `MetadataFilter.parse` / `FilterSql.segments` |
 | Filter path that does not exist in any record | matches nothing (not an error - schemas differ per tenant) | `FilterSql` |
 | `date` range filter on the `qdrant` backend | `400` - Qdrant `Range` is numeric only | `FilterQdrant.numericRange` |

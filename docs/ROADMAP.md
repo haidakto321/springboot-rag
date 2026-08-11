@@ -151,6 +151,20 @@ The existing whole-answer 👍/👎 (localStorage-only) stays; this adds a per-s
 
 ## Planned (not yet built)
 
+### Quarantine release: a privilege gate and an audit row
+Built 2026-08-11, and left open on purpose. `POST /projects/{id}/quarantine/{docId}/release` is
+scoped to the caller's groups and nothing more, so any authenticated user in `public` can undo the
+system's one blocking control. The pen row is deleted on release, so who released what is
+unrecoverable afterwards. Needs a decision on both halves: a role (or a config-listed set of
+principals) that may release, and an `audit` row that survives the release. See `RAG-MASTERY.md`
+§5, the 2026-08-11 note.
+
+### Groundedness judge: measure it, then decide the default
+`app.guard.groundedness.enabled` ships `false`. The number that should decide it is the
+**false-refusal rate** - correct, grounded answers the judge calls unsupported - measured over the
+records golden set with the judge enabled. Until that run happens the feature is code nobody has
+switched on. Roughly 30 minutes of live Ollama on a quiet machine.
+
 ### CI-runnable eval gate - frozen test corpus  ✅ done for query understanding (2026-08-07)
 Goal: make the retrieval regression gate enforceable by CI instead of by developer discipline.
 

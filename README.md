@@ -167,7 +167,8 @@ Existing corpora keep working after an upgrade: `schema.sql` backfills unlabelle
 - `GET /search?q=...&type=fts|pgvector|qdrant|hybrid|rerank|graph&topK=10` - optional `projectId=<id>`, `group=true`, `docIds=a&docIds=b`, `docType=invoice`, `filters=<json>`
 - `GET /compare?q=...&topK=10` - all six backends side by side (scores + timing); same `docType` / `filters` params
 - `GET /ask?q=...` - one-shot RAG answer with citations; same `docType` / `filters` params
-- `POST /chat/stream` - streaming multi-turn RAG, NDJSON frames: `route`, `filter`, `token`, `reasoning`, `sources`, `trace`, `guard`, `done`, `error`; `docType` / `filters` in the body
+- `POST /chat/stream` - streaming multi-turn RAG, NDJSON frames: `route`, `filter`, `verifying`, `token`, `reasoning`, `sources`, `trace`, `guard`, `done`, `error`; `docType` / `filters` in the body
+  - `verifying` means tokens are being held: nothing is shown until the answer cites a supplied chunk, so an answer that never cites anything is replaced by a refusal rather than streamed and then flagged
 
 **Documents and projects**
 - `POST /projects/{id}/documents` - multipart `.md` upload; optional `groups=hr&groups=public` sets the access label
@@ -182,6 +183,11 @@ Existing corpora keep working after an upgrade: `schema.sql` backfills unlabelle
 - `PUT /projects/{id}/profiles/{docType}` - optional render profile for a document type
 - `GET /projects/{id}/profiles`, `GET /projects/{id}/profiles/{docType}`
 - `GET /projects/{id}/facets` - what can be filtered on, derived from what is actually indexed; optional `docType=`
+
+**Quarantine** (see "Credential quarantine" below)
+- `GET /projects/{id}/quarantine` - documents held back because they carry credential-shaped text; findings are masked and the raw text is never listed
+- `POST /projects/{id}/quarantine/{docId}/release` - index it anyway, under the labels the original ingest carried; the scan is deliberately not re-run
+- `DELETE /projects/{id}/quarantine/{docId}` - drop it without indexing
 
 **Feedback, traces, identity**
 - `POST /feedback` - one relevance label per `(project, doc, chunk, query)`; `DELETE /feedback` clears it; `GET /feedback?projectId&query&limit` dumps them
@@ -362,6 +368,46 @@ count query fails, the request falls back to the search path rather than failing
 An explicit `filters=` from you skips routing as well as extraction: a caller who supplied a filter
 has already said what shape of request this is. The route is recorded per request in
 `rag_trace.route`, with its latency under `stage_latency_ms.route`.
+
+## Credential quarantine (ingest-side)
+
+A document carrying credential-shaped text is **not indexed**. It goes to a `quarantine` table and
+never reaches `chunks`, Qdrant, or the `document` registry, so no retrieval backend needs to know
+about it. This is the only control for the case the 2026-08-05 injection drill exposed: a secret in
+the corpus is text the caller is allowed to read, so the answer guard has nothing to object to.
+
+```bash
+curl -u alice:alice -F "file=@policy.md" localhost:8085/projects/1/documents
+# {"docId":"policy","chunksStored":0,"warnings":[],"quarantined":true,
+#  "findings":[{"rule":"labelled-credential","label":"recovery code","excerpt":"recovery code = ***"}]}
+
+curl -u alice:alice localhost:8085/projects/1/quarantine
+curl -u alice:alice -X POST localhost:8085/projects/1/quarantine/policy/release
+```
+
+Findings carry masked excerpts - a response or a log line that reprinted the value would move the
+secret from one place it should not be into two. The scan runs inside `IngestService`, the single
+method every ingest path funnels through, so `POST /ingest` and the wiki importer are covered too.
+
+The rule is deliberately high-recall: any value after a credential keyword (`password`, `api key`,
+`recovery code`, `token`, ...) is a finding unless it is recognisably prose. Ordinary documents
+about security stay uploadable; a document that genuinely contains a credential gets held, and
+release is one call. A password that is a lowercase word ending in -ed or -ing is missed - the
+stated cost of not quarantining every sentence containing the word "token".
+
+| Key | Default | Meaning |
+|---|---|---|
+| `app.guard.quarantine.enabled` | `true` | off restores pre-feature ingest; exists for a deliberate bulk import of a corpus known to contain credential-shaped text |
+| `app.guard.groundedness.enabled` | `false` | checks that a cited answer says what the chunk it cites says; **unmeasured**, see below |
+| `app.guard.groundedness.model` | `""` | empty = `app.chat.model` |
+| `app.guard.groundedness.seed` | `42` | fixed sampling: a verdict that changes between two identical asks is not a control |
+
+`app.guard.groundedness` ships off on purpose. Refusing a good answer is a worse failure than the
+leak it addresses, because it happens on every ordinary question rather than on an attack, and its
+false-refusal rate has not been measured yet. On `/ask` it is a control; on `/chat/stream` it can
+only flag, because a claim is not decidable until it is complete.
+
+Replay the original drill with `./mvnw test "-Dgroups=eval-injection" "-DexcludedGroups="`.
 
 ## Reranking (`type=rerank`)
 `rerank` over-fetches hybrid candidates (`app.rerank.candidates`, default 50), reorders them with a

@@ -1320,6 +1320,42 @@ A typo is now visible as a typo instead of reading as "we have none of those".
 
 ---
 
+## 22. Where a control lives decides whether it holds
+
+Built 2026-08-11. Three lessons, and the first one is the only one that generalises.
+
+**A control at the callers is a control you will bypass.** The credential scan started life in the
+two ingest controllers, which is where the feature was visible. It was correct in both, fully
+tested, and useless: `POST /ingest` and `POST /projects/{id}/import-wiki` reach `chunks` and Qdrant
+without passing through either. Two of four doors were locked. Moving the scan into
+`IngestService.ingestChunks` - the one method every path funnels through - is what made it a
+control, and it throws rather than returning a flag so no future caller can quietly ignore it.
+
+The same shape decided the storage question. A quarantined document goes into its own table and is
+never indexed, instead of being indexed with a hidden flag. *Not indexed* needs no predicate in any
+of the six backends, in the rerank over-fetch, in graph expansion, or in the Qdrant payload filter.
+*Hidden* needs one in every single one of them, and §19 is the standing proof that one gets missed.
+
+**Order the two writes so failure is safe.** Quarantining does two things: un-index the old copy,
+and record the hold. Written the natural way round - record, then un-index - a Qdrant outage leaves
+the pen saying "contained" while the document is still searchable, and an operator reading the pen
+believes a containment that did not happen. Reversed, the same outage leaves the caller with an
+error and nothing claiming otherwise. Neither order is atomic; only one of them fails safe.
+
+**A denylist cannot be tuned into a classifier.** The credential rule was wrong twice, in opposite
+directions: first firing on "the password is expired", then - after being tightened to require a
+digit or separator - silently missing `the recovery code is swordfish`, which is the shape of most
+real passwords. The version that works stopped trying to recognise secrets and started enumerating
+prose: any value counts unless it is a listed word or a lowercase -ed/-ing participle. The
+participle rule generalises where a word list cannot, and it was found by writing a test for
+"the token island-hopping strategy is documented" rather than by thinking harder about regexes.
+
+Corollary worth its own line: **a test that asserts only the easy store is not a test.** Every
+"never indexed" assertion checked Postgres. Deleting the Qdrant delete call left all sixteen green
+while the secret stayed retrievable through three backends.
+
+---
+
 ## Where to go next
 `docs/ROADMAP.md` lists what's built and what's queued - notably **condense-question retrieval**
 (fixes vague follow-ups), snippet windowing, and token-budget history trimming. Each is a small

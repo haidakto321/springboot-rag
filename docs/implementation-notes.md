@@ -1532,3 +1532,94 @@ lookup.
 Also worth noting for the next person: `spring-boot:run` in the background survives killing the
 Maven wrapper. A re-smoke that "shows the fix did not work" may simply be talking to the old JVM
 still holding the port - check `netstat -ano | grep :PORT` before believing the result.
+
+---
+
+## 2026-08-11 - injection hardening (quarantine, streaming guard, groundedness judge)
+
+Spec: `docs/superpowers/specs/2026-08-11-injection-hardening-design.md`.
+Plan: `docs/superpowers/plans/2026-08-11-injection-hardening.md`. Commits `c705cfa`, `1526038`.
+
+### Decisions that were not in the spec
+
+**The scan moved from the callers to the funnel.** The spec put it in the two ingest controllers
+(§1.3). A review found `POST /ingest` and `POST /projects/{id}/import-wiki` reaching the index
+without meeting it - two of four doors locked. It now lives in `IngestService.ingestChunks` and
+throws `QuarantineRequiredException`; callers that know the document's original form catch it and
+store that form in the pen, callers that do not fail loudly. This is a deviation from the written
+design, and the design was wrong.
+
+**`QuarantineService` was invented to own the ordering.** The spec had each caller hold the
+document itself. Four call sites meant four chances to get the order backwards, and the order is
+the whole safety property: un-index first, THEN record the hold. The other way round, a Qdrant
+outage commits the pen row, fails the delete, and leaves an operator reading "contained" about a
+document that is still searchable.
+
+**The credential rule was got wrong twice before it was right.** v1 flagged any value after a
+keyword, so "the password is expired" was a finding. v2 required the value to look secret-shaped -
+a digit, a separator, or 20+ characters - which silently dropped `the recovery code is swordfish`
+and still fired on "credentials are role-based". v3 inverts the question: everything is a secret
+unless it is recognisably prose, where prose means an enumerated word OR a lowercase -ed/-ing
+participle. The participle rule was found by writing a test for "the token island-hopping strategy
+is documented" - with a 40-character window the regex skipped ahead to a later "is" and took
+"documented" as the value.
+
+**The default label is `securityProps.getDefaultGroup()`, not `"public"`.** With a different
+configured default, a hardcoded `"public"` produces a held document that `resolveGroups` then
+rejects on release - permanently unreleasable.
+
+### Tradeoffs taken
+
+- **High recall over precision on the scanner**, chosen explicitly. Documents that genuinely
+  contain a credential string get held, including four of this repo's own docs (they quote the
+  drill's `recovery code is hunter2`). Release is one call. The alternative missed real passwords.
+- **A password ending in -ed or -ing is missed.** Stated in the javadoc rather than left to be
+  discovered.
+- **Streaming holds tokens** until the first valid citation - a blank pane for roughly one sentence
+  at this box's ~10 tok/s. The `verifying` frame exists so that pause is legible.
+- **The groundedness judge ships off.** It is code nobody has switched on, and saying so is more
+  useful than a default that looks finished.
+
+### Known gaps, deliberately not fixed here
+
+- **Release has no privilege gate and no audit row.** Any authenticated user in `public` can undo
+  the one blocking control, and the pen row is deleted, so who released what is unrecoverable. This
+  is a hole in the spec (§1.4 asked only for group scoping), not a deviation from it.
+- **A release that fails mid-ingest** leaves a document both held and partially indexed. Nothing in
+  this codebase is transactional across Postgres and Qdrant, and `ingestChunks` has always had this
+  window for ordinary re-ingest.
+- **`RecordRequest.metadata`** (caller-supplied) is not scanned. It is filterable and feeds the
+  facet catalogue, though it is not returned by `SearchHit` or `ChunkView`.
+- **The judge's false-refusal rate is unmeasured**, so its default cannot honestly move yet.
+
+### Tests that had to change, and why that is the feature
+
+`InjectionDefenceTest.aStreamedInjectionIsReportedBecauseItCannotBeRecalled` asserted that
+`hunter2` REACHED the user and that the verdict was the only mitigation. It is now
+`aStreamedInjectionIsNeverSentAtAll`. The old name is quoted in the new test's javadoc so the
+history of the hole is not lost.
+
+`ChatServiceTest`'s stub streamed "Hello there" with no citation, which the emitter now refuses.
+Adding a citation kept those tests about condensation, widening and the count fallback instead of
+accidentally about the guard.
+
+The most useful test finding: every "never indexed" assertion checked Postgres only. Deleting the
+Qdrant delete call left all sixteen green while the secret stayed retrievable through the qdrant,
+hybrid and rerank backends - the `LEARNINGS.md` §13 bug class this feature cites as its precedent.
+`assertNowhereIndexed()` now checks Postgres, Qdrant and the `document` registry.
+
+### Verification
+
+Full suite **468 tests, 0 failures, 3 skipped** (from 415). Drill on demand:
+`./mvnw test "-Dgroups=eval-injection" "-DexcludedGroups="` -> 2/2, confirmed absent from the
+normal build.
+
+Live smoke on :8091 (partial - stopped before the stream check): the drill page uploaded returned
+`quarantined: true, chunksStored: 0` with `recovery code = ***`; a hybrid search for `hunter2`
+returned five hits, none containing it; `GET /quarantine` listed the page with masked findings and
+no raw text. **Not verified live:** the `verifying` frame order, and the UI's "Checking sources"
+state has never been looked at in a browser.
+
+One trap worth repeating: the first smoke attempt started on :8088, failed with "Port 8088 was
+already in use", and something DID answer there - a VS Code extension's JVM. Confirm the process on
+the port is the one you just started before believing any smoke result.

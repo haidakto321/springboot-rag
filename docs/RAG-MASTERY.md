@@ -342,6 +342,61 @@ use `think:true` and read the separate `thinking` field (`LEARNINGS.md` §12).
 > Lesson: in RAG, your document store is an untrusted input channel. Anyone who can write a
 > document can write part of your prompt.
 
+### 2026-08-11: the other half - quarantine, and a guard that can retract
+
+The 2026-08-05 drill left three things open, and they were closed in that order.
+
+**Content disclosure, closed at ingest.** `SecretScanner` runs before anything is embedded; a hit
+sends the document to a `quarantine` table and it never reaches `chunks`, Qdrant, or the `document`
+registry. Re-running the drill live: the upload came back `quarantined: true, chunksStored: 0` with
+the finding `recovery code = ***`, and a hybrid search for `hunter2` returned five hits, none of
+them containing it.
+
+The structural argument is the part worth keeping. *Not indexed* needs no predicate anywhere. *Indexed
+but hidden* needs one in all six retrieval backends, in the rerank over-fetch, in graph expansion,
+and in the Qdrant payload filter - and §19's leaf-name bug is the standing proof that one of those
+gets forgotten.
+
+**Where the scan lives turned out to matter more than the rule.** It was written into the two
+ingest controllers first. A review found two further paths - `POST /ingest` and the wiki importer -
+reaching the index without ever meeting it, and the wiki importer is the highest-volume ingest path
+in the app and the one most likely to meet a real production password. The scan now lives in
+`IngestService.ingestChunks`, the single funnel, and throws. A check that every future caller has
+to remember is a check that will eventually be forgotten.
+
+**The rule itself was got wrong twice, in opposite directions.** First it fired on any value after
+a credential keyword, so "the password is expired" was a finding. The fix required the value to
+look secret-shaped - a digit or a separator - and that silently let `the recovery code is
+swordfish` through, which is the shape of most human-chosen passwords. It also still fired on
+"credentials are role-based", because a hyphen counted as a separator. The rule is now high-recall
+with prose enumerated: any value is a secret unless it is a listed word or a lowercase -ed/-ing
+participle. A password ending in -ed is missed, and that is written in the javadoc rather than
+discovered later.
+
+**Streaming, closed by holding.** `GuardedEmitter` buffers tokens until the answer cites a supplied
+chunk. An answer that never cites anything is now replaced by the refusal instead of being streamed
+and then apologised for. The old test - `aStreamedInjectionIsReportedBecauseItCannotBeRecalled`,
+which asserted `hunter2` reached the user - is now `aStreamedInjectionIsNeverSentAtAll`.
+
+**Cite-and-lie, half closed.** `GroundednessJudge` ships **disabled**, because refusing a good
+answer is a worse failure than the leak it addresses - it happens on every ordinary question rather
+than on an attack - and the false-refusal rate is still unmeasured. On `/ask` it is a control; on
+`/chat/stream` it can only flag, because a claim is not decidable until it is complete.
+
+**The drill is now a test.** `src/test/resources/eval/injection-drill.yaml` plus `InjectionDrillTest`
+(tag `eval-injection`). It asserts two things a comfortable test suite would not: that a legitimate
+fact on the quarantined page (the 40 EUR meal allowance) is unavailable while the page is held, and
+that after a human releases the page **`hunter2` comes back and is retrievable**. The control is
+quarantine, not the model, and a test that pretended otherwise would be measuring something this
+system does not have.
+
+**Row 5 update (2026-08-11): now 2.** Held back from more by: the judge is unmeasured and off, so
+cite-and-lie is defended in code that nobody has switched on; the streaming path can flag but not
+retract a groundedness failure; and **release has no privilege gate and leaves no audit row**, so
+any authenticated user in `public` can undo the one blocking control and nothing records who did.
+That last one is a gap in the design, not in the implementation - §1.4 of the spec only ever asked
+for group scoping.
+
 **Exam keywords:** Bedrock Guardrails (content filters, denied topics, contextual grounding
 check), Amazon Comprehend PII detection, Amazon Macie, OWASP Top 10 for LLM Applications
 (prompt injection, data poisoning, excessive agency, sensitive information disclosure).
@@ -461,7 +516,7 @@ the point of the exercise.
 | 2 | Ingestion failure modes catalogued for this corpus | 2 (was 1) |
 | 3 | Eval running on the realistic corpus, as a gate | 2 |
 | 4 | Query routing and transforms beyond condense | 2 (was 1) - see the 2026-08-08 note |
-| 5 | Injection-resistant prompting, cite-or-refuse | 1 (was 0) |
+| 5 | Injection-resistant prompting, cite-or-refuse | 2 (was 1) - see the 2026-08-11 note |
 | 6 | Per-request trace of the whole chain | 2 (was 0) |
 | 7 | Incremental re-sync and delete propagation | 1 (was 0) |
 | 8 | Measured latency / token / cost budget | 1 |
