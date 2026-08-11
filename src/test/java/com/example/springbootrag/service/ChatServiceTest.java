@@ -7,6 +7,7 @@ import com.example.springbootrag.model.SearchHit;
 import com.example.springbootrag.repository.MetadataFilter;
 import com.example.springbootrag.security.SearchContext;
 import com.example.springbootrag.web.dto.AskResponse;
+import com.example.springbootrag.guard.DisabledJudge;
 import com.example.springbootrag.security.TestContexts;
 import com.example.springbootrag.trace.NoopTraceRecorder;
 import com.example.springbootrag.repository.RecordCountRepository;
@@ -59,8 +60,11 @@ class ChatServiceTest {
         @Override public void chatStream(String system, List<ChatMessage> messages, Consumer<String> onToken) {
             this.lastSystem = system;
             this.lastMessages = messages;
+            // The citation is load-bearing: GuardedEmitter holds tokens until the answer cites a
+            // supplied chunk, so an uncited stub answer would be refused and these tests would be
+            // measuring the guard instead of condensation, widening and the count fallback.
             onToken.accept("Hello");
-            onToken.accept(" there");
+            onToken.accept(" there [1].");
         }
     }
 
@@ -71,7 +75,7 @@ class ChatServiceTest {
     private final RecordCountRepository counts = mock(RecordCountRepository.class);
     private final ChatService service =
             new ChatService(searchService, chat, props, NoopTraceRecorder.create(), understanding,
-                    router, counts);
+                    router, counts, DisabledJudge.create());
 
     @BeforeEach
     void extractionFindsNothingByDefault() {
@@ -95,7 +99,7 @@ class ChatServiceTest {
                 new ChatMessage("assistant", "It splits on headings."),
                 new ChatMessage("user", "what about overlap?")), List.of(), List.of(), tokens::add).sources();
 
-        assertThat(tokens).containsExactly("Hello", " there");
+        assertThat(String.join("", tokens)).isEqualTo("Hello there [1].");
 
         // Condensation was invoked with the prior conversation + follow-up.
         assertThat(chat.lastChatSystem).contains("standalone");
@@ -135,7 +139,7 @@ class ChatServiceTest {
                 new ChatMessage("user", "what about overlap?")), List.of(), List.of(), tokens::add);
 
         // Condensation threw -> retrieval used the raw follow-up, chat still answered.
-        assertThat(tokens).containsExactly("Hello", " there");
+        assertThat(String.join("", tokens)).isEqualTo("Hello there [1].");
     }
 
     @Test
@@ -243,7 +247,7 @@ class ChatServiceTest {
 
         assertThat(outcome.widened()).isTrue();
         assertThat(outcome.sources()).hasSize(1);
-        assertThat(tokens).containsExactly("Hello", " there");
+        assertThat(String.join("", tokens)).isEqualTo("Hello there [1].");
     }
 
     @Test
@@ -338,7 +342,7 @@ class ChatServiceTest {
                 List.of(), false, MetadataFilter.none(), route -> {}, f -> {}, out::append, r -> {});
 
         assertThat(outcome.route()).isEqualTo("search");
-        assertThat(out.toString()).isEqualTo("Hello there");
+        assertThat(out.toString()).isEqualTo("Hello there [1].");
     }
 
     @Test

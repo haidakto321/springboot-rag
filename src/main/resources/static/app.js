@@ -1066,6 +1066,7 @@ $('#chat-form').addEventListener('submit', async (e) => {
         const bubble = streamEl.parentElement;   // live handle for the reasoning box
         let reasoningBody = null;
         let answerStarted = false;
+        let verifying = false;
         let buf = '';
         while (true) {
             const { done, value } = await reader.read();
@@ -1083,9 +1084,20 @@ $('#chat-form').addEventListener('submit', async (e) => {
                     if (!reasoningBody) reasoningBody = mountThoughts(bubble, true); // expanded while thinking
                     reasoningBody.textContent = assistant.reasoning;
                     scrollThreadBottom();
+                } else if (frame.type === 'verifying') {
+                    // The server holds tokens back until the answer cites a source, so this pane
+                    // stays empty for a moment. Unexplained, an empty pane reads as a hang.
+                    verifying = true;
+                    streamEl.classList.add('verifying');
+                    streamEl.textContent = 'Checking sources…';
                 } else if (frame.type === 'token') {
                     // Answer starts -> collapse the thinking box (keep it available behind the toggle).
                     if (!answerStarted && reasoningBody) collapseThoughts(bubble);
+                    if (verifying) {
+                        verifying = false;
+                        streamEl.classList.remove('verifying');
+                        streamEl.textContent = '';
+                    }
                     answerStarted = true;
                     assistant.content += frame.text;
                     streamEl.textContent = assistant.content;
@@ -1104,7 +1116,8 @@ $('#chat-form').addEventListener('submit', async (e) => {
                     assistant.filter = frame.applied || null;
                     assistant.widened = !!frame.widened;
                 } else if (frame.type === 'guard') {
-                    // Tokens are already rendered; the server can only tell us they were not grounded.
+                    // Only reaches us when something was already rendered - an answer that never
+                    // cited anything is replaced by the refusal server-side and never streamed.
                     assistant.guard = frame.reason;
                 } else if (frame.type === 'error') {
                     assistant.content = (assistant.content ? assistant.content + '\n' : '') + `[error: ${frame.message}]`;

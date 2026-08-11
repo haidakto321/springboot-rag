@@ -3,6 +3,7 @@ package com.example.springbootrag.service;
 import com.example.springbootrag.chat.ChatProvider;
 import com.example.springbootrag.config.ChatProperties;
 import com.example.springbootrag.guard.AnswerGuard;
+import com.example.springbootrag.guard.GroundednessJudge;
 import com.example.springbootrag.guard.PromptFence;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -56,11 +57,13 @@ public class AskService {
     private final QueryUnderstanding understanding;
     private final QueryRouter router;
     private final RecordCountRepository counts;
+    private final GroundednessJudge judge;
 
     public AskService(SearchService searchService, ChatProvider chat,
                       ChatProperties props, ProjectService projectService,
                       TraceRecorder tracer, QueryUnderstanding understanding,
-                      QueryRouter router, RecordCountRepository counts) {
+                      QueryRouter router, RecordCountRepository counts,
+                      GroundednessJudge judge) {
         this.searchService = searchService;
         this.chat = chat;
         this.props = props;
@@ -69,6 +72,7 @@ public class AskService {
         this.understanding = understanding;
         this.router = router;
         this.counts = counts;
+        this.judge = judge;
     }
 
     /** Single-question entry point: scopes to the default project. */
@@ -175,6 +179,19 @@ public class AskService {
         AnswerGuard.Verdict verdict = AnswerGuard.check(reply.content(), hits.size());
         if (!verdict.allowed()) {
             log.warn("answer blocked by grounding guard ({}), question: {}", verdict.reason(), question);
+        }
+        // Order matters: an answer with no citation is already refused for free above, so the judge
+        // never pays for a case the cheap deterministic check has settled. Off by default.
+        if (verdict.allowed() && !"refusal".equals(verdict.reason())) {
+            GroundednessJudge.Result g = judge.judge(reply.content(), hits);
+            if (g.latencyMs() > 0) {
+                stages.put("ground", g.latencyMs());
+            }
+            if (!g.supported()) {
+                log.warn("answer blocked as unsupported by its own citations: {}",
+                        g.unsupportedClaim());
+                verdict = new AnswerGuard.Verdict(false, "unsupported", AnswerGuard.REFUSAL);
+            }
         }
         String answer = verdict.answer();
         stages.put("total", msSince(start));

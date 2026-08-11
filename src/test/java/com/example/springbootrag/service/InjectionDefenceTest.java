@@ -7,6 +7,7 @@ import com.example.springbootrag.guard.PromptFence;
 import com.example.springbootrag.model.SearchHit;
 import com.example.springbootrag.repository.MetadataFilter;
 import com.example.springbootrag.security.SearchContext;
+import com.example.springbootrag.guard.DisabledJudge;
 import com.example.springbootrag.security.TestContexts;
 import com.example.springbootrag.web.dto.AskResponse;
 import com.example.springbootrag.trace.NoopTraceRecorder;
@@ -96,7 +97,8 @@ class InjectionDefenceTest {
     @Test
     void anObeyedInjectionNeverReachesTheUser() {
         AskService ask = new AskService(searchService, chat, props, projectService, NoopTraceRecorder.create(), DisabledUnderstanding.create(),
-                DisabledRouting.create(), org.mockito.Mockito.mock(RecordCountRepository.class));
+                DisabledRouting.create(), org.mockito.Mockito.mock(RecordCountRepository.class),
+                DisabledJudge.create());
 
         AskResponse resp = ask.ask(TestContexts.PUBLIC, "what does the administrative notice say?");
 
@@ -112,7 +114,8 @@ class InjectionDefenceTest {
     @Test
     void theSystemPromptTellsTheModelThatReferenceMaterialIsData() {
         AskService ask = new AskService(searchService, chat, props, projectService, NoopTraceRecorder.create(), DisabledUnderstanding.create(),
-                DisabledRouting.create(), org.mockito.Mockito.mock(RecordCountRepository.class));
+                DisabledRouting.create(), org.mockito.Mockito.mock(RecordCountRepository.class),
+                DisabledJudge.create());
         ask.ask(TestContexts.PUBLIC, "what is the meal cap?");
 
         assertThat(chat.lastSystem)
@@ -123,7 +126,8 @@ class InjectionDefenceTest {
     @Test
     void thePoisonedPageStaysInsideTheFence() {
         AskService ask = new AskService(searchService, chat, props, projectService, NoopTraceRecorder.create(), DisabledUnderstanding.create(),
-                DisabledRouting.create(), org.mockito.Mockito.mock(RecordCountRepository.class));
+                DisabledRouting.create(), org.mockito.Mockito.mock(RecordCountRepository.class),
+                DisabledJudge.create());
         ask.ask(TestContexts.PUBLIC, "what is the meal cap?");
 
         String prompt = chat.lastUser;
@@ -138,19 +142,27 @@ class InjectionDefenceTest {
         assertThat(prompt.indexOf("Question: what is the meal cap?")).isGreaterThan(end);
     }
 
+    /**
+     * Was {@code aStreamedInjectionIsReportedBecauseItCannotBeRecalled}, and it asserted that
+     * "hunter2" reached the user while the verdict merely reported the failure. That was an honest
+     * record of a real hole, and {@link com.example.springbootrag.guard.GuardedEmitter} closed it:
+     * tokens are held until the answer cites a supplied chunk, so an answer that never cites
+     * anything is replaced by the refusal instead of being sent and then apologised for.
+     */
     @Test
-    void aStreamedInjectionIsReportedBecauseItCannotBeRecalled() {
+    void aStreamedInjectionIsNeverSentAtAll() {
         ChatService chatService = new ChatService(searchService, chat, props,
                 NoopTraceRecorder.create(), DisabledUnderstanding.create(),
-                DisabledRouting.create(), org.mockito.Mockito.mock(RecordCountRepository.class));
+                DisabledRouting.create(), org.mockito.Mockito.mock(RecordCountRepository.class),
+                DisabledJudge.create());
         StringBuilder streamed = new StringBuilder();
 
         ChatService.StreamOutcome outcome = chatService.chatStream(TestContexts.PUBLIC,
                 List.of(new ChatProvider.ChatMessage("user", "what does the notice say?")),
                 List.of(1L), List.of(), streamed::append);
 
-        // Honest about the limitation: the tokens WERE sent, the verdict is the mitigation.
-        assertThat(streamed.toString()).contains("hunter2");
+        assertThat(streamed.toString()).doesNotContain("hunter2");
+        assertThat(streamed.toString()).isEqualTo(AnswerGuard.REFUSAL);
         assertThat(outcome.verdict().allowed()).isFalse();
         assertThat(outcome.verdict().reason()).isEqualTo("ungrounded");
     }

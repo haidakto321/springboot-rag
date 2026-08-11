@@ -4,6 +4,8 @@ import com.example.springbootrag.chat.ChatProvider;
 import com.example.springbootrag.chat.ChatProvider.ChatMessage;
 import com.example.springbootrag.config.ChatProperties;
 import com.example.springbootrag.guard.AnswerGuard;
+import com.example.springbootrag.guard.GroundednessJudge;
+import com.example.springbootrag.guard.GuardedEmitter;
 import com.example.springbootrag.model.SearchHit;
 import com.example.springbootrag.repository.MetadataFilter;
 import com.example.springbootrag.repository.RecordCountRepository;
@@ -50,10 +52,12 @@ public class ChatService {
     private final QueryUnderstanding understanding;
     private final QueryRouter router;
     private final RecordCountRepository counts;
+    private final GroundednessJudge judge;
 
     public ChatService(SearchService searchService, ChatProvider chat, ChatProperties props,
                        TraceRecorder tracer, QueryUnderstanding understanding,
-                       QueryRouter router, RecordCountRepository counts) {
+                       QueryRouter router, RecordCountRepository counts,
+                       GroundednessJudge judge) {
         this.searchService = searchService;
         this.chat = chat;
         this.props = props;
@@ -61,6 +65,7 @@ public class ChatService {
         this.understanding = understanding;
         this.router = router;
         this.counts = counts;
+        this.judge = judge;
     }
 
     /**
@@ -74,10 +79,12 @@ public class ChatService {
      * What the stream produced: the citations, plus the grounding verdict for the text that was
      * already sent.
      *
-     * <p>A streamed token cannot be recalled, so unlike {@code AskService} the chat path cannot
-     * replace a bad answer with a refusal - it can only tell the client that what it just rendered
-     * failed the check. That is a real limitation of streaming, not an oversight: buffering the
-     * whole answer to guard it first would trade away the reason streaming exists.
+     * <p>A streamed token cannot be recalled, so what this path can retract depends on when the
+     * failure becomes decidable. {@link GuardedEmitter} holds tokens until the answer cites a
+     * supplied chunk, so "no citation at all" and "a fabricated first citation" are caught before
+     * anything is sent and the answer is replaced by a refusal. A citation that goes out of range
+     * mid-answer stops the stream, leaving the already-sent prefix. A groundedness failure needs
+     * the whole claim and can only be reported.
      */
     public record StreamOutcome(List<AskResponse.Source> sources, AnswerGuard.Verdict verdict,
                                 java.util.UUID requestId, Object appliedFilter, boolean widened,
@@ -165,6 +172,28 @@ public class ChatService {
                                     MetadataFilter filter,
                                     Consumer<String> onRoute,
                                     Consumer<Map<String, Object>> onFilter,
+                                    Consumer<String> onToken,
+                                    Consumer<String> onReasoning) {
+        return chatStream(ctx, history, projectIds, docIds, think, filter, onRoute, onFilter,
+                () -> {}, onToken, onReasoning);
+    }
+
+    /**
+     * Same, signalling that tokens are being held back.
+     *
+     * <p>{@code onVerifying} fires once, immediately before generation, because the guard now runs
+     * in front of the client rather than behind it: nothing is shown until the answer cites a
+     * source. A blank pane with no explanation is indistinguishable from a hang.
+     */
+    public StreamOutcome chatStream(SearchContext ctx,
+                                    List<ChatMessage> history,
+                                    List<Long> projectIds,
+                                    List<String> docIds,
+                                    boolean think,
+                                    MetadataFilter filter,
+                                    Consumer<String> onRoute,
+                                    Consumer<Map<String, Object>> onFilter,
+                                    Runnable onVerifying,
                                     Consumer<String> onToken,
                                     Consumer<String> onReasoning) {
         java.util.UUID requestId = java.util.UUID.randomUUID();
@@ -292,20 +321,41 @@ public class ChatService {
         List<ChatMessage> modelMessages = new ArrayList<>(trimmed.subList(0, trimmed.size() - 1));
         modelMessages.add(new ChatMessage("user", AskService.buildUserPrompt(last.content(), hits)));
 
-        // Tee the stream: the client gets tokens live, and a copy is kept so the finished answer
-        // can still be checked for grounding and written to the trace.
+        // The guard runs in FRONT of the client, not behind it: tokens are held until the answer
+        // cites a supplied chunk, so an ungrounded answer is never sent at all. A copy of the raw
+        // stream is still kept, because the trace has to record what the MODEL said.
+        onVerifying.run();
+        GuardedEmitter emitter = new GuardedEmitter(hits.size(), onToken);
         StringBuilder full = new StringBuilder();
         java.util.concurrent.atomic.AtomicReference<ChatProvider.Usage> usage =
                 new java.util.concurrent.atomic.AtomicReference<>(ChatProvider.Usage.unknown());
         long beforeGenerate = System.nanoTime();
         chat.chatStream(AskService.SYSTEM_PROMPT, modelMessages, think,
-                token -> { full.append(token); onToken.accept(token); }, onReasoning, usage::set);
+                token -> { full.append(token); emitter.accept(token); }, onReasoning, usage::set);
         stages.put("generate", (System.nanoTime() - beforeGenerate) / 1_000_000);
 
-        AnswerGuard.Verdict verdict = AnswerGuard.check(full.toString(), hits.size());
+        AnswerGuard.Verdict verdict = emitter.finish();
+        // The judge needs the whole claim, so on this path it can flag but not retract - the
+        // emitter's retraction covers citation validity, which is what is decidable mid-stream.
+        if (verdict.allowed() && !"refusal".equals(verdict.reason())) {
+            GroundednessJudge.Result g = judge.judge(full.toString(), hits);
+            if (g.latencyMs() > 0) {
+                stages.put("ground", g.latencyMs());
+            }
+            if (!g.supported()) {
+                // REFUSAL, not the model's text: the trace keeps the original separately, and if
+                // nothing had reached the wire this verdict is what the client would be sent.
+                verdict = new AnswerGuard.Verdict(false, "unsupported", AnswerGuard.REFUSAL);
+            }
+        }
         if (!verdict.allowed()) {
-            log.warn("streamed answer failed the grounding guard ({}) - already sent to the client",
-                    verdict.reason());
+            if (emitter.sentAnything()) {
+                log.warn("streamed answer failed the grounding guard ({}) after {} characters were "
+                        + "already sent", verdict.reason(), full.length());
+            } else {
+                // Nothing reached the wire, so the refusal replaces the answer outright.
+                onToken.accept(verdict.answer());
+            }
         }
         stages.put("total", msSince(start));
         tracer.record(requestId, ctx, pScope, last.content(), retrievalQuery, "rerank", hits, stages,

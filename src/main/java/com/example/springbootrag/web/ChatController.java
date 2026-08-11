@@ -76,6 +76,9 @@ public class ChatController {
                                     frame.putAll(applied);
                                     writeFrame(out, frame);
                                 },
+                                // Tokens are held until the answer cites a source, so the pane
+                                // stays empty for a moment. Unexplained, that reads as a hang.
+                                () -> writeFrame(out, Map.of("type", "verifying")),
                                 token -> writeFrame(out, Map.of("type", "token", "text", token)),
                                 reasoning -> writeFrame(out, Map.of("type", "reasoning", "text", reasoning)));
                 writeFrame(out, Map.of("type", "sources", "sources", outcome.sources()));

@@ -593,6 +593,8 @@ body {
   content: '▋'; margin-left: 1px; opacity: .5; animation: caret-blink 1s steps(2) infinite;
 }
 .bubble-text.error { color: var(--danger); }
+/* Shown while the server holds tokens back waiting for the answer to cite a source. */
+.bubble-text.verifying { color: var(--muted); font-style: italic; font-weight: 600; }
 @keyframes caret-blink { 50% { opacity: 0; } }
 .chips { display: flex; flex-wrap: wrap; gap: 8px; }
 .chip {
