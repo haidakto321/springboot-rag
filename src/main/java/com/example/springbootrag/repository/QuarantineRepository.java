@@ -87,6 +87,28 @@ public class QuarantineRepository {
             """, MAPPER, args.toArray()).stream().findFirst();
     }
 
+    /** Just enough of a held row to write its audit entry - deliberately NOT the raw text. */
+    public record PenSummary(String docId, String findingsJson, List<String> allowedGroups) {}
+
+    /**
+     * Every held document in a project, ignoring group scoping.
+     *
+     * <p>The ONLY caller is the project-delete path, which must record what a cascading delete is
+     * about to destroy - and it must see documents the deleting user could not read, or the audit
+     * would be a partial record of a total deletion. It is safe to leave unscoped ONLY because it
+     * returns no raw text and no findings excerpt beyond what the pen already masks. Never expose
+     * this over HTTP, and never widen it to return {@link Held}.
+     */
+    public List<PenSummary> heldForAudit(long projectId) {
+        return jdbc.query("""
+            SELECT doc_id, findings::text AS findings, allowed_groups
+            FROM quarantine
+            WHERE project_id = ?
+            ORDER BY doc_id
+            """, (rs, n) -> new PenSummary(rs.getString("doc_id"), rs.getString("findings"),
+                toList(rs.getArray("allowed_groups"))), projectId);
+    }
+
     /** Returns rows removed: 0 when nothing was held under that id. */
     public int drop(long projectId, String docId) {
         return jdbc.update("DELETE FROM quarantine WHERE project_id = ? AND doc_id = ?",

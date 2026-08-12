@@ -56,6 +56,10 @@ public class WikiImportController {
             throw new IllegalArgumentException("path is required");
         }
         currentUser.requireOwnGroups(req.groups());
+        // Resolved HERE, on the request thread. The body below runs on an async thread where the
+        // SecurityContextHolder thread-local is empty, so anything downstream that tried to resolve
+        // the caller would silently get "nobody" - including the audit row for a quarantined page.
+        String principal = currentUser.context().principal();
         Path wikiRoot = Path.of(req.path().strip());
         if (!Files.isDirectory(wikiRoot)) {
             throw new IllegalArgumentException("path does not exist or is not a directory");
@@ -83,7 +87,7 @@ public class WikiImportController {
                         writeFrame(out, Map.of("type", "skip", "done", done, "total", count, "doc", doc,
                                 "message", e.getMessage() == null ? e.getClass().getSimpleName() : e.getMessage()));
                     }
-                }, req.groups());
+                }, req.groups(), principal);
                 if (!started[0]) {
                     // no pages found: still emit a start frame so the client sees the total.
                     writeFrame(out, Map.of("type", "start", "total", total[0]));

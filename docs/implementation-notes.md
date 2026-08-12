@@ -1650,3 +1650,158 @@ to **829 MB of 16 GB**, and a call that had returned its route frame in ~1.4s st
 anything within 60 seconds (`curl exit=28`, zero bytes). `LEARNINGS.md` §21 already records the
 3.5s-vs-256s version of this. The practical rule: one live probe at a time, and check free memory
 before believing any timing.
+
+---
+
+## Quarantine release control (2026-08-12)
+
+Spec/plan: `docs/superpowers/{specs,plans}/2026-08-12-quarantine-release-control*`. Executed inline,
+5 tasks. Suite **465 -> 477**, 0 failures, 3 skipped.
+
+### Decisions not in the spec, or changed while building
+
+**The baseline test count in my own notes was wrong.** The 2026-08-11 session recorded 468 tests.
+Task 1 added 3 and measured 468, which puts the real baseline at 465. The plan was corrected rather
+than the measurement. Worth remembering that a count carried in prose is a claim, and this repo now
+has two of them disagreeing.
+
+**`QuarantineReleaseService` is a new class, not a method on `QuarantineService`.** The spec first
+put release on the existing service, which reads better and does not compile: `RecordIngestService`
+already injects `QuarantineService`, and release needs `RecordIngestService`, so the merged version
+closes a constructor-injection cycle Spring refuses to start. Caught while writing the spec by
+reading the constructors, not at runtime.
+
+**`@PreAuthorize` over filter-chain path matchers.** Both work. The annotation was chosen so the
+rule is attached to the method rather than to a URL shape - a later path rename disarms a matcher
+with no compile error and no failing test. Cost: `@EnableMethodSecurity` is now on globally. Nothing
+else in `src/main/java` carries a method-security annotation, so its only effect is these two.
+
+**Discard is gated as well as release,** which the original ROADMAP entry did not ask for. Release
+is reversible in the sense that the document ends up indexed and can be deleted again; discard is
+not. Once a document is un-indexed into the pen, the pen holds the only copy, so an unprivileged
+discard destroys both the document and the evidence of the attack.
+
+**The audit repository's round-trip test lives in `QuarantineIntegrationTest`,** not in its own
+class as the spec's §3.4 said. It needs a real Postgres, and spinning a second pgvector + Qdrant
+container pair for two assertions costs more than it proves. The spec was corrected.
+
+### Tradeoffs accepted
+
+- **No audit read endpoint.** psql is the reader. The endpoint carries a real question - a doc id
+  plus a principal is not nothing, even with the findings masked - and guessing at the scoping rule
+  was worse than deferring it. In ROADMAP.
+- **The mid-ingest partial state is visible, not fixed.** A release that dies part way leaves a row
+  reading `attempted`. Nothing repairs or retries it.
+- **HTTP 403 is not covered by a test, but it was verified live.** The tests drive the controller as
+  a bean and assert `AccessDeniedException`; the status code itself is Spring Security's default
+  translation, and no test in this project drives quarantine over MockMvc. Rather than build that
+  harness for one assertion, the claim was checked against a running app - see the live run below.
+  It stays an untested claim in CI, which is the honest description.
+- **Roles are config**, so changing who may release needs a redeploy - the same limitation already
+  recorded against groups in `RAG-MASTERY.md` row 1.
+
+### Things worth knowing next time
+
+The `held` audit row is written **after** the hold commits, while release and discard write theirs
+**before** acting. That asymmetry is deliberate and is argued in `QuarantineService.hold` and
+`QuarantineReleaseService`: a row asserting containment before the un-index succeeded would be
+untrue, and while the document sits in the pen the pen row already is the durable record.
+
+`quarantine_audit` has no `raw_text` column and no foreign key to `projects`. Both are load-bearing:
+the table is append-only and never pruned, so raw text there would outlive every other copy of the
+credential; and the pen cascades on project delete, which is exactly when the history most needs to
+survive. The no-raw-text rule is asserted by a test over `SELECT *`, so a column added later is
+covered without anyone remembering to update the test.
+
+### Live verification, 2026-08-12 (app on :8091, dev containers up, no Ollama needed)
+
+Real HTTP against a running app, project 13 `role-gate-check-2026-08-12`:
+
+| call | result |
+|---|---|
+| `alice` uploads a document containing `The admin recovery code is hunter2` | `quarantined: true`, `chunksStored: 0` |
+| `haiks` `POST .../quarantine/policy/release` | **403** |
+| `alice` `POST .../quarantine/policy/release` | **200** |
+| `haiks` `DELETE .../quarantine/policy` (on a fresh hold) | **403** |
+
+The audit table after that sequence:
+
+```
+ id | doc_id | action  | outcome | principal
+  1 | policy | held    | ok      | alice
+  2 | policy | release | ok      | alice
+  3 | policy | held    | ok      | alice
+```
+
+**Neither 403 produced a row.** That is the intended shape: `@PreAuthorize` runs before the method,
+so a refused call never begins a decision and therefore never records one. The audit answers "what
+was decided", not "what was attempted by someone with no standing to attempt it" - if the latter is
+ever wanted, it belongs in an authentication log, not here.
+
+Then `DELETE /projects/13` was issued, which turned out to be the most useful check of the day:
+
+| table | rows after the project was deleted |
+|---|---|
+| `projects` | 0 |
+| `quarantine` (FK + ON DELETE CASCADE) | 0 |
+| `quarantine_audit` (no FK, deliberately) | **3** |
+
+The history survived the deletion of the project it referred to, which is exactly the case the "no
+foreign key" decision exists for, and it was confirmed by accident rather than by a test written to
+prove it. The three orphan rows were then deleted by hand so the dev database is clean; the app on
+:8091 was stopped. Verification project 12 from 2026-08-06 was left alone.
+
+### Cold review, 2026-08-12 (one reviewer at the unit boundary)
+
+Twelve findings, all applied. Suite **477 -> 484**. The three that were worth the review on their own:
+
+**A second, ungated off switch.** `DELETE /projects/{id}` has no role and no group check, and
+`quarantine` cascades from it, so any authenticated user could destroy every held document with no
+trace. Fixed by auditing the cascade (`ProjectService.auditPenCascade` writes one `discard` row per
+held document before the delete, stamps them after); the authorisation half is deliberately left in
+ROADMAP because it is project-level authorisation, not quarantine's. Worth recording that **I had
+already observed this cascade live** an hour earlier and read it purely as confirmation that the
+audit table's missing foreign key worked as designed.
+
+**The gate was on the caller, not the protected method.** `QuarantineReleaseService.release/discard`
+were public, took an already-resolved `Held`, and trusted `QuarantineController` to have done both
+the role check and the group lookup. Any future injector of the service would have bypassed the
+entire control with no compile error - the exact shape LEARNINGS §22 is about. Both checks now live
+on the service methods; the controller keeps `@PreAuthorize` so a refusal costs no database work,
+and its javadoc says which one is the control.
+
+**The wiki import recorded the wrong principal for every hold.** `/import-wiki` returns a
+`StreamingResponseBody`, whose body runs on a thread where the `SecurityContextHolder` thread-local
+is empty, so `principalOrNull()` returned null on the path the code itself calls "most likely to
+meet a real credential". The principal is now captured on the request thread and passed down through
+`WikiImporter.importDir`. `principalOrNull` moved to `CurrentUser`, which is where principal
+resolution belongs.
+
+Also applied: the audit write in `hold` is logged rather than thrown (it runs inside a `catch` block
+in `WikiImporter`, where a sibling `catch` cannot catch it - one audit failure would have aborted an
+entire bulk import at its first held page); `catch (Throwable)` on release so an `Error` mid-ingest
+still stamps the row; the final `ok` stamp is log-and-swallow because the act has already committed;
+a failed stamp attaches itself as a suppressed exception rather than replacing the real failure;
+`outcome()` throws when it updates no row; `CHECK` constraints on `action`/`outcome`.
+
+Two test fixes worth naming:
+
+- **A test that did not test its own name.** `aReleaseThatDiesMidIngestLeavesTheDecisionVisible`
+  corrupted `raw_text`, which makes the JSON parse throw *before* any ingest starts - so it proved
+  the stamping and never created a partial state at all. Renamed to
+  `aReleaseThatFailsBeforeIngestingIsStampedFailed`, with a comment saying what would actually be
+  needed. The spec's claim that the partial-state bug was "reproduced deliberately" was wrong and
+  has been corrected rather than quietly kept.
+- **Nothing bound `application.yml` to the constant.** Deleting or misspelling
+  `roles: [quarantine-release]` would 403 every release in the running app while all 477 tests
+  passed. `QuarantineControllerSecurityTest` now asserts the real configured users against
+  `Roles.QUARANTINE_RELEASE`, and covers the **403 status code** that README and ARCHITECTURE
+  promise - previously asserted nowhere, since the integration test calls the controller as a bean.
+
+One thing the review cleared rather than found, worth keeping: `@EnableMethodSecurity` is inert
+everywhere else in this codebase - no other method-security annotations, no `@Async`, no
+`@Transactional`, no final beans - so turning it on changed nothing but the two annotations.
+
+Schema note: the `CHECK` constraints reach an existing database through `ALTER TABLE ... DROP
+CONSTRAINT IF EXISTS` followed by `ADD CONSTRAINT`, not a `DO $$` block. Spring's script runner
+splits on `;` with no understanding of dollar quoting and would cut the block in half.

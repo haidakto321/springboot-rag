@@ -46,6 +46,22 @@ public class CurrentUser {
         return requested;
     }
 
+    /**
+     * The caller's name, or null when there is no authenticated one.
+     *
+     * <p>For audit writes only, never for authorisation - "who did this, as best we know" is a
+     * different question from "may they". Some write paths legitimately run without a security
+     * context: a bulk import's async thread, a tool invoked directly. Recording null there is
+     * honest, and better than turning a successful containment into an authentication error.
+     */
+    public String principalOrNull() {
+        try {
+            return context().principal();
+        } catch (AccessDeniedException e) {
+            return null;
+        }
+    }
+
     public SearchContext context() {
         Authentication auth = SecurityContextHolder.getContext().getAuthentication();
         if (auth == null || !auth.isAuthenticated() || auth instanceof AnonymousAuthenticationToken) {

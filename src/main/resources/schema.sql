@@ -256,3 +256,43 @@ CREATE TABLE IF NOT EXISTS quarantine (
     created_at     TIMESTAMPTZ NOT NULL DEFAULT now(),
     PRIMARY KEY (project_id, doc_id)
 );
+
+-- ---- Quarantine audit trail (2026-08-12) ----
+-- The pen row is DELETED on release or discard, so without this the decision - who let a
+-- credential-bearing document into the index, and when - disappears with the evidence.
+-- Three deliberate omissions:
+--   * NO raw_text column. The pen stores the held document verbatim, credential included, which is
+--     why its reads are group-scoped. This table is append-only and never pruned, so copying the
+--     raw text here would make the audit trail the longest-lived copy of every secret ever caught.
+--     The masked findings name the rule and are enough to review the decision.
+--   * NO foreign key to projects. The pen cascades on project delete; the audit must outlive it.
+--     Deleting the parent is exactly when the history most needs to survive.
+--   * NO unique constraint. Repeated holds of the same doc_id are history, not a conflict - the
+--     ingest pipeline retries, and the pen upserts while this table accumulates.
+CREATE TABLE IF NOT EXISTS quarantine_audit (
+    id             BIGSERIAL PRIMARY KEY,
+    project_id     BIGINT NOT NULL,
+    doc_id         VARCHAR(255) NOT NULL,
+    -- CHECKed, not just commented: the "which releases never finished" query is
+    -- `WHERE outcome = 'attempted'`, and a typo'd literal would hide a row from it silently.
+    action         VARCHAR(16) NOT NULL CHECK (action IN ('held', 'release', 'discard')),
+    outcome        VARCHAR(16) NOT NULL CHECK (outcome IN ('attempted', 'ok', 'failed')),
+    principal      VARCHAR(255),                  -- null when no authenticated caller (import, tool)
+    findings       JSONB NOT NULL,                -- [{rule, label, excerpt}], excerpts masked
+    allowed_groups TEXT[] NOT NULL,
+    at             TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS quarantine_audit_doc_idx
+    ON quarantine_audit (project_id, doc_id, at);
+
+-- The CHECKs above only reach a database that did not already have this table (CREATE TABLE IF NOT
+-- EXISTS is a no-op otherwise), so an existing one would stay silently unconstrained. Postgres has
+-- no ADD CONSTRAINT IF NOT EXISTS, and a DO block cannot be used here: Spring's script runner
+-- splits on ';' with no understanding of dollar quoting, so it would cut the block in half. Drop
+-- then add is plain, idempotent, and re-validates a small table cheaply on each boot.
+ALTER TABLE quarantine_audit DROP CONSTRAINT IF EXISTS quarantine_audit_action_check;
+ALTER TABLE quarantine_audit ADD CONSTRAINT quarantine_audit_action_check
+    CHECK (action IN ('held', 'release', 'discard'));
+ALTER TABLE quarantine_audit DROP CONSTRAINT IF EXISTS quarantine_audit_outcome_check;
+ALTER TABLE quarantine_audit ADD CONSTRAINT quarantine_audit_outcome_check
+    CHECK (outcome IN ('attempted', 'ok', 'failed'));

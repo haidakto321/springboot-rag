@@ -397,6 +397,28 @@ any authenticated user in `public` can undo the one blocking control and nothing
 That last one is a gap in the design, not in the implementation - §1.4 of the spec only ever asked
 for group scoping.
 
+**Row 5, third hold cleared (2026-08-12): the row stays 2.** Release and discard now require
+`ROLE_quarantine-release`, and every hold, release and discard writes a row to `quarantine_audit`
+that outlives the pen row the act deletes. The score does not move, because a third of an objection
+is not the objection: the judge is still unmeasured and off, and streaming still cannot retract.
+Moving a row for the part that got fixed would be scoring the work rather than the system.
+
+And the review of that work found a **second off switch**: `DELETE /projects/{id}` carries no role
+and no group check, and the pen cascades from it, so any authenticated user could destroy every held
+document. The cascade is now audited; the authorisation half is in ROADMAP, because that endpoint
+destroys a whole project and gating it under the quarantine role would look finished while a user
+outside the project's groups could still call it. The lesson is not "add another check" - it is that
+a control has as many off switches as there are paths to the state it protects, and finding them is
+a separate exercise from building the control.
+
+Two things in it worth more than the feature. **The decision row is written before the act**, so the
+partial-state hole this spec did not fix - a release that dies mid-ingest - now leaves a row reading
+`attempted` instead of leaving nothing at all; visible and unfixed beats silent and unfixed, and
+saying which one you shipped is the whole discipline. And **the audit table deliberately has no
+`raw_text` column**: it is append-only and never pruned, so a raw copy there would quietly become
+the longest-lived copy of every credential the scanner ever caught. That is asserted by a test over
+`SELECT *`, not by a comment, because the comment does not fail when someone adds the column back.
+
 **Exam keywords:** Bedrock Guardrails (content filters, denied topics, contextual grounding
 check), Amazon Comprehend PII detection, Amazon Macie, OWASP Top 10 for LLM Applications
 (prompt injection, data poisoning, excessive agency, sensitive information disclosure).

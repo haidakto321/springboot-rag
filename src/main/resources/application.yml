@@ -32,9 +32,11 @@ app:
       - username: alice
         password: alice
         groups: [public, hr]
+        roles: [quarantine-release]   # may release/discard a quarantined document
       - username: haiks
         password: 123123
         groups: [public, eng]
+        # no roles: releasing a held document is refused with 403
   embedding:
     provider: ollama
     model: nomic-embed-text

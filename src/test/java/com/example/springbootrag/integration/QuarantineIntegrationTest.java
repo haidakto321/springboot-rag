@@ -7,11 +7,13 @@ import com.example.springbootrag.repository.DocumentRegistry;
 import com.example.springbootrag.repository.PgVectorRepository;
 import com.example.springbootrag.repository.ProjectRepository;
 import com.example.springbootrag.repository.QdrantRepository;
+import com.example.springbootrag.repository.QuarantineAuditRepository;
 import com.example.springbootrag.repository.QuarantineRepository;
 import com.example.springbootrag.service.ProjectService;
 import com.example.springbootrag.web.IngestController;
 import com.example.springbootrag.web.dto.IngestRequest;
 import com.example.springbootrag.security.CurrentUser;
+import com.example.springbootrag.security.Roles;
 import com.example.springbootrag.security.SearchContext;
 import com.example.springbootrag.service.RecordIngestService;
 import com.example.springbootrag.web.DocumentController;
@@ -23,6 +25,7 @@ import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.mock.web.MockMultipartFile;
+import org.springframework.security.access.AccessDeniedException;
 import org.springframework.security.authentication.UsernamePasswordAuthenticationToken;
 import org.springframework.security.core.authority.SimpleGrantedAuthority;
 import org.springframework.security.core.context.SecurityContextHolder;
@@ -87,6 +90,7 @@ class QuarantineIntegrationTest {
     }
 
     @Autowired QuarantineRepository pen;
+    @Autowired QuarantineAuditRepository auditRepo;
     @Autowired ProjectRepository projects;
     @Autowired JdbcTemplate jdbc;
     @Autowired DocumentController documents;
@@ -104,17 +108,29 @@ class QuarantineIntegrationTest {
     final SearchContext alice = SearchContext.of("alice", Set.of("public", "finance"));
     final SearchContext outsider = SearchContext.of("bob", Set.of("public"));
 
+    /** Signs in as the given user for a direct controller call. Roles are authorities too. */
+    private void authenticateAs(String user, List<String> groups, List<String> roles) {
+        List<SimpleGrantedAuthority> authorities = new java.util.ArrayList<>();
+        for (String g : groups) {
+            authorities.add(new SimpleGrantedAuthority(CurrentUser.GROUP_PREFIX + g));
+        }
+        for (String r : roles) {
+            authorities.add(new SimpleGrantedAuthority(Roles.PREFIX + r));
+        }
+        SecurityContextHolder.getContext().setAuthentication(
+                new UsernamePasswordAuthenticationToken(user, "n/a", authorities));
+    }
+
     @BeforeEach
     void setUp() {
         jdbc.update("DELETE FROM quarantine");
+        jdbc.update("DELETE FROM quarantine_audit");
         projectId = projects.create("quarantine-test-" + System.nanoTime(), null);
         defaultProjectId = projectService.defaultProjectId();
         // The controller builds its own SearchContext from the authenticated principal - it never
-        // takes one as a parameter - so a direct call needs an authentication in place.
-        SecurityContextHolder.getContext().setAuthentication(
-                new UsernamePasswordAuthenticationToken("alice", "n/a",
-                        List.of(new SimpleGrantedAuthority(CurrentUser.GROUP_PREFIX + "public"),
-                                new SimpleGrantedAuthority(CurrentUser.GROUP_PREFIX + "finance"))));
+        // takes one as a parameter - so a direct call needs an authentication in place. alice holds
+        // the release role; the refusal tests below re-authenticate as someone who does not.
+        authenticateAs("alice", List.of("public", "finance"), List.of(Roles.QUARANTINE_RELEASE));
     }
 
     @AfterEach
@@ -292,6 +308,185 @@ class QuarantineIntegrationTest {
 
         assertThat(pgVector.listChunks(alice, projectId, "inv-9")).isNotEmpty();
         assertThat(pen.find(alice, projectId, "inv-9")).isEmpty();
+    }
+
+    @Test
+    void anAuditRowRoundTripsAndItsOutcomeCanBeStamped() {
+        long id = auditRepo.record(projectId, "policy", QuarantineAuditRepository.ACTION_RELEASE,
+                QuarantineAuditRepository.OUTCOME_ATTEMPTED, "alice",
+                "[{\"rule\":\"recovery-code\",\"label\":\"recovery code\",\"excerpt\":\"hun***\"}]",
+                List.of("public"));
+        long other = auditRepo.record(projectId, "meals", QuarantineAuditRepository.ACTION_HELD,
+                QuarantineAuditRepository.OUTCOME_OK, null, "[]", List.of("public"));
+
+        auditRepo.outcome(id, QuarantineAuditRepository.OUTCOME_OK);
+
+        var policy = auditRepo.history(projectId, "policy");
+        assertThat(policy).hasSize(1);
+        assertThat(policy.get(0).outcome()).isEqualTo("ok");
+        assertThat(policy.get(0).principal()).isEqualTo("alice");
+        assertThat(policy.get(0).allowedGroups()).containsExactly("public");
+        assertThat(policy.get(0).at()).isNotNull();
+        // outcome() must touch only the row it names.
+        assertThat(auditRepo.history(projectId, "meals").get(0).id()).isEqualTo(other);
+        assertThat(auditRepo.history(projectId, "meals").get(0).outcome()).isEqualTo("ok");
+    }
+
+    @Test
+    void aHeldDocumentMayHaveNoPrincipal() {
+        // WikiImporter holds pages from inside a streaming import; a null principal is honest -
+        // "the system held this, nobody claimed it" - and must not be an error.
+        long id = auditRepo.record(projectId, "wiki-page", QuarantineAuditRepository.ACTION_HELD,
+                QuarantineAuditRepository.OUTCOME_OK, null, "[]", List.of("public"));
+
+        assertThat(id).isPositive();
+        assertThat(auditRepo.history(projectId, "wiki-page").get(0).principal()).isNull();
+    }
+
+    @Test
+    void aCallerWithoutTheRoleCannotRelease() {
+        documents.uploadToProject(projectId,
+                md("policy.md", "The admin recovery code is hunter2\n"), List.of("public"));
+        authenticateAs("haiks", List.of("public", "finance"), List.of());
+
+        assertThatThrownBy(() -> quarantine.release(projectId, "policy"))
+                .isInstanceOf(AccessDeniedException.class);
+
+        // The control held: still in the pen, still nowhere in the index.
+        assertThat(pen.find(alice, projectId, "policy")).isPresent();
+        assertNowhereIndexed("policy");
+        // Refused before anything was decided: the hold is the only thing in the history.
+        assertThat(auditRepo.history(projectId, "policy"))
+                .extracting(QuarantineAuditRepository.Entry::action)
+                .containsExactly("held");
+    }
+
+    @Test
+    void aCallerWithoutTheRoleCannotDiscard() {
+        // Discard is the irreversible one - the pen holds the only copy of the document once it
+        // was un-indexed, so an unprivileged discard destroys the document and its evidence.
+        documents.uploadToProject(projectId,
+                md("policy.md", "The admin recovery code is hunter2\n"), List.of("public"));
+        authenticateAs("haiks", List.of("public", "finance"), List.of());
+
+        assertThatThrownBy(() -> quarantine.discard(projectId, "policy"))
+                .isInstanceOf(AccessDeniedException.class);
+
+        assertThat(pen.find(alice, projectId, "policy")).isPresent();
+    }
+
+    @Test
+    void theRoleIsNotASubstituteForBeingAbleToSeeTheDocument() {
+        // Two independent checks. The role says you may act; the group scoping says on what.
+        documents.uploadToProject(projectId,
+                md("policy.md", "The admin recovery code is hunter2\n"), List.of("finance"));
+        authenticateAs("carol", List.of("public"), List.of(Roles.QUARANTINE_RELEASE));
+
+        assertThatThrownBy(() -> quarantine.release(projectId, "policy"))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("nothing held under");
+    }
+
+    @Test
+    void aReleaseIsRecordedAgainstThePrincipalWhoMadeIt() {
+        documents.uploadToProject(projectId,
+                md("policy.md", "The admin recovery code is hunter2\n"), List.of("public"));
+
+        quarantine.release(projectId, "policy");
+
+        var history = auditRepo.history(projectId, "policy");
+        assertThat(history).extracting(QuarantineAuditRepository.Entry::action)
+                .containsExactly("held", "release");
+        assertThat(history.get(1).outcome()).isEqualTo("ok");
+        assertThat(history.get(1).principal()).isEqualTo("alice");
+        assertThat(history.get(1).allowedGroups()).containsExactly("public");
+        // The pen row is gone; the decision is not.
+        assertThat(pen.find(alice, projectId, "policy")).isEmpty();
+    }
+
+    @Test
+    void aDiscardIsRecordedToo() {
+        documents.uploadToProject(projectId,
+                md("policy.md", "The admin recovery code is hunter2\n"), List.of("public"));
+
+        quarantine.discard(projectId, "policy");
+
+        assertThat(auditRepo.history(projectId, "policy"))
+                .extracting(QuarantineAuditRepository.Entry::action)
+                .containsExactly("held", "discard");
+        assertNowhereIndexed("policy");
+        assertThat(pen.find(alice, projectId, "policy")).isEmpty();
+    }
+
+    @Test
+    void theAuditTrailNeverStoresTheSecretItself() {
+        // The pen holds the raw document on purpose and is group-scoped for it. This table is
+        // append-only and never pruned, so a raw copy here would outlive every other one.
+        documents.uploadToProject(projectId,
+                md("policy.md", "The admin recovery code is hunter2\n"), List.of("public"));
+        quarantine.release(projectId, "policy");
+
+        // SELECT * on purpose: a column added later is covered by this test without anyone
+        // remembering to add it here, which is the only way this assertion stays true.
+        List<String> everyValue = jdbc.query("SELECT * FROM quarantine_audit",
+                (rs, n) -> {
+                    StringBuilder all = new StringBuilder();
+                    for (int c = 1; c <= rs.getMetaData().getColumnCount(); c++) {
+                        all.append(rs.getString(c)).append(' ');
+                    }
+                    return all.toString();
+                });
+
+        assertThat(everyValue).isNotEmpty();
+        assertThat(everyValue).noneMatch(row -> row.contains("hunter2"));
+    }
+
+    @Test
+    void aReleaseThatFailsBeforeIngestingIsStampedFailed() {
+        // Narrower than it first looks, and the name says so. Corrupting raw_text makes the JSON
+        // parse throw BEFORE any ingest starts, so this proves the stamping, NOT the partial-state
+        // hole left open on 2026-08-11 (a release that dies part way, leaving a document both held
+        // and partially indexed). Reaching that state needs a failure injected inside the ingest
+        // itself; the `attempted` row exists for it, but nothing here reproduces it.
+        records.ingest(projectId, record("inv-7", "password is hunter2"));
+        jdbc.update("UPDATE quarantine SET raw_text = '{not json' "
+                + "WHERE project_id = ? AND doc_id = ?", projectId, "inv-7");
+
+        assertThatThrownBy(() -> quarantine.release(projectId, "inv-7"))
+                .isInstanceOf(IllegalStateException.class);
+
+        var history = auditRepo.history(projectId, "inv-7");
+        assertThat(history).extracting(QuarantineAuditRepository.Entry::action)
+                .containsExactly("held", "release");
+        assertThat(history.get(1).outcome()).isEqualTo("failed");
+        // Nothing was released: still held, still not indexed.
+        assertThat(pen.find(alice, projectId, "inv-7")).isPresent();
+        assertNowhereIndexed("inv-7");
+    }
+
+    @Test
+    void deletingAProjectRecordsWhatTheCascadeDestroys() {
+        // Found by review, and confirmed live: `quarantine.project_id REFERENCES projects(id) ON
+        // DELETE CASCADE` means deleting a project destroys every held document - the ONLY copy of
+        // each, since they were un-indexed to get there - without going anywhere near the role
+        // gate. Without this audit row the surviving 'held' rows would read as "still contained"
+        // for a document that no longer exists anywhere.
+        documents.uploadToProject(projectId,
+                md("policy.md", "The admin recovery code is hunter2\n"), List.of("public"));
+        assertThat(pen.find(alice, projectId, "policy")).isPresent();
+
+        projectService.delete(projectId);
+
+        assertThat(auditRepo.history(projectId, "policy"))
+                .extracting(QuarantineAuditRepository.Entry::action)
+                .containsExactly("held", "discard");
+        var cascade = auditRepo.history(projectId, "policy").get(1);
+        assertThat(cascade.outcome()).isEqualTo("ok");
+        assertThat(cascade.principal()).isEqualTo("alice");
+        // The pen row went with the project; the history did not - quarantine_audit has no FK.
+        assertThat(jdbc.queryForObject(
+                "SELECT count(*) FROM quarantine WHERE project_id = ?", Integer.class, projectId))
+                .isZero();
     }
 
     @Test

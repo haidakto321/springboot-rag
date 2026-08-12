@@ -65,6 +65,19 @@ public class WikiImporter {
      */
     public int importDir(long projectId, Path wikiRoot, ProgressListener listener,
                          List<String> allowedGroups) throws Exception {
+        return importDir(projectId, wikiRoot, listener, allowedGroups, null);
+    }
+
+    /**
+     * Same, with the principal to record against any page this import quarantines.
+     *
+     * <p>The HTTP caller runs this inside a {@code StreamingResponseBody}, on a thread with no
+     * SecurityContext, so the principal cannot be resolved down in {@code QuarantineService}. It is
+     * captured on the request thread and passed the whole way down. Null means "no authenticated
+     * caller", which is the honest value for a direct tool invocation.
+     */
+    public int importDir(long projectId, Path wikiRoot, ProgressListener listener,
+                         List<String> allowedGroups, String principal) throws Exception {
         int count = 0;
         try (Stream<Path> paths = Files.walk(wikiRoot)) {
             List<Path> pages = paths
@@ -95,7 +108,7 @@ public class WikiImporter {
                     // page with a production password. Hold it rather than reporting a generic
                     // failure, so it is visible in the pen and one call from being released.
                     quarantine.hold(projectId, docId, "upload", page.getFileName().toString(), null,
-                            safeRead(page), allowedGroups, e.findings());
+                            safeRead(page), allowedGroups, e.findings(), principal);
                     listener.onError(index, total, docId, e);
                 } catch (Exception e) {
                     // One bad page must not abort a bulk import; skip it and report.

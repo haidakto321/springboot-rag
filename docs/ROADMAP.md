@@ -149,6 +149,27 @@ The existing whole-answer 👍/👎 (localStorage-only) stays; this adds a per-s
   `LEARNINGS.md` section 14), but 11 questions is too thin to act on, which is exactly the case for
   labels at scale. Reasoning and full design notes: `LEARNINGS.md` section 15.
 
+### Quarantine release: a privilege gate and an audit row  ✅ done (2026-08-12)
+The gap the 2026-08-11 spec left open: release was scoped to the caller's groups and nothing more,
+so any authenticated user in `public` could undo the one blocking control, and the pen row - the
+only record that a document was ever held - was deleted by the act itself.
+
+- **Role** ✅ - `app.security.users[].roles`, granted as `ROLE_<name>` authorities beside the
+  existing `GROUP_<name>`, checked by `@PreAuthorize` on release and discard. Discard is gated too,
+  and for the sharper reason: once a document is un-indexed into the pen, the pen holds the ONLY
+  copy, so a discard destroys the document and its evidence. Listing stays open to anyone whose
+  groups overlap - the findings are masked, and an uploader seeing their own upload was held is the
+  only feedback they get. The group-scoped lookup still runs first, so a releaser acts on what they
+  can already see and never on more.
+- **Audit** ✅ - `quarantine_audit`, append-only, one row per held / release / discard with the
+  principal, the masked findings and the labels. **No `raw_text` column and no FK to `projects`** -
+  the reasons are in schema.sql and are the interesting part.
+- **Ordering** ✅ - release and discard write the decision row BEFORE acting and stamp the outcome
+  after, so a release that dies mid-ingest leaves a visible `attempted` row rather than nothing.
+  `held` is written after the hold commits, because until the pen row is deleted the pen row IS the
+  record.
+- Spec/plan: `docs/superpowers/{specs,plans}/2026-08-12-quarantine-release-control*`.
+
 ## Planned (not yet built)
 
 ### Router: a bare "what is X" can land in chitchat
@@ -169,13 +190,34 @@ This is the same lesson as the 2026-08-08 `what is the total on invoice INV-5575
 already recorded in `QueryRouter`'s javadoc: routing scored 21/21 on the golden set and 9/9 on
 held-out questions, and neither set contained this category. A golden set scores what it contains.
 
-### Quarantine release: a privilege gate and an audit row
-Built 2026-08-11, and left open on purpose. `POST /projects/{id}/quarantine/{docId}/release` is
-scoped to the caller's groups and nothing more, so any authenticated user in `public` can undo the
-system's one blocking control. The pen row is deleted on release, so who released what is
-unrecoverable afterwards. Needs a decision on both halves: a role (or a config-listed set of
-principals) that may release, and an `audit` row that survives the release. See `RAG-MASTERY.md`
-§5, the 2026-08-11 note.
+### `DELETE /projects/{id}` has no authorisation at all
+Found by the 2026-08-12 review, while checking whether the new quarantine role could be bypassed. It
+can, by a different door: `ProjectController.delete` is `public void delete(@PathVariable long id)`
+with **no role and no group check**, and `quarantine.project_id REFERENCES projects(id) ON DELETE
+CASCADE`, so any authenticated user destroys every held document in a project - the only copy of
+each - along with the whole project.
+
+Half-fixed on 2026-08-12: the cascade now writes a `discard` audit row per held document
+(`ProjectService.auditPenCascade`), so the history stays truthful and no `held` row is left claiming
+containment for a document that no longer exists. The authorisation half is untouched on purpose -
+this endpoint destroys *everything* in a project, not just the pen, so gating it is project-level
+authorisation and belongs with the group scoping it also lacks. Doing it under the quarantine role
+would have made it look finished while a user outside the project's groups could still delete it.
+
+### Quarantine audit: a read endpoint
+The audit trail below is queryable only through psql. A `GET /projects/{id}/quarantine/audit` would
+make it reviewable by the person who needs it, and it carries one real question rather than none:
+the findings are masked, but **a doc id plus a principal is not nothing** - "haiks released
+`salary-review-2026`" leaks the existence and the handler of a document the reader may not be
+entitled to see. So the endpoint needs a decision on whether the history is group-scoped like the
+pen, role-scoped like the release itself, or both. Deferred rather than guessed at.
+
+### Quarantine release, mid-ingest: a partial state that is now visible but not fixed
+A release that dies part way through the ingest leaves the document both held and partially indexed.
+As of 2026-08-12 it also leaves a `quarantine_audit` row reading `attempted` (or `failed`), so the
+state is detectable instead of silent - but nothing repairs or retries it. A fix means either making
+release idempotent end to end or sweeping `attempted` rows on startup. Worth doing only alongside
+the same treatment for the other cross-store writes (`IngestService` has the same shape).
 
 ### Groundedness judge: measure it, then decide the default
 `app.guard.groundedness.enabled` ships `false`. The number that should decide it is the

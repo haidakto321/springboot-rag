@@ -1356,6 +1356,62 @@ while the secret stayed retrievable through three backends.
 
 ---
 
+## 23. A control with an unguarded off switch
+
+Built 2026-08-12. Quarantine was the one control here that blocks rather than warns: a
+credential-bearing document never reaches `chunks`, Qdrant or the registry. It shipped with an
+endpoint that any authenticated user could call to undo it, and the undo left no trace. Four
+lessons, roughly in order of how far they travel.
+
+**Guard the off switch, not just the on switch.** The scan was moved into the one funnel every
+ingest path crosses (§22) and tested from four directions. None of that mattered to a caller who
+could simply release the document afterwards. Every user in this sandbox is in `public`, so "scoped
+to the caller's groups" was, in practice, no scope at all. When you build a control, the question is
+not only *what does it block* but *who can turn it off, and does anything notice*.
+
+**Then count the off switches, because there is rarely one.** A cold review of the finished work
+asked the obvious follow-up question - *is there another way to destroy a held document?* - and
+found `DELETE /projects/{id}`, which carries no role and no group check, cascading through
+`ON DELETE CASCADE` to wipe the entire pen. The gate was real and the bypass was one line of an
+unrelated controller. Worth noticing how it was found: not by testing the new code harder, but by
+asking what else reaches the same state. The same question had already been asked once on this
+codebase, in §22, and produced the same class of answer both times.
+
+The tell that a bypass is a *design* problem and not an oversight: I had proved the cascade myself,
+live, an hour earlier - `DELETE /projects/13` left `quarantine`=0 - and read it as pleasant
+confirmation that the audit table's missing foreign key worked. The same observation contained the
+vulnerability and the feature, and I saw only the feature because that was what I had gone looking
+for.
+
+**Deleting the row that records a decision deletes the decision.** The pen row was doing two jobs -
+current state and history - and release drops it. So the system could tell you what was held right
+now and nothing about what had ever been let in, by whom. Splitting the two is one table and one
+insert. The tell that they need splitting: the state row is deleted by the exact event most worth
+remembering.
+
+**Write the decision before the act.** Release now inserts `attempted`, ingests, then stamps `ok` -
+one extra statement, and a release that dies part way leaves a queryable row instead of silence. The
+mid-ingest partial state is still not *fixed*; it is now *visible*, which is a smaller claim and the
+honest one. The asymmetry is deliberate: the `held` row is written *after* the hold, because a row
+claiming containment before the un-index succeeded would assert something untrue - the same
+fails-safe ordering argument as §22, one level up.
+
+**An audit table is the longest-lived copy of whatever you put in it.** It is append-only and never
+pruned, so the obvious convenience - store the held document beside the finding, for review -
+would have made the audit trail outlive every other copy of every credential the scanner ever
+caught. It carries the masked findings and no raw text, and a test asserts that over `SELECT *`
+rather than over a named column list, so a column added later is covered without anyone remembering
+to update the test.
+
+One structural note that cost nothing because it was caught while reading rather than while
+running: the obvious home for release was `QuarantineService`, and it cannot go there.
+`RecordIngestService` already injects that class, so release - which needs `RecordIngestService` -
+would close a constructor-injection cycle and Spring would refuse to start. Reading the constructors
+of the two classes you are about to join takes a minute; discovering it from a failed context load
+takes longer and tells you less.
+
+---
+
 ## Where to go next
 `docs/ROADMAP.md` lists what's built and what's queued - notably **condense-question retrieval**
 (fixes vague follow-ups), snippet windowing, and token-budget history trimming. Each is a small

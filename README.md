@@ -134,10 +134,10 @@ Swagger UI: http://localhost:8085/swagger-ui.html
 
 Two sandbox users ship in `application.yml`:
 
-| user | password | groups |
-|---|---|---|
-| `alice` | `alice` | `public`, `hr` |
-| `haiks` | `123123` | `public`, `eng` |
+| user | password | groups | roles |
+|---|---|---|---|
+| `alice` | `alice` | `public`, `hr` | `quarantine-release` |
+| `haiks` | `123123` | `public`, `eng` | - |
 
 ```bash
 curl -u alice:alice "http://localhost:8085/search?q=chunking&type=hybrid&projectId=1"
@@ -152,9 +152,15 @@ nothing - that is the intended fail-closed default.
 Change or add users under `app.security.users`. Passwords are plain text with a `{noop}` encoder
 because this is a single-developer laboratory - **do not copy this block anywhere real.**
 
+**Groups say what you may read; roles say what you may do.** Almost every endpoint needs only
+authentication plus the right groups. The exceptions are the two that undo quarantine - releasing a
+held document into the index, and discarding it - which need the `quarantine-release` role. `haiks`
+does not have it, which makes `curl -u haiks:123123 -X POST .../quarantine/policy/release` a `403`
+and is the quickest way to see the gate work.
+
 | property | default | meaning |
 |---|---|---|
-| `app.security.users` | alice, haiks | username / password / groups list |
+| `app.security.users` | alice, haiks | username / password / groups list / roles list |
 | `app.security.default-group` | `public` | label stamped on ingest when none is given |
 | `app.security.backfill-qdrant-groups` | `true` | label pre-ACL Qdrant points at startup |
 
@@ -383,7 +389,27 @@ curl -u alice:alice -F "file=@policy.md" localhost:8085/projects/1/documents
 
 curl -u alice:alice localhost:8085/projects/1/quarantine
 curl -u alice:alice -X POST localhost:8085/projects/1/quarantine/policy/release
+
+# haiks holds no role: 403. Listing is open to their groups, undoing the control is not.
+curl -u haiks:123123 -X POST localhost:8085/projects/1/quarantine/policy/release
 ```
+
+Releasing or discarding needs the `quarantine-release` role, and both write a row to
+`quarantine_audit` - who decided, when, on which findings - that survives the pen row the decision
+deletes. There is no read endpoint for it yet; query the table directly:
+
+```sql
+SELECT at, action, outcome, principal, doc_id FROM quarantine_audit ORDER BY at DESC LIMIT 20;
+```
+
+`failed` means the release threw and was recorded doing so. A row still reading `attempted` is the
+rarer and more interesting one: the process died between the decision and its outcome, which can
+leave a document both held and partially indexed. That state is visible; nothing repairs it
+(ROADMAP).
+
+Deleting a project also destroys everything in its pen (`ON DELETE CASCADE`), so that path writes a
+`discard` row per held document too. It is **not** gated by the role - see ROADMAP, that endpoint
+has no authorisation of any kind yet.
 
 Findings carry masked excerpts - a response or a log line that reprinted the value would move the
 secret from one place it should not be into two. The scan runs inside `IngestService`, the single

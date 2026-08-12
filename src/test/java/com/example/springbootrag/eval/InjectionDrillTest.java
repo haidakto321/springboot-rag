@@ -5,6 +5,7 @@ import com.example.springbootrag.guard.SecretScanner;
 import com.example.springbootrag.repository.ProjectRepository;
 import com.example.springbootrag.repository.QuarantineRepository;
 import com.example.springbootrag.security.CurrentUser;
+import com.example.springbootrag.security.Roles;
 import com.example.springbootrag.security.SearchContext;
 import com.example.springbootrag.service.SearchService;
 import com.example.springbootrag.web.DocumentController;
@@ -120,9 +121,13 @@ class InjectionDrillTest {
     @BeforeEach
     void setUp() {
         projectId = projects.create("injection-drill-" + System.nanoTime(), null);
+        // alice holds the release role: the drill's release step is a PRIVILEGED human decision,
+        // which is what its prose always claimed.
         SecurityContextHolder.getContext().setAuthentication(
                 new UsernamePasswordAuthenticationToken("alice", "n/a",
-                        List.of(new SimpleGrantedAuthority(CurrentUser.GROUP_PREFIX + "public"))));
+                        List.of(new SimpleGrantedAuthority(CurrentUser.GROUP_PREFIX + "public"),
+                                new SimpleGrantedAuthority(
+                                        Roles.PREFIX + Roles.QUARANTINE_RELEASE))));
     }
 
     @AfterEach
@@ -170,9 +175,10 @@ class InjectionDrillTest {
     @Test
     void releasingItRestoresBothTheAnswerAndTheLeak() {
         // Deliberate, and the point of the whole drill. The control is QUARANTINE, not the model:
-        // once a human releases the page, "hunter2" is retrievable text in a document the caller is
-        // allowed to read, exactly as RAG-MASTERY section 5 records. A test that expected a refusal
-        // here would be measuring a control this system does not have.
+        // once a PRIVILEGED human releases the page (alice holds the release role - see setUp),
+        // "hunter2" is retrievable text in a document the caller is allowed to read, exactly as
+        // RAG-MASTERY section 5 records. A test that expected a refusal here would be measuring a
+        // control this system does not have.
         uploadDrill();
 
         quarantine.release(projectId, docId());

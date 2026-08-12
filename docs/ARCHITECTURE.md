@@ -299,6 +299,7 @@ flowchart TB
     SCAN --> CH["<b>MarkdownChunker</b><br/>split by heading, breadcrumbs kept,<br/>code blocks and tables atomic"]
     CH --> SEC{"<b>SecretScanner</b><br/>inside IngestService.ingestChunks,<br/>the funnel EVERY ingest path crosses"}
     SEC -->|credential found| QUAR["<b>quarantine table</b><br/>un-index first, then hold.<br/>never reaches chunks / Qdrant / registry"]
+    QUAR --> AUD[("<b>quarantine_audit</b><br/>held · release · discard<br/>outlives the pen row. no raw text")]
     SEC -->|clean| CAP["<b>capToBudget</b><br/>hard 2000-char cap so a chunk<br/>fits nomic-embed-text's context"]
     CAP --> DEL["<b>delete existing chunks</b><br/>upsert-by-(project, docId)"]
     DEL --> EMB["<b>embed each chunk</b><br/>Ollama nomic-embed-text"]
@@ -414,6 +415,7 @@ filter is a caller preference, a label is a boundary.
 | Record with no docType, non-object record, or one that renders to no text | `400` | `RecordIngestService.ingest` |
 | Document carries credential-shaped text | `200` with `quarantined: true`, nothing indexed | `IngestService.ingestChunks` throws `QuarantineRequiredException`; the caller holds it via `QuarantineService` |
 | Release requested for a document you cannot read | `400` | `QuarantineController.require` - the lookup goes through your groups |
+| Release or discard by a caller without the role | `403` | `@PreAuthorize("hasRole('quarantine-release')")`; the group lookup above still applies on top |
 | Streamed answer never cites a supplied chunk | nothing streamed; `AnswerGuard.REFUSAL` sent instead | `GuardedEmitter` (HOLDING state at end of stream) |
 | Streamed answer cites out of range mid-answer | stream stops after the good prefix, `guard` frame | `GuardedEmitter` (PASSING state) |
 | Groundedness judge unreachable or unparseable | answer allowed | `GroundednessJudge.judge` - a judge outage must not refuse everything |

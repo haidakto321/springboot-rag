@@ -2,12 +2,12 @@ package com.example.springbootrag.web;
 
 import com.example.springbootrag.repository.QuarantineRepository;
 import com.example.springbootrag.security.CurrentUser;
-import com.example.springbootrag.service.IngestService;
-import com.example.springbootrag.service.RecordIngestService;
+import com.example.springbootrag.security.Roles;
+import com.example.springbootrag.service.QuarantineReleaseService;
 import com.example.springbootrag.web.dto.QuarantineView;
-import com.example.springbootrag.web.dto.RecordRequest;
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import org.springframework.security.access.prepost.PreAuthorize;
 import org.springframework.web.bind.annotation.DeleteMapping;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
@@ -21,8 +21,16 @@ import java.util.List;
  * The human end of quarantine: see what is held, and decide.
  *
  * <p>Release deliberately does NOT re-scan. Re-running the rule that held the document would
- * refuse the exact document a person just decided to accept; the human decision IS the override,
- * and it is recorded by the row leaving the pen.
+ * refuse the exact document a person just decided to accept; the human decision IS the override.
+ *
+ * <p>Reading what is held stays open to anyone whose groups overlap the document - the findings are
+ * masked, and an uploader seeing that their own upload was held is the only feedback they get.
+ * Releasing and discarding need {@link Roles#QUARANTINE_RELEASE}, because both undo the one
+ * blocking control this system has.
+ *
+ * <p>The annotations here fail a refusal at the edge, before any database work. They are NOT the
+ * control: {@link QuarantineReleaseService} carries the same check plus the group-scoped lookup, so
+ * the rule cannot be bypassed by reaching that service some other way.
  */
 @RestController
 public class QuarantineController {
@@ -30,15 +38,13 @@ public class QuarantineController {
     private static final ObjectMapper MAPPER = new ObjectMapper();
 
     private final QuarantineRepository pen;
-    private final IngestService ingest;
-    private final RecordIngestService records;
+    private final QuarantineReleaseService releaseService;
     private final CurrentUser currentUser;
 
-    public QuarantineController(QuarantineRepository pen, IngestService ingest,
-                                RecordIngestService records, CurrentUser currentUser) {
+    public QuarantineController(QuarantineRepository pen, QuarantineReleaseService releaseService,
+                                CurrentUser currentUser) {
         this.pen = pen;
-        this.ingest = ingest;
-        this.records = records;
+        this.releaseService = releaseService;
         this.currentUser = currentUser;
     }
 
@@ -54,43 +60,15 @@ public class QuarantineController {
 
     /** Indexes the held document under the labels its original ingest carried, then empties the pen. */
     @PostMapping("/projects/{projectId}/quarantine/{docId}/release")
+    @PreAuthorize("hasRole('" + Roles.QUARANTINE_RELEASE + "')")
     public void release(@PathVariable long projectId, @PathVariable String docId) {
-        QuarantineRepository.Held h = require(projectId, docId);
-        if ("record".equals(h.origin())) {
-            records.ingestReleased(projectId, toRequest(h));
-        } else {
-            // scanForSecrets = false: re-running the rule that held it would refuse the exact
-            // document a human just decided to accept.
-            ingest.ingestMarkdown(projectId, h.docId(), h.sourceFile(), h.rawText(), null,
-                    h.allowedGroups(), false);
-        }
-        pen.drop(projectId, docId);
+        releaseService.release(projectId, docId);
     }
 
     @DeleteMapping("/projects/{projectId}/quarantine/{docId}")
+    @PreAuthorize("hasRole('" + Roles.QUARANTINE_RELEASE + "')")
     public void discard(@PathVariable long projectId, @PathVariable String docId) {
-        require(projectId, docId);
-        pen.drop(projectId, docId);
-    }
-
-    /**
-     * Looks the row up THROUGH the caller's groups, so releasing or discarding something you
-     * cannot read is not expressible - the same rule the read path follows.
-     */
-    private QuarantineRepository.Held require(long projectId, String docId) {
-        return pen.find(currentUser.context(), projectId, docId)
-                .orElseThrow(() -> new IllegalArgumentException("nothing held under: " + docId));
-    }
-
-    private RecordRequest toRequest(QuarantineRepository.Held h) {
-        try {
-            // force=true: the registry row was dropped when the record was held, but a release must
-            // re-index even if some other path left a matching hash behind.
-            return new RecordRequest(h.docId(), h.docType(), MAPPER.readTree(h.rawText()), null,
-                    h.allowedGroups(), Boolean.TRUE);
-        } catch (JsonProcessingException e) {
-            throw new IllegalStateException("held record is not valid JSON: " + h.docId(), e);
-        }
+        releaseService.discard(projectId, docId);
     }
 
     /** Findings are stored as JSON text; hand them back as JSON, not as an escaped string. */
