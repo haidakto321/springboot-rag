@@ -31,9 +31,20 @@ public class MarkdownChunker implements Chunker {
             .build();
     private final TextContentRenderer headingRenderer = TextContentRenderer.builder().build();
 
+    private final HeadingStyle style;
+    private final int deepestLevels;
+
+    /** Default styling: the full breadcrumb, exactly as this chunker has always emitted it. */
     public MarkdownChunker(int maxWords, WordWindowChunker fallback) {
+        this(maxWords, fallback, HeadingStyle.FULL, 2);
+    }
+
+    public MarkdownChunker(int maxWords, WordWindowChunker fallback,
+                           HeadingStyle style, int deepestLevels) {
         this.maxWords = maxWords;
         this.fallback = fallback;
+        this.style = style;
+        this.deepestLevels = deepestLevels;
     }
 
     private record Block(String text, int words, boolean atomic) {}
@@ -110,8 +121,11 @@ public class MarkdownChunker implements Chunker {
             pieces.add(current.toString());
         }
         String headingPath = breadcrumb.isEmpty() ? null : breadcrumb;
+        // headingPath keeps the FULL path in every style - it is a search filter and the eval's
+        // matching key (RetrievalEvalTest.rankOfExpected). Only the embedded text varies.
+        String rendered = HeadingStyle.render(style, headingPath, deepestLevels);
         for (String piece : pieces) {
-            String text = headingPath == null ? piece : headingPath + "\n\n" + piece;
+            String text = rendered.isEmpty() ? piece : rendered + "\n\n" + piece;
             out.add(new Chunk(text, headingPath, position[0]++));
         }
         section.clear();

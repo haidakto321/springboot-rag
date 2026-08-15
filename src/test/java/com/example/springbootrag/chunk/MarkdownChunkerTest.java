@@ -156,4 +156,71 @@ class MarkdownChunkerTest {
         assertThat(chunker.chunk("   ")).isEmpty();
         assertThat(chunker.chunk(null)).isEmpty();
     }
+
+    // ---- Heading style experiment (see 2026-08-15-heading-breadcrumb-treatment spec) ----------
+    // The tests above must keep passing untouched: that is the proof the default did not move.
+
+    /** Three heading levels, one short paragraph - the fixture every style test below shares. */
+    private static final String NESTED_MD = """
+            # Guide
+
+            ## Setup
+
+            ### Flags
+
+            Pass the verbose flag.
+            """;
+
+    private static List<Chunk> chunkWith(HeadingStyle style, int deepestLevels) {
+        return new MarkdownChunker(30, new WordWindowChunker(20, 5), style, deepestLevels)
+                .chunk(NESTED_MD);
+    }
+
+    @Test
+    void defaultConstructorStillProducesTheFullBreadcrumb() {
+        List<Chunk> chunks = chunker.chunk(NESTED_MD);
+        assertThat(chunks).hasSize(1);
+        assertThat(chunks.get(0).text()).startsWith("# Guide > ## Setup > ### Flags\n\n");
+    }
+
+    @Test
+    void fullStyleMatchesTheDefaultConstructor() {
+        assertThat(chunkWith(HeadingStyle.FULL, 2).get(0).text())
+                .isEqualTo(chunker.chunk(NESTED_MD).get(0).text());
+    }
+
+    @Test
+    void deepestStyleDropsTheAncestors() {
+        assertThat(chunkWith(HeadingStyle.DEEPEST, 2).get(0).text())
+                .startsWith("## Setup > ### Flags\n\n")
+                .contains("Pass the verbose flag.");
+    }
+
+    @Test
+    void plainStyleDropsTheHashMarks() {
+        assertThat(chunkWith(HeadingStyle.PLAIN, 2).get(0).text())
+                .startsWith("Guide > Setup > Flags\n\n")
+                .contains("Pass the verbose flag.");
+    }
+
+    @Test
+    void noneStyleEmitsThePieceAlone() {
+        assertThat(chunkWith(HeadingStyle.NONE, 2).get(0).text())
+                .isEqualTo("Pass the verbose flag.");
+    }
+
+    @Test
+    void embedOnlyStyleComposesLikeFull() {
+        assertThat(chunkWith(HeadingStyle.EMBED_ONLY, 2).get(0).text())
+                .startsWith("# Guide > ## Setup > ### Flags\n\n");
+    }
+
+    @Test
+    void headingPathStaysTheFullPathInEveryStyle() {
+        for (HeadingStyle style : HeadingStyle.values()) {
+            assertThat(chunkWith(style, 2).get(0).headingPath())
+                    .as("headingPath must stay the full path for %s - the eval matches on it", style)
+                    .isEqualTo("# Guide > ## Setup > ### Flags");
+        }
+    }
 }

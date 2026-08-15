@@ -1,8 +1,10 @@
 package com.example.springbootrag.service;
 
 import com.example.springbootrag.chunk.Chunk;
+import com.example.springbootrag.chunk.HeadingStyle;
 import com.example.springbootrag.chunk.MarkdownChunker;
 import com.example.springbootrag.chunk.WordWindowChunker;
+import com.example.springbootrag.config.ChunkProperties;
 import com.example.springbootrag.config.GraphProperties;
 import com.example.springbootrag.config.GuardProperties;
 import com.example.springbootrag.embedding.EmbeddingProvider;
@@ -40,13 +42,13 @@ public class IngestService {
     private final SecurityProperties securityProps;
     private final DocumentRegistry documentRegistry;
     private final GuardProperties guard;
+    private final ChunkProperties chunkProps;
     // Hard ceiling per chunk so an atomic table/code block can never exceed the embedding
     // model's context window (nomic-embed-text runs at ~2048 tokens under Ollama). Dense
     // tables (IDs, numbers, pipes) tokenize near 1 char/token, so 2000 chars stays under
     // the 2048-token limit even in the worst case.
     private static final int MAX_CHUNK_CHARS = 2000;
     private final WordWindowChunker wordWindow = new WordWindowChunker(120, 20);
-    private final MarkdownChunker markdown = new MarkdownChunker(300, new WordWindowChunker(120, 20));
     private final WikiLinkParser linkParser = new WikiLinkParser();
 
     public IngestService(EmbeddingProvider embeddings,
@@ -59,7 +61,8 @@ public class IngestService {
                          GraphProperties graphProps,
                          SecurityProperties securityProps,
                          DocumentRegistry documentRegistry,
-                         GuardProperties guard) {
+                         GuardProperties guard,
+                         ChunkProperties chunkProps) {
         this.embeddings = embeddings;
         this.pgVector = pgVector;
         this.qdrant = qdrant;
@@ -71,6 +74,13 @@ public class IngestService {
         this.securityProps = securityProps;
         this.documentRegistry = documentRegistry;
         this.guard = guard;
+        this.chunkProps = chunkProps;
+    }
+
+    /** Rebuilt per document so a heading-style change takes effect without a context restart. */
+    private MarkdownChunker markdownChunker() {
+        return new MarkdownChunker(300, new WordWindowChunker(120, 20),
+                chunkProps.getHeadingStyle(), chunkProps.getDeepestLevels());
     }
 
     // ---- Legacy wrappers (resolve default project) ----------------------------------------
@@ -123,7 +133,8 @@ public class IngestService {
     public int ingestMarkdown(long projectId, String docId, String sourceFile,
                               String markdownText, Instant updatedAt, List<String> allowedGroups,
                               boolean scanForSecrets) {
-        int stored = ingestChunks(projectId, docId, sourceFile, markdown.chunk(markdownText),
+        int stored = ingestChunks(projectId, docId, sourceFile,
+                markdownChunker().chunk(markdownText),
                 updatedAt, allowedGroups, null, null, scanForSecrets);
         // Structural edges: one 'link' edge per outbound cross-page reference.
         for (String dst : linkParser.outboundDocIds(markdownText)) {
@@ -201,11 +212,12 @@ public class IngestService {
         for (int i = 0; i < chunks.size(); i++) {
             Chunk chunk = chunks.get(i);
             String meta = perChunkMetadataJson == null ? null : perChunkMetadataJson.get(i);
+            String stored = storeText(chunk);
             float[] vec = embeddings.embed(chunk.text());
-            long id = pgVector.insert(projectId, docId, chunk.position(), chunk.text(),
+            long id = pgVector.insert(projectId, docId, chunk.position(), stored,
                     sourceFile, chunk.headingPath(), vec, updatedAt, groups, docType, meta);
             try {
-                qdrant.upsert(id, projectId, docId, chunk.position(), chunk.text(),
+                qdrant.upsert(id, projectId, docId, chunk.position(), stored,
                         sourceFile, chunk.headingPath(), vec, groups, docType, meta);
             } catch (ExecutionException | InterruptedException e) {
                 throw new IllegalStateException("Qdrant upsert failed", e);
@@ -215,6 +227,23 @@ public class IngestService {
             }
         }
         return chunks.size();
+    }
+
+    /**
+     * What actually gets stored. Identical to the embedded text except under EMBED_ONLY, where the
+     * breadcrumb is removed so it reaches the vector but not content/tsv/reranker/prompt/UI.
+     *
+     * <p>Removal only, never addition, so stored text can never exceed the embed budget. A chunk
+     * whose prefix is missing - capToBudget splits an oversized chunk, and only the first piece
+     * keeps the breadcrumb - is stored unchanged rather than treated as an error.
+     */
+    private String storeText(Chunk chunk) {
+        if (chunkProps.getHeadingStyle() != HeadingStyle.EMBED_ONLY || chunk.headingPath() == null) {
+            return chunk.text();
+        }
+        String prefix = HeadingStyle.render(HeadingStyle.FULL, chunk.headingPath(),
+                chunkProps.getDeepestLevels()) + "\n\n";
+        return chunk.text().startsWith(prefix) ? chunk.text().substring(prefix.length()) : chunk.text();
     }
 
     /** Everything that is about to be embedded, as one string for the scanner. */

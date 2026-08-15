@@ -1412,6 +1412,75 @@ takes longer and tells you less.
 
 ---
 
+## 24. What the heading breadcrumb was actually worth
+
+The markdown chunker has always prepended a heading breadcrumb to each chunk's text
+(`MarkdownChunker.flushSection`). That was added on intuition and never measured. It is also easy to
+misread: because the concatenation happens inside the chunker, the breadcrumb ends up in
+`chunk.text()`, which means it reaches the embedding **and** `content`, and therefore `tsv`, the
+reranker, the answer prompt, and the UI. Nobody decided that; it fell out of where one `+` lived.
+
+**The near-miss.** This work started as "add heading context before embedding" - a technique with
+published gains. Two files of reading killed it: the context was already there. A feature that
+duplicates an existing one is invisible from the outside and expensive from the inside. Reading
+`MarkdownChunker.java:113` first cost ten minutes and saved building a no-op.
+
+So the question changed from *should we add this* to *what shape should it be*.
+`app.chunk.heading-style` makes five variants switchable, and `HeadingStyleEvalTest` prices them all
+against the 18-question golden set. Full table in the run log; the part that matters:
+
+| style | hybrid recall@5 | hybrid MRR | hybrid hit@1 | fts recall@5 |
+|---|---|---|---|---|
+| `full` (what shipped) | 1.000 | 0.755 | 0.611 | 0.222 |
+| `deepest` (last 2 levels) | 1.000 | 0.727 | 0.556 | 0.222 |
+| **`plain`** (`#` marks stripped) | **1.000** | **0.843** | **0.722** | **0.222** |
+| `none` | 0.944 | 0.784 | 0.667 | 0.111 |
+| `embed-only` | 1.000 | 0.727 | 0.556 | 0.111 |
+
+**The hash marks were costing accuracy.** `plain` differs from `full` by deleting `#` characters and
+nothing else, and it moved hybrid MRR from 0.755 to 0.843 and hit@1 from 0.611 to 0.722. Strictly
+less text, better ranking. The markdown syntax was never signal; it repeats identically in every
+chunk of the corpus, so it adds tokens that cannot discriminate between anything.
+
+**The breadcrumb earns its place on the keyword side, not the vector side.** `embed-only` keeps it in
+the embedding and strips it from storage: vector numbers land exactly on `full` (pgvector MRR 0.705
+either way), while `fts` recall halves, 0.222 to 0.111. Meanwhile `none` beats `full` on pure vector
+MRR (0.784 vs 0.705). Read together: the breadcrumb slightly *dilutes* the vector - every chunk in a
+section pointing the same direction, the predicted failure mode - and materially *helps* BM25, which
+needs the section's words to be literally present. A change that looked like one knob was two
+opposing effects, and only a per-backend table separates them.
+
+**A prediction in the design doc was wrong, and the eval did not catch it.** The spec claimed `fts`
+should move only for `none` and `embed-only`, on the reasoning that only those change stored
+`content`. Wrong: `deepest` and `plain` change stored content too. `fts` held steady across those
+three for a weaker reason - `to_tsvector` discards `#` as punctuation, and dropping ancestor headings
+did not reorder these particular 18 questions. The observation matched the prediction by accident.
+A check that passes for the wrong reason is worth less than no check, and only re-deriving it after
+seeing the numbers exposed that.
+
+**Size of the evidence.** 18 questions. One question flipping is 0.056 of hit@1, so the `plain`
+advantage is two questions' worth. It points one direction on every backend that uses the vector,
+which is more than noise usually manages, but it is one small corpus of this repo's own docs. Enough
+to change a default; not enough to publish.
+
+**The default stayed `full` anyway.** Deliberate, on 2026-08-15. Flipping it costs a full re-ingest
+of everything already indexed, and buys two questions on one corpus. The knob is built, the number is
+recorded, and the switch is one line in `application.yml` whenever a bigger corpus or a bigger golden
+set makes the case stronger. Measuring something and then declining to act on it is a legitimate
+outcome; the mistake would be flipping a default because the experiment felt like it deserved a
+result.
+
+**The gate had been dead for weeks.** Running this eval was blocked by
+`QuarantineRequiredException` on `docs/ARCHITECTURE.md` - the credential scanner from §23 refuses the
+corpus, because the corpus documents the sandbox's own fake credentials. `RetrievalEvalTest` has been
+failing the same way since that feature landed. Nothing noticed: eval tests are excluded from the
+normal build (`pom.xml`), so they run only when asked by hand, and nobody asked. A regression gate
+that is never executed does not report red, it reports nothing, and nothing looks exactly like green
+from a distance. The fix is the flag the scanner's own javadoc describes for deliberate bulk imports;
+the lesson is that a test outside the build needs something that notices its absence.
+
+---
+
 ## Where to go next
 `docs/ROADMAP.md` lists what's built and what's queued - notably **condense-question retrieval**
 (fixes vague follow-ups), snippet windowing, and token-budget history trimming. Each is a small
