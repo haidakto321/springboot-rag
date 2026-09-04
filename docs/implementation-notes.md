@@ -1805,3 +1805,95 @@ everywhere else in this codebase - no other method-security annotations, no `@As
 Schema note: the `CHECK` constraints reach an existing database through `ALTER TABLE ... DROP
 CONSTRAINT IF EXISTS` followed by `ADD CONSTRAINT`, not a `DO $$` block. Spring's script runner
 splits on `;` with no understanding of dollar quoting and would cut the block in half.
+
+## Delete authorisation (2026-09-04)
+
+Spec/plan: none. Bounded change, brainstormed and executed inline; the ROADMAP entry from
+2026-08-12 was the specification.
+
+**What the ROADMAP asked for was one endpoint. Reading the neighbours turned it into five.**
+`DELETE /projects/{id}` had no role and no group check while `quarantine.project_id` cascades from
+it, which was the tracked hole. But `DELETE /documents/{docId}`, `DELETE /docs/{docId}`,
+`DELETE /projects/{id}/documents/{docId}` and `DELETE /projects/{id}/records/{docId}` had no check
+either - `IngestService.delete` took no `SearchContext` at all - so `haiks` could delete an `hr`
+document one id at a time without ever touching the project endpoint. The finer-grained hole was
+the easier one to use.
+
+**The rule, and where it lives.** `DeleteGuard`: you may only destroy what you may read. It refuses
+when the target holds anything outside the caller's groups - any chunk of the document, or any
+chunk **or held document** of the project. The document check sits in
+`IngestService.delete(projectId, docId)` rather than in the four controllers, because that method is
+the funnel all four cross; the project check sits in `ProjectService.delete`, with `@PreAuthorize`
+on both the service and the controller, the pattern quarantine release already established.
+
+**The funnel found a hole nobody had listed.** `ingestChunks` deletes the previous version before
+writing, so the same method is on the re-ingest path - which means that before this change, re-using
+an existing doc id was a way to **overwrite a document you could not read**. Putting the check in
+the funnel closed the ingest-shaped version of the same defect for free.
+`reIngestingSomeoneElsesRestrictedDocumentIdIsRefused` is the test.
+
+**The pen is counted separately, and that is the point.** A project whose documents are all held has
+no chunks at all, so a coverage check that counted only the index would read it as empty and hand
+over the pen - which holds the ONLY copy of every document in it, since they were un-indexed to get
+there. `QuarantineRepository.countUnreadableHeld` is a second query for exactly that case, with its
+own test (`anUnreadableHeldDocumentBlocksTheProjectDeleteThoughTheIndexIsEmpty`).
+
+**`COALESCE(..., false)` is load-bearing SQL.** `chunks.allowed_groups` is nullable - it was added by
+`ALTER TABLE` and backfilled once at startup. Array overlap against NULL is NULL, and `NOT NULL` is
+NULL, so without the coalesce an unlabelled row counts as readable and a chunk nobody may read would
+be deletable by anybody. `anUnlabelledChunkIsUnreadableAndBlocksTheDelete` pins it.
+
+**The one deliberate open branch, and the test that guards its premise.** A call with no
+authenticated principal is allowed through: re-ingest, quarantine containment (`QuarantineService.hold`
+un-indexes what it holds) and `WikiImporter`'s async thread all delete legitimately without one, and
+the last of those runs on a thread where `SecurityContextHolder` is empty by construction - the same
+fact that made every wiki-import hold record a null principal in the 2026-08-12 review. That branch
+is safe only while the filter chain refuses anonymous requests, which is a fact in a different file.
+So `ProjectControllerSecurityTest` and `DocumentDeleteSecurityTest` each assert the **401**, rather
+than leaving the premise implicit.
+
+**Ordering kept from 2026-08-12.** The coverage check runs before `auditPenCascade`, so a refused
+project delete writes no audit row - the same property `@PreAuthorize` gives quarantine, where a
+refused call never begins a decision. `aRefusedProjectDeleteWritesNoAuditRow` asserts it.
+
+**Deliberate non-goals, so the next reader does not mistake them for oversights.**
+
+- **`GET /projects` still lists every project to every authenticated user.** Project membership does
+  not exist in this schema: `projects.group_name` is a workspace grouping label used by
+  `resolveScope` to widen a search across sibling projects, a **different namespace** from the
+  access-control groups. Delete is now authorised by content coverage precisely because there is no
+  project ACL to check. Adding one is a schema change and its own design.
+- **A NULL or empty `allowed_groups` blocks its project's delete for everyone.** That is the chosen
+  failure direction: loud and detectable beats a silent bypass, and `schema.sql` backfills the label
+  at startup. There is no relabel endpoint today; if this ever wedges, that is the fix.
+- **The refusal message carries a count and a project id, never a doc id or a group name.** A
+  message naming what it hid would describe the contents of something the caller may not read.
+  `theRefusalNamesWhatItRefusedWithoutNamingWhatWasHidden` asserts the absence.
+
+**Two tests changed because the behaviour changed, not because they were wrong.**
+`QuarantineIntegrationTest.deletingAProjectRecordsWhatTheCascadeDestroys` and
+`ProjectDeleteIntegrationTest.deletingProjectRemovesChunksFromPostgresAndQdrant` now say who is
+deleting (a principal holding `project-delete`, in groups that cover the content). A test that
+deletes a project without naming a deleter no longer describes anything real. The stale comment in
+`ProjectServiceTest` claiming "the role gate is nowhere on this path" was corrected rather than
+deleted.
+
+**UI.** The document-delete button ignored the response entirely, so a 403 did nothing and said
+nothing; both delete buttons now report the refusal. Plain JS, no framework, matching the rest of
+`app.js`.
+
+**One interaction found by reading, not by a failing test.** `QuarantineService.hold` un-indexes what
+it contains, so containment crosses the same funnel. If a caller uploads a secret under a doc id
+whose existing version they cannot read, the hold is now refused - and the document is neither
+indexed nor held, it is rejected outright. That reads alarming ("containment failed") until you see
+that nothing was ever stored, which is why
+`quarantiningAnUploadUnderSomeoneElsesRestrictedDocIdIsRefusedRatherThanHeld` exists and says so.
+The alternative - an unguarded delete method for containment to call - would have been the bypass
+door this design was built to avoid.
+
+**Suite: 503 -> 530, 0 failures, 3 skipped.** 26 new tests: `DeleteGuardTest` (7, mocked decision),
+`DeleteAuthorizationIntegrationTest` (12, real Postgres + Qdrant), `ProjectControllerSecurityTest`
+(4, the role gate and the 401 premise), `DocumentDeleteSecurityTest` (2, the 403 status nobody was
+asserting), and 2 in `CurrentUserTest` for `contextOrNull`. `GraphPropertiesTest` failed on the
+first full run for an unrelated reason - the local dev Postgres was not running - which is worth
+noting only because it is the kind of environmental failure that gets misread as a regression.

@@ -18,6 +18,7 @@ import com.example.springbootrag.repository.DocumentRegistry;
 import com.example.springbootrag.repository.EntityRepository;
 import com.example.springbootrag.repository.PgVectorRepository;
 import com.example.springbootrag.repository.QdrantRepository;
+import com.example.springbootrag.security.DeleteGuard;
 import com.example.springbootrag.security.SecurityProperties;
 import org.springframework.stereotype.Service;
 
@@ -43,6 +44,7 @@ public class IngestService {
     private final DocumentRegistry documentRegistry;
     private final GuardProperties guard;
     private final ChunkProperties chunkProps;
+    private final DeleteGuard deleteGuard;
     // Hard ceiling per chunk so an atomic table/code block can never exceed the embedding
     // model's context window (nomic-embed-text runs at ~2048 tokens under Ollama). Dense
     // tables (IDs, numbers, pipes) tokenize near 1 char/token, so 2000 chars stays under
@@ -62,7 +64,8 @@ public class IngestService {
                          SecurityProperties securityProps,
                          DocumentRegistry documentRegistry,
                          GuardProperties guard,
-                         ChunkProperties chunkProps) {
+                         ChunkProperties chunkProps,
+                         DeleteGuard deleteGuard) {
         this.embeddings = embeddings;
         this.pgVector = pgVector;
         this.qdrant = qdrant;
@@ -75,6 +78,7 @@ public class IngestService {
         this.documentRegistry = documentRegistry;
         this.guard = guard;
         this.chunkProps = chunkProps;
+        this.deleteGuard = deleteGuard;
     }
 
     /** Rebuilt per document so a heading-style change takes effect without a context restart. */
@@ -293,6 +297,11 @@ public class IngestService {
      * trace is a record of what was actually answered.
      */
     public void delete(long projectId, String docId) {
+        // You may only destroy what you may read. This sits here rather than in the four
+        // controllers that reach it because this is the funnel they all cross - and because the
+        // re-ingest path below crosses it too: without the check, re-using an existing doc id
+        // would overwrite the contents of a document the caller may not read.
+        deleteGuard.requireDocumentDeletable(projectId, docId);
         try {
             qdrant.deleteByDocId(projectId, docId);
         } catch (ExecutionException | InterruptedException e) {

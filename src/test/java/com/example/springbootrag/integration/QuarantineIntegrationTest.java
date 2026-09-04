@@ -468,13 +468,17 @@ class QuarantineIntegrationTest {
     void deletingAProjectRecordsWhatTheCascadeDestroys() {
         // Found by review, and confirmed live: `quarantine.project_id REFERENCES projects(id) ON
         // DELETE CASCADE` means deleting a project destroys every held document - the ONLY copy of
-        // each, since they were un-indexed to get there - without going anywhere near the role
-        // gate. Without this audit row the surviving 'held' rows would read as "still contained"
-        // for a document that no longer exists anywhere.
+        // each, since they were un-indexed to get there. Without this audit row the surviving
+        // 'held' rows would read as "still contained" for a document that no longer exists
+        // anywhere. The delete itself now needs the project-delete role AND read coverage over
+        // everything in the project (DeleteAuthorizationIntegrationTest); this test is about what
+        // the cascade RECORDS once it is allowed to happen.
         documents.uploadToProject(projectId,
                 md("policy.md", "The admin recovery code is hunter2\n"), List.of("public"));
         assertThat(pen.find(alice, projectId, "policy")).isPresent();
 
+        authenticateAs("alice", List.of("public", "finance"),
+                List.of(Roles.QUARANTINE_RELEASE, Roles.PROJECT_DELETE));
         projectService.delete(projectId);
 
         assertThat(auditRepo.history(projectId, "policy"))

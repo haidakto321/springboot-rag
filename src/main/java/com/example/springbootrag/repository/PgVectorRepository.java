@@ -189,6 +189,40 @@ public class PgVectorRepository {
                 args.toArray());
     }
 
+    /**
+     * How many chunks of this project the caller may NOT read - the delete-side counterpart of the
+     * read filter, used by {@link com.example.springbootrag.security.DeleteGuard}.
+     *
+     * <p>{@code COALESCE(..., false)} is load-bearing. Array overlap against a NULL
+     * {@code allowed_groups} is NULL, not false, and {@code NOT NULL} is NULL - so without the
+     * coalesce an unlabelled row would count as readable and a document nobody may read would be
+     * deletable by anybody. The column is nullable (it was added by ALTER and backfilled once at
+     * startup), so this is a live case, not a theoretical one.
+     */
+    public int countUnreadableChunks(SearchContext ctx, long projectId) {
+        List<Object> args = new ArrayList<>();
+        args.add(projectId);
+        args.addAll(ctx.groups());
+        Integer n = jdbc.queryForObject(
+                "SELECT count(*) FROM chunks WHERE project_id = ?" +
+                        " AND NOT COALESCE(" + DocFilter.groupClause(ctx.groups()) + ", false)",
+                Integer.class, args.toArray());
+        return n == null ? 0 : n;
+    }
+
+    /** Same, narrowed to one document. A document is deleted whole, so one unreadable chunk counts. */
+    public int countUnreadableChunks(SearchContext ctx, long projectId, String docId) {
+        List<Object> args = new ArrayList<>();
+        args.add(projectId);
+        args.add(docId);
+        args.addAll(ctx.groups());
+        Integer n = jdbc.queryForObject(
+                "SELECT count(*) FROM chunks WHERE project_id = ? AND doc_id = ?" +
+                        " AND NOT COALESCE(" + DocFilter.groupClause(ctx.groups()) + ", false)",
+                Integer.class, args.toArray());
+        return n == null ? 0 : n;
+    }
+
     /** All readable chunks of one document ordered by chunk index, scoped to the given project. */
     public List<ChunkView> listChunks(SearchContext ctx, long projectId, String docId) {
         List<Object> args = new ArrayList<>(ctx.groups());

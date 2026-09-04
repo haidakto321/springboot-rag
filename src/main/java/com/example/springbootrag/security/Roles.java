@@ -19,6 +19,16 @@ public final class Roles {
     /** May release a held document into the index, or discard it and its evidence. */
     public static final String QUARANTINE_RELEASE = "quarantine-release";
 
+    /**
+     * May delete a whole project.
+     *
+     * <p>Separate from {@link #QUARANTINE_RELEASE} because the pen is not the only thing a project
+     * delete destroys - it takes every document, chunk, edge and held item with it. Granting the
+     * right to undo one security control must not also grant the right to erase the project it
+     * protected.
+     */
+    public static final String PROJECT_DELETE = "project-delete";
+
     private Roles() {
     }
 }

@@ -7,6 +7,7 @@ import com.example.springbootrag.service.ProjectService;
 import com.example.springbootrag.service.SearchService;
 import com.example.springbootrag.security.TestContexts;
 import org.junit.jupiter.api.Test;
+import org.springframework.security.test.context.support.WithMockUser;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.boot.test.context.TestConfiguration;
@@ -80,6 +81,9 @@ class ProjectDeleteIntegrationTest {
     @Autowired JdbcTemplate jdbc;
 
     @Test
+    // Deleting a project needs the project-delete role and read coverage over its whole content;
+    // the doc below carries the default label, so GROUP_public covers it.
+    @WithMockUser(username = "alice", authorities = {"GROUP_public", "ROLE_project-delete"})
     void deletingProjectRemovesChunksFromPostgresAndQdrant() {
         // Create an isolated project with a unique name to avoid collision.
         long projectId = projectService.create("DeleteTest-" + System.nanoTime(), null);

@@ -62,6 +62,22 @@ public class CurrentUser {
         }
     }
 
+    /**
+     * The caller's read context, or null when there is no authenticated one.
+     *
+     * <p>The same distinction {@link #principalOrNull()} draws, for the paths that need the groups
+     * as well as the name: an HTTP request always has a principal (the filter chain requires it),
+     * so null here means a server-side call - re-ingest, quarantine containment, the wiki
+     * importer's async thread. Callers decide what null means for them; it is not a permission.
+     */
+    public SearchContext contextOrNull() {
+        try {
+            return context();
+        } catch (AccessDeniedException e) {
+            return null;
+        }
+    }
+
     public SearchContext context() {
         Authentication auth = SecurityContextHolder.getContext().getAuthentication();
         if (auth == null || !auth.isAuthenticated() || auth instanceof AnonymousAuthenticationToken) {

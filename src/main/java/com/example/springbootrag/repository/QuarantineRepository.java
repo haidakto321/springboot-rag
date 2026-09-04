@@ -88,6 +88,24 @@ public class QuarantineRepository {
     }
 
     /** Just enough of a held row to write its audit entry - deliberately NOT the raw text. */
+    /**
+     * How many held documents in this project the caller may NOT read.
+     *
+     * <p>Deleting a project cascades the pen, and the pen holds the only copy of every document in
+     * it - they were un-indexed to put them there. So the pen has to be counted separately from
+     * the index: a project whose documents are all held has no chunks at all.
+     */
+    public int countUnreadableHeld(SearchContext ctx, long projectId) {
+        List<Object> args = new ArrayList<>();
+        args.add(projectId);
+        args.addAll(ctx.groups());
+        Integer n = jdbc.queryForObject(
+                "SELECT count(*) FROM quarantine WHERE project_id = ?" +
+                        " AND NOT COALESCE(" + DocFilter.groupClause(ctx.groups()) + ", false)",
+                Integer.class, args.toArray());
+        return n == null ? 0 : n;
+    }
+
     public record PenSummary(String docId, String findingsJson, List<String> allowedGroups) {}
 
     /**

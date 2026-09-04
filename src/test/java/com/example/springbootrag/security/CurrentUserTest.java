@@ -54,6 +54,20 @@ class CurrentUserTest {
     }
 
     @Test
+    void contextOrNullReturnsNullWhenThereIsNoAuthenticatedCaller() {
+        // Server-side callers (re-ingest, the wiki importer's async thread) legitimately have no
+        // principal. They need "who is asking, or nobody" without an exception to catch.
+        assertThat(currentUser.contextOrNull()).isNull();
+    }
+
+    @Test
+    void contextOrNullReturnsTheSameContextAsContextWhenAuthenticated() {
+        authenticate("bob", "GROUP_public", "GROUP_eng");
+
+        assertThat(currentUser.contextOrNull()).isEqualTo(currentUser.context());
+    }
+
+    @Test
     void labellingWithAGroupYouAreNotInIsDenied() {
         authenticate("bob", "GROUP_public", "GROUP_eng");
 

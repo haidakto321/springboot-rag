@@ -416,6 +416,10 @@ filter is a caller preference, a label is a boundary.
 | Document carries credential-shaped text | `200` with `quarantined: true`, nothing indexed | `IngestService.ingestChunks` throws `QuarantineRequiredException`; the caller holds it via `QuarantineService` |
 | Release requested for a document you cannot read | `400` | `QuarantineController.require` - the lookup goes through your groups |
 | Release or discard by a caller without the role | `403` | `@PreAuthorize("hasRole('quarantine-release')")`; the group lookup above still applies on top |
+| Deleting a document holding a chunk outside your groups | `403` | `DeleteGuard.requireDocumentDeletable`, called from `IngestService.delete` - the funnel all four document-delete endpoints cross |
+| Deleting a project without the `project-delete` role | `403` | `@PreAuthorize` on `ProjectController.delete` and again on `ProjectService.delete` |
+| Deleting a project that holds any chunk or held document outside your groups | `403`, and no audit row is written | `DeleteGuard.requireProjectDeletable`, before `auditPenCascade` |
+| Deleting anything with no authenticated principal (re-ingest, quarantine containment, wiki import) | allowed | `DeleteGuard` - a server-side call; HTTP cannot reach it, the filter chain 401s first |
 | Streamed answer never cites a supplied chunk | nothing streamed; `AnswerGuard.REFUSAL` sent instead | `GuardedEmitter` (HOLDING state at end of stream) |
 | Streamed answer cites out of range mid-answer | stream stops after the good prefix, `guard` frame | `GuardedEmitter` (PASSING state) |
 | Groundedness judge unreachable or unparseable | answer allowed | `GroundednessJudge.judge` - a judge outage must not refuse everything |

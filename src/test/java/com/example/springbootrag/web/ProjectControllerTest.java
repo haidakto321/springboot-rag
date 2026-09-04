@@ -75,7 +75,10 @@ class ProjectControllerTest {
         verify(svc).setGroup(5L, null);
     }
 
-    @Test void deleteCallsService() throws Exception {
+    // Deleting a project needs the project-delete role; the refusal without it is
+    // ProjectControllerSecurityTest's subject, this one is about the call reaching the service.
+    @Test @WithMockUser(authorities = "ROLE_project-delete")
+    void deleteCallsService() throws Exception {
         mvc.perform(delete("/projects/5"))
            .andExpect(status().isOk());
         verify(svc).delete(5L);

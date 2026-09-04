@@ -170,6 +170,41 @@ only record that a document was ever held - was deleted by the act itself.
   record.
 - Spec/plan: `docs/superpowers/{specs,plans}/2026-08-12-quarantine-release-control*`.
 
+### Delete authorisation: you may only destroy what you may read  ✅ done (2026-09-04)
+The gap the 2026-08-12 review found, plus four more of the same shape that the review had not looked
+for. `DELETE /projects/{id}` carried no role and no group check while `quarantine.project_id`
+cascades from it, so any authenticated user could destroy a whole project and every held document in
+it. Reading the neighbouring code while fixing it turned up the finer-grained version: **none of the
+four document-delete endpoints checked anything either**, so a caller could delete an `hr` document
+they were never allowed to read, one id at a time.
+
+- **Role** ✅ - `Roles.PROJECT_DELETE` (`project-delete`), `@PreAuthorize` on
+  `ProjectController.delete` and again on `ProjectService.delete`, the pattern quarantine release
+  already uses: the controller copy keeps the HTTP contract legible, the service copy is the control.
+  Kept separate from `quarantine-release` because a project delete destroys far more than the pen.
+- **Read coverage** ✅ - `DeleteGuard` refuses a delete when the target holds anything outside the
+  caller's groups: any chunk of the document, or any chunk **or held document** of the project. The
+  pen is counted separately on purpose - a project whose documents are all held has no chunks at all,
+  so counting only the index would read it as empty and hand the pen over.
+- **One funnel** ✅ - the check sits in `IngestService.delete(projectId, docId)`, which all four
+  document endpoints cross, rather than in the four controllers. That also closes a hole nobody was
+  looking for: ingest deletes the previous version before writing, so re-using an existing doc id
+  was a way to **overwrite a document you could not read**.
+- **The one deliberate hole** - a call with no authenticated principal is allowed through, because
+  re-ingest, quarantine containment and the wiki importer's async thread all delete without one.
+  That is safe exactly as long as the filter chain refuses anonymous requests, so
+  `ProjectControllerSecurityTest` asserts the 401 rather than trusting it.
+- **Ordering kept** - the coverage check runs before `auditPenCascade`, so a refused project delete
+  writes no audit row, matching the property `@PreAuthorize` already gave quarantine.
+- Known consequence, accepted: a chunk with a NULL or empty `allowed_groups` is readable by nobody,
+  so it blocks its project's delete for everyone. Loud and detectable beats a silent bypass, and
+  `schema.sql` backfills the label at startup. There is no relabel endpoint yet - if this ever
+  wedges, that is the fix.
+- Still not done, deliberately: **`GET /projects` still lists every project to everyone**, and
+  project *membership* still does not exist - `projects.group_name` is a workspace grouping label
+  for cross-project search scope, a different namespace from the access groups. Delete is now
+  authorised by content; project-level ACLs are a separate design.
+
 ## Planned (not yet built)
 
 ### Router: a bare "what is X" can land in chitchat
@@ -189,20 +224,6 @@ change means regenerating `baseline-records.yaml`.
 This is the same lesson as the 2026-08-08 `what is the total on invoice INV-5575` miss, which is
 already recorded in `QueryRouter`'s javadoc: routing scored 21/21 on the golden set and 9/9 on
 held-out questions, and neither set contained this category. A golden set scores what it contains.
-
-### `DELETE /projects/{id}` has no authorisation at all
-Found by the 2026-08-12 review, while checking whether the new quarantine role could be bypassed. It
-can, by a different door: `ProjectController.delete` is `public void delete(@PathVariable long id)`
-with **no role and no group check**, and `quarantine.project_id REFERENCES projects(id) ON DELETE
-CASCADE`, so any authenticated user destroys every held document in a project - the only copy of
-each - along with the whole project.
-
-Half-fixed on 2026-08-12: the cascade now writes a `discard` audit row per held document
-(`ProjectService.auditPenCascade`), so the history stays truthful and no `held` row is left claiming
-containment for a document that no longer exists. The authorisation half is untouched on purpose -
-this endpoint destroys *everything* in a project, not just the pen, so gating it is project-level
-authorisation and belongs with the group scoping it also lacks. Doing it under the quarantine role
-would have made it look finished while a user outside the project's groups could still delete it.
 
 ### Quarantine audit: a read endpoint
 The audit trail below is queryable only through psql. A `GET /projects/{id}/quarantine/audit` would

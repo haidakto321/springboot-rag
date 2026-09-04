@@ -113,6 +113,26 @@ document. Step 4, what breaking it actually found (`AccessControlIntegrationTest
 > Lesson: retrieval-time filtering is a security control. Anything derived from the browser is
 > a suggestion, not a permission.
 
+**2026-09-04 - the half this section missed for a month: DESTRUCTION was never filtered.** Every
+paragraph above is about what a query returns. A delete returns nothing - it names a row - so none
+of the read filtering touched it, and five endpoints destroyed content with nothing but
+"is logged in" between them and the data: four document deletes, and `DELETE /projects/{id}`, which
+also cascades the quarantine pen holding the only copy of every held document. The rule is now the
+obvious one, `DeleteGuard`: **you may only destroy what you may read**, enforced in
+`IngestService.delete` (the funnel all four document paths cross) and in `ProjectService.delete`,
+with a `project-delete` role on top of the project one.
+
+Two things worth carrying elsewhere. **The funnel found a hole nobody was looking for**: ingest
+deletes the previous version before writing, so re-using an existing doc id was a way to overwrite
+a document you could not read - the same defect wearing an ingest costume. And **the fix has a
+deliberate open branch**: a call with no principal is allowed through, because re-ingest, quarantine
+containment and the wiki importer's async thread all delete legitimately without one. That is safe
+only while the filter chain refuses anonymous requests, so the 401 is now asserted by a test instead
+of assumed. A control whose premise lives in another file needs a test in this one.
+
+Row 1 of the scorecard stays **2**: it asks about retrieval filtered by identity, which was already
+true. This closed a hole beside it, not inside it.
+
 **Exam keywords:** Amazon Kendra document-level access control / token-based user context,
 Bedrock Knowledge Bases metadata filtering, IAM least privilege, session isolation,
 AWS PrivateLink, AWS KMS, Amazon Macie.

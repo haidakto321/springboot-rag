@@ -136,7 +136,7 @@ Two sandbox users ship in `application.yml`:
 
 | user | password | groups | roles |
 |---|---|---|---|
-| `alice` | `alice` | `public`, `hr` | `quarantine-release` |
+| `alice` | `alice` | `public`, `hr` | `quarantine-release`, `project-delete` |
 | `haiks` | `123123` | `public`, `eng` | - |
 
 ```bash
@@ -154,9 +154,22 @@ because this is a single-developer laboratory - **do not copy this block anywher
 
 **Groups say what you may read; roles say what you may do.** Almost every endpoint needs only
 authentication plus the right groups. The exceptions are the two that undo quarantine - releasing a
-held document into the index, and discarding it - which need the `quarantine-release` role. `haiks`
-does not have it, which makes `curl -u haiks:123123 -X POST .../quarantine/policy/release` a `403`
-and is the quickest way to see the gate work.
+held document into the index, and discarding it - which need the `quarantine-release` role, and
+deleting a whole project, which needs `project-delete`. `haiks` has neither, which makes
+`curl -u haiks:123123 -X POST .../quarantine/policy/release` a `403` and is the quickest way to see
+the gate work.
+
+**Deleting follows the read filter too: you may only destroy what you may read.** Every delete -
+one document or a whole project - is refused when the target holds a chunk, or a quarantined
+document, outside your groups. A project delete needs the role *and* full read coverage; the role
+alone is not enough, because deleting a project cascades its quarantine pen, which holds the only
+copy of everything in it.
+
+```bash
+# alice labelled this one 'hr'; haiks is in public and eng, so he cannot delete what he cannot read
+curl -u haiks:123123 -X DELETE localhost:8085/projects/1/documents/Salary-Bands   # 403
+curl -u haiks:123123 -X DELETE localhost:8085/projects/1                          # 403 (no role)
+```
 
 | property | default | meaning |
 |---|---|---|

@@ -6,9 +6,12 @@ import com.example.springbootrag.repository.QdrantRepository;
 import com.example.springbootrag.repository.QuarantineAuditRepository;
 import com.example.springbootrag.repository.QuarantineRepository;
 import com.example.springbootrag.security.CurrentUser;
+import com.example.springbootrag.security.DeleteGuard;
+import com.example.springbootrag.security.Roles;
 import com.example.springbootrag.web.dto.ProjectSummary;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.security.access.prepost.PreAuthorize;
 import org.springframework.stereotype.Service;
 
 import java.util.ArrayList;
@@ -24,14 +27,17 @@ public class ProjectService {
     private final QuarantineRepository pen;
     private final QuarantineAuditRepository audit;
     private final CurrentUser currentUser;
+    private final DeleteGuard deleteGuard;
 
     public ProjectService(ProjectRepository repo, QdrantRepository qdrant, QuarantineRepository pen,
-                          QuarantineAuditRepository audit, CurrentUser currentUser) {
+                          QuarantineAuditRepository audit, CurrentUser currentUser,
+                          DeleteGuard deleteGuard) {
         this.repo = repo;
         this.qdrant = qdrant;
         this.pen = pen;
         this.audit = audit;
         this.currentUser = currentUser;
+        this.deleteGuard = deleteGuard;
     }
 
     public long create(String name, String groupName) {
@@ -45,6 +51,7 @@ public class ProjectService {
         repo.rename(id, name.strip());
     }
     public void setGroup(long id, String groupName) { repo.setGroup(id, blankToNull(groupName)); }
+    @PreAuthorize("hasRole('" + Roles.PROJECT_DELETE + "')")
     public void delete(long id) {
         // Deleting a project CASCADES the quarantine pen (quarantine.project_id REFERENCES
         // projects(id) ON DELETE CASCADE), and the pen holds the ONLY copy of every document it
@@ -53,8 +60,11 @@ public class ProjectService {
         // surviving 'held' rows would read as "still contained" forever. quarantine_audit has no
         // foreign key precisely so these rows outlive the project.
         //
-        // NOTE: this endpoint carries no role and no group check of its own. That is a real gap,
-        // tracked in ROADMAP - it is project-level authorisation, not quarantine's to fix here.
+        // Two independent checks, both BEFORE the first audit write: the role above (an action
+        // permission, the same rail as quarantine release) and the read coverage below (a data
+        // permission). A refused call must never begin a decision - that is why a rejected
+        // release writes no audit row, and the same must hold here.
+        deleteGuard.requireProjectDeletable(id);
         List<Long> pending = auditPenCascade(id);
         try {
             qdrant.deleteByProject(id);

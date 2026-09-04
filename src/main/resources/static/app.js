@@ -253,6 +253,10 @@ async function renderModalProjectList(projects) {
                     toast('Project deleted');
                     await loadProjects();
                     await renderModalProjectList();
+                } else if (r.status === 403) {
+                    // Either the project-delete role is missing, or the project holds something
+                    // the caller may not read - the server does not say which, on purpose.
+                    toast('Not allowed: needs the project-delete role and read access to everything in it', 'error');
                 } else {
                     toast('Delete failed', 'error');
                 }
@@ -442,7 +446,15 @@ async function refreshDocs() {
         delBtn.textContent = 'Delete';
         delBtn.onclick = async () => {
             if (!confirm(`Delete document "${d.docId}"?`)) return;
-            await projectFetch('/documents/' + encodeURIComponent(d.docId), { method: 'DELETE' });
+            const r = await projectFetch('/documents/' + encodeURIComponent(d.docId), { method: 'DELETE' });
+            if (!r.ok) {
+                // 403 is the delete guard: you may only destroy what you may read. Without this
+                // branch the click did nothing at all and said nothing about why.
+                toast(r.status === 403
+                    ? 'Not allowed: this document holds content outside your groups'
+                    : 'Delete failed', 'error');
+                return;
+            }
             refreshDocs();
         };
 

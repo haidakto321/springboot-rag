@@ -6,6 +6,7 @@ import com.example.springbootrag.repository.QdrantRepository;
 import com.example.springbootrag.repository.QuarantineAuditRepository;
 import com.example.springbootrag.repository.QuarantineRepository;
 import com.example.springbootrag.security.CurrentUser;
+import com.example.springbootrag.security.DeleteGuard;
 import org.junit.jupiter.api.Test;
 
 import java.util.List;
@@ -26,11 +27,15 @@ class ProjectServiceTest {
     QuarantineRepository pen = mock(QuarantineRepository.class);
     QuarantineAuditRepository audit = mock(QuarantineAuditRepository.class);
     CurrentUser currentUser = mock(CurrentUser.class);
-    ProjectService svc = new ProjectService(repo, qdrant, pen, audit, currentUser);
+    // Mocked, so it permits: what this class tests is what the delete RECORDS once allowed.
+    // The refusals themselves live in DeleteGuardTest and DeleteAuthorizationIntegrationTest.
+    DeleteGuard deleteGuard = mock(DeleteGuard.class);
+    ProjectService svc = new ProjectService(repo, qdrant, pen, audit, currentUser, deleteGuard);
 
     @Test void deleteRecordsEveryHeldDocumentBeforeTheCascadeDestroysIt() throws Exception {
-        // Deleting a project cascades the pen. The role gate is nowhere on this path, so the audit
-        // row is the only thing that keeps the history honest.
+        // Deleting a project cascades the pen. Since 2026-09-04 the path is gated (project-delete
+        // role plus read coverage), but the gate only decides WHETHER; the audit row is still the
+        // only thing that keeps the history honest once the cascade runs.
         when(pen.heldForAudit(5)).thenReturn(List.of(
                 new QuarantineRepository.PenSummary("policy", "[]", List.of("public")),
                 new QuarantineRepository.PenSummary("runbook", "[]", List.of("public"))));
